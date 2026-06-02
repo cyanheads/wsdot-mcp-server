@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.6](changelog/0.1.x/0.1.6.md) — 2026-06-02
+
+mcp-ts-core 0.9.21 — per-request log context fix, secret scrubbing in fetchWithTimeout, withRetry fail-fast on non-retryable errors
+
 ## [0.1.5](changelog/0.1.x/0.1.5.md) — 2026-05-30
 
 Enrichment adoption — all twelve tools surface result counts, applied filters, and empty-result guidance via typed enrichment block
