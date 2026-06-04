@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.7](changelog/0.1.x/0.1.7.md) — 2026-06-04
+
+Ferry error handling — invalid date and terminal pair errors now surface structured reasons via ctx.fail; remainingOnly ignored for future dates
+
 ## [0.1.6](changelog/0.1.x/0.1.6.md) — 2026-06-02
 
 mcp-ts-core 0.9.21 — per-request log context fix, secret scrubbing in fetchWithTimeout, withRetry fail-fast on non-retryable errors
