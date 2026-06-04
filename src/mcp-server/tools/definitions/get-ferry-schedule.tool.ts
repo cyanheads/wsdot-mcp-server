@@ -4,8 +4,9 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { FerryApiService, getFerryApiService } from '@/services/ferry/ferry-service.js';
+import type { FerrySchedule } from '@/services/ferry/types.js';
 
 export const getFerrySchedule = tool('wsdot_get_ferry_schedule', {
   title: 'Get Ferry Schedule',
@@ -87,18 +88,38 @@ export const getFerrySchedule = tool('wsdot_get_ferry_schedule', {
   ],
 
   async handler(input, ctx) {
-    const tripDate = input.tripDate?.trim()
-      ? FerryApiService.toFerryDate(input.tripDate.trim())
-      : FerryApiService.todayFerryDate();
+    let tripDate: string;
+    try {
+      tripDate = input.tripDate?.trim()
+        ? FerryApiService.toFerryDate(input.tripDate.trim())
+        : FerryApiService.todayFerryDate();
+    } catch {
+      throw ctx.fail(
+        'invalid_date',
+        `Invalid date: "${input.tripDate}". Expected YYYY-MM-DD format (e.g. 2026-05-23).`,
+      );
+    }
     const remainingOnly = input.remainingOnly ?? false;
 
-    const schedule = await getFerryApiService().getSchedule(
-      input.departingTerminalId,
-      input.arrivingTerminalId,
-      tripDate,
-      remainingOnly,
-      ctx,
-    );
+    let schedule: FerrySchedule;
+    try {
+      schedule = await getFerryApiService().getSchedule(
+        input.departingTerminalId,
+        input.arrivingTerminalId,
+        tripDate,
+        remainingOnly,
+        ctx,
+      );
+    } catch (err) {
+      if (err instanceof McpError && err.message.includes('WSF Ferry API error')) {
+        throw ctx.fail('invalid_terminal_pair', err.message, {
+          recovery: {
+            hint: 'Use wsdot_get_ferry_terminals to list valid terminal IDs and wsdot_get_ferry_routes to find valid pairs.',
+          },
+        });
+      }
+      throw err;
+    }
 
     ctx.log.info('Ferry schedule fetched', {
       departingTerminalId: input.departingTerminalId,

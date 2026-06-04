@@ -247,13 +247,22 @@ describe('FerryApiService.getSchedule', () => {
     expect(url).toContain('/schedule/2027-01-01/');
   });
 
-  it('passes remainingOnly=true in URL', async () => {
+  it('passes remainingOnly=true in URL for today', async () => {
     mockFetch.mockResolvedValue(makeResponse(scheduleRaw));
     const ctx = createMockContext();
     const today = FerryApiService.todayFerryDate();
     await svc.getSchedule(7, 3, today, true, ctx);
     const url: string = mockFetch.mock.calls[0][0] as string;
     expect(url).toContain('scheduletoday/7/3/true');
+  });
+
+  it('ignores remainingOnly=true for a future date — uses schedule path', async () => {
+    mockFetch.mockResolvedValue(makeResponse(scheduleRaw));
+    const ctx = createMockContext();
+    await svc.getSchedule(7, 3, '2027-01-01', true, ctx);
+    const url: string = mockFetch.mock.calls[0][0] as string;
+    expect(url).toContain('/schedule/2027-01-01/');
+    expect(url).not.toContain('scheduletoday');
   });
 
   it('includes terminal IDs in URL', async () => {

@@ -4,6 +4,7 @@
  * @module tests/tools/ferry-tools.test
  */
 
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -18,10 +19,12 @@ const mockService = {
   getAlerts: vi.fn(),
 };
 
+const mockToFerryDate = vi.fn((isoDate: string) => isoDate.trim().slice(0, 10));
+
 vi.mock('@/services/ferry/ferry-service.js', () => ({
   getFerryApiService: () => mockService,
   FerryApiService: {
-    toFerryDate: (isoDate: string) => isoDate.trim().slice(0, 10),
+    toFerryDate: (isoDate: string) => mockToFerryDate(isoDate),
     todayFerryDate: () => '2026-05-23',
   },
 }));
@@ -37,6 +40,8 @@ import { getVesselLocations } from '@/mcp-server/tools/definitions/get-vessel-lo
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Restore default (valid) implementation before each test
+  mockToFerryDate.mockImplementation((isoDate: string) => isoDate.trim().slice(0, 10));
 });
 
 // ---------------------------------------------------------------------------
@@ -177,6 +182,17 @@ describe('getFerryRoutes', () => {
     expect(text).toContain('SEA-BI');
     expect(text).toContain('1'); // routeId
   });
+
+  it('surfaces invalid_date reason via ctx.fail when tripDate is invalid', async () => {
+    mockToFerryDate.mockImplementation(() => {
+      throw new Error('Invalid date');
+    });
+    const ctx = createMockContext({ errors: getFerryRoutes.errors });
+    const input = getFerryRoutes.input.parse({ tripDate: 'not-a-date' });
+    const err = await getFerryRoutes.handler(input, ctx).catch((e) => e);
+    expect(err).toBeInstanceOf(McpError);
+    expect((err as McpError).data).toMatchObject({ reason: 'invalid_date' });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -312,6 +328,47 @@ describe('getFerrySchedule', () => {
     const blocks = getFerrySchedule.format!(output);
     const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('No sailings found');
+  });
+
+  it('surfaces invalid_date reason via ctx.fail when tripDate is invalid', async () => {
+    mockToFerryDate.mockImplementation(() => {
+      throw new Error('Invalid date');
+    });
+    const ctx = createMockContext({ errors: getFerrySchedule.errors });
+    const input = getFerrySchedule.input.parse({
+      departingTerminalId: 7,
+      arrivingTerminalId: 3,
+      tripDate: 'not-a-date',
+    });
+    const err = await getFerrySchedule.handler(input, ctx).catch((e) => e);
+    expect(err).toBeInstanceOf(McpError);
+    expect((err as McpError).data).toMatchObject({ reason: 'invalid_date' });
+  });
+
+  it('surfaces invalid_terminal_pair reason via ctx.fail when API returns WSF error', async () => {
+    mockService.getSchedule.mockRejectedValue(
+      new McpError(JsonRpcErrorCode.ValidationError, 'WSF Ferry API error: Invalid terminal pair'),
+    );
+    const ctx = createMockContext({ errors: getFerrySchedule.errors });
+    const input = getFerrySchedule.input.parse({
+      departingTerminalId: 9999,
+      arrivingTerminalId: 9998,
+    });
+    const err = await getFerrySchedule.handler(input, ctx).catch((e) => e);
+    expect(err).toBeInstanceOf(McpError);
+    expect((err as McpError).data).toMatchObject({ reason: 'invalid_terminal_pair' });
+  });
+
+  it('re-throws non-WSF errors from getSchedule without wrapping', async () => {
+    mockService.getSchedule.mockRejectedValue(new Error('Network timeout'));
+    const ctx = createMockContext({ errors: getFerrySchedule.errors });
+    const input = getFerrySchedule.input.parse({
+      departingTerminalId: 7,
+      arrivingTerminalId: 3,
+    });
+    const err = await getFerrySchedule.handler(input, ctx).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe('Network timeout');
   });
 });
 

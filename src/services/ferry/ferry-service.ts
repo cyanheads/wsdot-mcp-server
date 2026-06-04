@@ -137,8 +137,10 @@ export class FerryApiService {
   ): Promise<FerrySchedule> {
     let path: string;
     const todayDate = FerryApiService.todayFerryDate();
+    const isToday = tripDate === todayDate;
 
-    if (tripDate === todayDate || remainingOnly) {
+    // remainingOnly is only meaningful for today's sailings; ignore it for future dates
+    if (isToday) {
       const flag = remainingOnly ? 'true' : 'false';
       path = `Schedule/rest/scheduletoday/${departingTerminalId}/${arrivingTerminalId}/${flag}`;
     } else {

@@ -77,9 +77,17 @@ export const getFerryRoutes = tool('wsdot_get_ferry_routes', {
   ],
 
   async handler(input, ctx) {
-    const tripDate = input.tripDate?.trim()
-      ? FerryApiService.toFerryDate(input.tripDate.trim())
-      : FerryApiService.todayFerryDate();
+    let tripDate: string;
+    try {
+      tripDate = input.tripDate?.trim()
+        ? FerryApiService.toFerryDate(input.tripDate.trim())
+        : FerryApiService.todayFerryDate();
+    } catch {
+      throw ctx.fail(
+        'invalid_date',
+        `Invalid date: "${input.tripDate}". Expected YYYY-MM-DD format (e.g. 2026-05-23).`,
+      );
+    }
 
     const routes = await getFerryApiService().getRoutes(tripDate, ctx);
     ctx.log.info('Ferry routes fetched', { tripDate, count: routes.length });
