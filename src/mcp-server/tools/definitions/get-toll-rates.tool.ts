@@ -22,18 +22,24 @@ export const getTollRates = tool('wsdot_get_toll_rates', {
           .object({
             tripName: z.string().optional().describe('Name of the tolled trip or lane segment.'),
             stateRoute: z.string().optional().describe('State route number.'),
+            travelDirection: z
+              .string()
+              .optional()
+              .describe('Travel direction for this toll segment (e.g. "N", "S", "E", "W").'),
             startMilepost: z.number().optional().describe('Starting milepost of the toll segment.'),
             endMilepost: z.number().optional().describe('Ending milepost of the toll segment.'),
             tollRateInDollars: z.number().optional().describe('Current toll rate in US dollars.'),
-            message: z.string().optional().describe('Dynamic message shown on toll sign.'),
-            signText: z.string().optional().describe('Text displayed on the toll rate sign.'),
+            message: z.string().optional().describe('Dynamic message associated with this toll.'),
             startLocationName: z
               .string()
               .optional()
               .describe('Human-readable start location name.'),
             endLocationName: z.string().optional().describe('Human-readable end location name.'),
+            startLatitude: z.number().optional().describe('Latitude of the segment start point.'),
+            startLongitude: z.number().optional().describe('Longitude of the segment start point.'),
+            endLatitude: z.number().optional().describe('Latitude of the segment end point.'),
+            endLongitude: z.number().optional().describe('Longitude of the segment end point.'),
             timeUpdated: z.string().optional().describe('When this toll rate was last updated.'),
-            tollCondition: z.number().optional().describe('Numeric toll condition code.'),
           })
           .describe('Current toll rate for one segment or trip.'),
       )
@@ -79,20 +85,23 @@ export const getTollRates = tool('wsdot_get_toll_rates', {
     }
     const lines: string[] = [];
     for (const r of result.rates) {
-      const name = r.tripName ?? r.signText ?? 'Toll segment';
+      const name = r.tripName ?? 'Toll segment';
       lines.push(`### ${name}`);
       if (r.stateRoute) lines.push(`**Route:** SR ${r.stateRoute}`);
+      if (r.travelDirection) lines.push(`**Direction:** ${r.travelDirection}`);
       if (r.startLocationName || r.endLocationName) {
         const seg = [r.startLocationName, r.endLocationName].filter(Boolean).join(' → ');
         lines.push(`**Segment:** ${seg}`);
       }
       if (r.startMilepost != null) lines.push(`**Start MP:** ${r.startMilepost}`);
       if (r.endMilepost != null) lines.push(`**End MP:** ${r.endMilepost}`);
-      if (r.signText) lines.push(`**Sign:** ${r.signText}`);
       if (r.tollRateInDollars != null) lines.push(`**Rate:** $${r.tollRateInDollars.toFixed(2)}`);
       if (r.message) lines.push(`**Message:** ${r.message}`);
+      if (r.startLatitude != null && r.startLongitude != null)
+        lines.push(`**Start Coords:** ${r.startLatitude}, ${r.startLongitude}`);
+      if (r.endLatitude != null && r.endLongitude != null)
+        lines.push(`**End Coords:** ${r.endLatitude}, ${r.endLongitude}`);
       if (r.timeUpdated) lines.push(`**Updated:** ${r.timeUpdated}`);
-      if (r.tollCondition != null) lines.push(`**Condition:** ${r.tollCondition}`);
       lines.push('');
     }
     return [{ type: 'text', text: lines.join('\n') }];

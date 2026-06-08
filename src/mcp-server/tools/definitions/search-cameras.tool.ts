@@ -26,7 +26,7 @@ export const searchCameras = tool('wsdot_search_cameras', {
       .string()
       .optional()
       .describe(
-        'WSDOT region name: Northwest, Olympic, Southwest, South Central, North Central, or Eastern.',
+        'WSDOT region code: NW (Northwest), SW (Southwest), OL (Olympic), ER (Eastern), SC (South Central), OS (Olympic South), NC (North Central), or WA (statewide). Matching is case-insensitive.',
       ),
     startMilepost: z.number().optional().describe('Start of milepost range to filter cameras.'),
     endMilepost: z.number().optional().describe('End of milepost range to filter cameras.'),

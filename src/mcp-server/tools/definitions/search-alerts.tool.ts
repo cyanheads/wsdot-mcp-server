@@ -26,7 +26,7 @@ export const searchAlerts = tool('wsdot_search_alerts', {
       .string()
       .optional()
       .describe(
-        'WSDOT region name: Northwest, Olympic, Southwest, South Central, North Central, or Eastern.',
+        'WSDOT region name as it appears in alert data: "Northwest", "Olympic", "Southwest", "South Central", "North Central", or "Eastern". Matching is case-insensitive.',
       ),
     startMilepost: z.number().optional().describe('Start of milepost range to filter alerts.'),
     endMilepost: z.number().optional().describe('End of milepost range to filter alerts.'),

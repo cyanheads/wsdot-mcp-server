@@ -141,31 +141,37 @@ export interface TravelTime {
 
 /** Raw toll rate from upstream API. */
 export interface RawTollRate {
+  CurrentMessage?: string | null;
+  CurrentToll?: number | null;
+  EndLatitude?: number | null;
   EndLocationName?: string | null;
+  EndLongitude?: number | null;
   EndMilepost?: number | null;
-  Message?: string | null;
-  SignText?: string | null;
+  StartLatitude?: number | null;
   StartLocationName?: string | null;
+  StartLongitude?: number | null;
   StartMilepost?: number | null;
   StateRoute?: string | null;
   TimeUpdated?: string | null;
-  TollCondition?: number | null;
-  TollRate?: number | null;
+  TravelDirection?: string | null;
   TripName?: string | null;
 }
 
 /** Normalized toll rate. */
 export interface TollRate {
+  endLatitude?: number;
   endLocationName?: string;
+  endLongitude?: number;
   endMilepost?: number;
   message?: string;
-  signText?: string;
+  startLatitude?: number;
   startLocationName?: string;
+  startLongitude?: number;
   startMilepost?: number;
   stateRoute?: string;
   timeUpdated?: string;
-  tollCondition?: number;
   tollRateInDollars?: number;
+  travelDirection?: string;
   tripName?: string;
 }
 
@@ -200,19 +206,25 @@ export interface BorderCrossing {
   waitTimeInMinutes?: number;
 }
 
-/** Raw camera from upstream API. */
-export interface RawCamera {
-  CameraID?: number | null;
-  Description?: string | null;
+/** Raw camera location nested object from upstream API. */
+export interface RawCameraLocation {
   Direction?: string | null;
-  ImageHeight?: number | null;
-  ImageURL?: string | null;
-  ImageWidth?: number | null;
   Latitude?: number | null;
   Longitude?: number | null;
   MilePost?: number | null;
-  Region?: string | null;
   RoadName?: string | null;
+}
+
+/** Raw camera from upstream API. */
+export interface RawCamera {
+  CameraID?: number | null;
+  CameraLocation?: RawCameraLocation | null;
+  Description?: string | null;
+  ImageHeight?: number | null;
+  ImageURL?: string | null;
+  ImageWidth?: number | null;
+  IsActive?: boolean | null;
+  Region?: string | null;
   Title?: string | null;
 }
 

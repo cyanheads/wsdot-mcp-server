@@ -357,17 +357,20 @@ describe('getTravelTimes', () => {
 
 describe('getTollRates', () => {
   const rateFixture = {
-    tripName: 'SR 520 Express Toll',
-    stateRoute: '520',
-    startMilepost: 0,
-    endMilepost: 10.5,
-    tollRateInDollars: 3.5,
-    message: 'Active',
-    signText: '$3.50',
-    startLocationName: '148th Ave NE',
-    endLocationName: 'I-5 interchange',
+    tripName: '099tp03060',
+    stateRoute: '099',
+    travelDirection: 'S',
+    startMilepost: 33.0,
+    endMilepost: 30.0,
+    tollRateInDollars: 1.25,
+    message: undefined,
+    startLocationName: 'SB S Portal',
+    endLocationName: 'NB S Portal',
+    startLatitude: 47.626665944,
+    startLongitude: -122.343652437,
+    endLatitude: 47.587648851,
+    endLongitude: -122.338771924,
     timeUpdated: '/Date(1700000000000-0800)/',
-    tollCondition: 1,
   };
 
   it('returns all toll rates', async () => {
@@ -376,7 +379,7 @@ describe('getTollRates', () => {
     const input = getTollRates.input.parse({});
     const result = await getTollRates.handler(input, ctx);
     expect(result.rates).toHaveLength(1);
-    expect(result.rates[0].tollRateInDollars).toBe(3.5);
+    expect(result.rates[0].tollRateInDollars).toBe(1.25);
   });
 
   it('enriches with totalCount', async () => {
@@ -411,12 +414,13 @@ describe('getTollRates', () => {
     const output = { rates: [rateFixture] };
     const blocks = getTollRates.format!(output);
     const text = (blocks[0] as { text: string }).text;
-    expect(text).toContain('SR 520 Express Toll');
-    expect(text).toContain('SR 520');
-    expect(text).toContain('$3.50');
-    expect(text).toContain('148th Ave NE');
-    expect(text).toContain('I-5 interchange');
-    expect(text).toContain('1'); // tollCondition
+    expect(text).toContain('099tp03060');
+    expect(text).toContain('SR 099');
+    expect(text).toContain('$1.25');
+    expect(text).toContain('SB S Portal');
+    expect(text).toContain('NB S Portal');
+    expect(text).toContain('Direction');
+    expect(text).toContain('S'); // travelDirection
   });
 
   it('formats empty rates list', () => {
@@ -524,7 +528,7 @@ describe('searchCameras', () => {
     roadName: 'I-90',
     direction: 'EB',
     milePost: 52,
-    region: 'Northwest',
+    region: 'NW',
     latitude: 47.4,
     longitude: -121.4,
   };
@@ -589,8 +593,11 @@ describe('searchCameras', () => {
     expect(text).toContain('I-90 at Snoqualmie Pass');
     expect(text).toContain('images.wsdot.wa.gov');
     expect(text).toContain('1001');
-    expect(text).toContain('Northwest');
+    expect(text).toContain('NW');
     expect(text).toContain('320×240px');
+    // location fields now present
+    expect(text).toContain('I-90');
+    expect(text).toContain('MP 52');
   });
 
   it('formats empty cameras list', () => {

@@ -217,38 +217,57 @@ describe('TrafficApiService — alert normalization', () => {
     expect('startRoadwayLocation' in a).toBe(false);
   });
 
-  it('uses SearchAlertsAsJson endpoint when stateRoute filter provided', async () => {
+  it('always uses GetAlertsAsJson endpoint (no SearchAlertsAsJson)', async () => {
     mockFetch.mockResolvedValue(makeResponse([]));
     const ctx = createMockContext();
     await svc.searchAlerts({ stateRoute: '090' }, ctx);
     const url: string = mockFetch.mock.calls[0][0] as string;
-    expect(url).toContain('SearchAlertsAsJson');
-    expect(url).toContain('StateRoute=090');
-  });
-
-  it('uses GetAlertsAsJson endpoint when no filter provided', async () => {
-    mockFetch.mockResolvedValue(makeResponse([]));
-    const ctx = createMockContext();
-    await svc.searchAlerts({}, ctx);
-    const url: string = mockFetch.mock.calls[0][0] as string;
     expect(url).toContain('GetAlertsAsJson');
+    expect(url).not.toContain('SearchAlertsAsJson');
   });
 
-  it('includes region filter in query string when provided', async () => {
-    mockFetch.mockResolvedValue(makeResponse([]));
+  it('filters alerts by stateRoute client-side against roadName', async () => {
+    const raw = [
+      {
+        AlertID: 1,
+        Region: 'Northwest',
+        StartRoadwayLocation: { RoadName: '090', MilePost: 30 },
+      },
+      {
+        AlertID: 2,
+        Region: 'Northwest',
+        StartRoadwayLocation: { RoadName: '005', MilePost: 170 },
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
-    await svc.searchAlerts({ region: 'Northwest' }, ctx);
-    const url: string = mockFetch.mock.calls[0][0] as string;
-    expect(url).toContain('Region=Northwest');
+    const alerts = await svc.searchAlerts({ stateRoute: '090' }, ctx);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].alertId).toBe(1);
   });
 
-  it('includes milepost range when provided', async () => {
-    mockFetch.mockResolvedValue(makeResponse([]));
+  it('filters alerts by region client-side (case-insensitive)', async () => {
+    const raw = [
+      { AlertID: 1, Region: 'Northwest' },
+      { AlertID: 2, Region: 'Eastern' },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
-    await svc.searchAlerts({ startMilepost: 10, endMilepost: 50 }, ctx);
-    const url: string = mockFetch.mock.calls[0][0] as string;
-    expect(url).toContain('StartingMilepost=10');
-    expect(url).toContain('EndingMilepost=50');
+    const alerts = await svc.searchAlerts({ region: 'northwest' }, ctx);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].alertId).toBe(1);
+  });
+
+  it('filters alerts by milepost range client-side', async () => {
+    const raw = [
+      { AlertID: 1, StartRoadwayLocation: { MilePost: 10, RoadName: '005' } },
+      { AlertID: 2, StartRoadwayLocation: { MilePost: 60, RoadName: '005' } },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const ctx = createMockContext();
+    const alerts = await svc.searchAlerts({ startMilepost: 5, endMilepost: 50 }, ctx);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].alertId).toBe(1);
   });
 });
 
@@ -317,17 +336,20 @@ describe('TrafficApiService — toll rate normalization', () => {
   it('maps raw toll rate fields to domain fields', async () => {
     const raw = [
       {
-        TripName: 'SR 520 Express Toll',
-        StateRoute: '520',
-        StartMilepost: 0,
-        EndMilepost: 10.5,
-        TollRate: 3.5,
-        Message: 'Active',
-        SignText: '$3.50',
-        StartLocationName: '148th Ave NE',
-        EndLocationName: 'I-5 interchange',
+        TripName: '099tp03060',
+        StateRoute: '099',
+        TravelDirection: 'S',
+        StartMilepost: 33.0,
+        EndMilepost: 30.0,
+        CurrentToll: 125,
+        CurrentMessage: null,
+        StartLocationName: 'SB S Portal',
+        EndLocationName: 'NB S Portal',
+        StartLatitude: 47.626665944,
+        StartLongitude: -122.343652437,
+        EndLatitude: 47.587648851,
+        EndLongitude: -122.338771924,
         TimeUpdated: '/Date(1700000000000-0800)/',
-        TollCondition: 1,
       },
     ];
     mockFetch.mockResolvedValue(makeResponse(raw));
@@ -336,20 +358,42 @@ describe('TrafficApiService — toll rate normalization', () => {
 
     expect(rates).toHaveLength(1);
     const r = rates[0];
-    expect(r.tripName).toBe('SR 520 Express Toll');
-    expect(r.stateRoute).toBe('520');
-    expect(r.tollRateInDollars).toBe(3.5);
-    expect(r.startLocationName).toBe('148th Ave NE');
-    expect(r.tollCondition).toBe(1);
+    expect(r.tripName).toBe('099tp03060');
+    expect(r.stateRoute).toBe('099');
+    expect(r.travelDirection).toBe('S');
+    // CurrentToll 125 cents → $1.25
+    expect(r.tollRateInDollars).toBeCloseTo(1.25);
+    expect(r.startLocationName).toBe('SB S Portal');
+    expect(r.endLocationName).toBe('NB S Portal');
+    expect(r.startLatitude).toBeCloseTo(47.626665944);
+    expect(r.endLatitude).toBeCloseTo(47.587648851);
+    // CurrentMessage was null — should be omitted
+    expect('message' in r).toBe(false);
   });
 
-  it('omits optional fields when raw values are null', async () => {
-    const raw = [{ TripName: null, TollRate: null }];
+  it('converts CurrentToll integer cents to dollars', async () => {
+    const raw = [{ TripName: 'test', CurrentToll: 350 }];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const ctx = createMockContext();
+    const rates = await svc.getTollRates(ctx);
+    expect(rates[0].tollRateInDollars).toBeCloseTo(3.5);
+  });
+
+  it('omits tollRateInDollars when CurrentToll is null', async () => {
+    const raw = [{ TripName: null, CurrentToll: null }];
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const rates = await svc.getTollRates(ctx);
     expect('tripName' in rates[0]).toBe(false);
     expect('tollRateInDollars' in rates[0]).toBe(false);
+  });
+
+  it('maps CurrentMessage to message field', async () => {
+    const raw = [{ TripName: 'test', CurrentToll: 200, CurrentMessage: 'HOV 2+ free' }];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const ctx = createMockContext();
+    const rates = await svc.getTollRates(ctx);
+    expect(rates[0].message).toBe('HOV 2+ free');
   });
 });
 
@@ -410,7 +454,7 @@ describe('TrafficApiService — camera normalization', () => {
 
   afterEach(() => vi.clearAllMocks());
 
-  it('maps raw camera fields to domain fields', async () => {
+  it('maps raw camera fields to domain fields (CameraLocation nested)', async () => {
     const raw = [
       {
         CameraID: 1001,
@@ -419,12 +463,15 @@ describe('TrafficApiService — camera normalization', () => {
         ImageURL: 'https://images.wsdot.wa.gov/nc/090vc12345.jpg',
         ImageWidth: 320,
         ImageHeight: 240,
-        RoadName: 'I-90',
-        Direction: 'EB',
-        MilePost: 52,
-        Region: 'Northwest',
-        Latitude: 47.4,
-        Longitude: -121.4,
+        CameraLocation: {
+          RoadName: 'I-90',
+          Direction: 'EB',
+          MilePost: 52,
+          Latitude: 47.4,
+          Longitude: -121.4,
+        },
+        Region: 'NW',
+        IsActive: true,
       },
     ];
     mockFetch.mockResolvedValue(makeResponse(raw));
@@ -437,34 +484,110 @@ describe('TrafficApiService — camera normalization', () => {
     expect(c.title).toBe('I-90 at Snoqualmie Pass');
     expect(c.imageUrl).toBe('https://images.wsdot.wa.gov/nc/090vc12345.jpg');
     expect(c.imageWidth).toBe(320);
-    expect(c.region).toBe('Northwest');
+    expect(c.region).toBe('NW');
+    // Location fields from nested CameraLocation
+    expect(c.roadName).toBe('I-90');
+    expect(c.direction).toBe('EB');
+    expect(c.milePost).toBe(52);
+    expect(c.latitude).toBe(47.4);
+    expect(c.longitude).toBe(-121.4);
   });
 
   it('omits optional fields when raw values are null', async () => {
-    const raw = [{ CameraID: null, Title: null, ImageURL: null }];
+    const raw = [{ CameraID: null, Title: null, ImageURL: null, CameraLocation: null }];
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const cameras = await svc.searchCameras({}, ctx);
     expect('cameraId' in cameras[0]).toBe(false);
     expect('title' in cameras[0]).toBe(false);
     expect('imageUrl' in cameras[0]).toBe(false);
+    expect('roadName' in cameras[0]).toBe(false);
+    expect('latitude' in cameras[0]).toBe(false);
   });
 
-  it('uses SearchCamerasAsJson endpoint when stateRoute filter provided', async () => {
+  it('always uses GetCamerasAsJson endpoint (no SearchCamerasAsJson)', async () => {
     mockFetch.mockResolvedValue(makeResponse([]));
     const ctx = createMockContext();
     await svc.searchCameras({ stateRoute: '090' }, ctx);
     const url: string = mockFetch.mock.calls[0][0] as string;
-    expect(url).toContain('SearchCamerasAsJson');
-    expect(url).toContain('StateRoute=090');
+    expect(url).toContain('GetCamerasAsJson');
+    expect(url).not.toContain('SearchCamerasAsJson');
   });
 
-  it('uses GetCamerasAsJson endpoint when no filter provided', async () => {
-    mockFetch.mockResolvedValue(makeResponse([]));
+  it('filters cameras by stateRoute client-side (zero-padded route number)', async () => {
+    const raw = [
+      {
+        CameraID: 1,
+        Region: 'NW',
+        CameraLocation: {
+          RoadName: 'I-90',
+          MilePost: 52,
+          Latitude: 47.4,
+          Longitude: -121.4,
+          Direction: 'EB',
+        },
+      },
+      {
+        CameraID: 2,
+        Region: 'NW',
+        CameraLocation: {
+          RoadName: 'I-5',
+          MilePost: 172,
+          Latitude: 47.6,
+          Longitude: -122.3,
+          Direction: 'NB',
+        },
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
-    await svc.searchCameras({}, ctx);
-    const url: string = mockFetch.mock.calls[0][0] as string;
-    expect(url).toContain('GetCamerasAsJson');
+    const cameras = await svc.searchCameras({ stateRoute: '090' }, ctx);
+    expect(cameras).toHaveLength(1);
+    expect(cameras[0].cameraId).toBe(1);
+  });
+
+  it('filters cameras by region client-side (case-insensitive)', async () => {
+    const raw = [
+      { CameraID: 1, Region: 'NW', CameraLocation: null },
+      { CameraID: 2, Region: 'ER', CameraLocation: null },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const ctx = createMockContext();
+    const cameras = await svc.searchCameras({ region: 'nw' }, ctx);
+    expect(cameras).toHaveLength(1);
+    expect(cameras[0].cameraId).toBe(1);
+  });
+
+  it('filters cameras by milepost range client-side', async () => {
+    const raw = [
+      {
+        CameraID: 1,
+        Region: 'NW',
+        CameraLocation: {
+          RoadName: 'I-90',
+          MilePost: 10,
+          Latitude: 47.4,
+          Longitude: -121.4,
+          Direction: 'EB',
+        },
+      },
+      {
+        CameraID: 2,
+        Region: 'NW',
+        CameraLocation: {
+          RoadName: 'I-90',
+          MilePost: 60,
+          Latitude: 47.5,
+          Longitude: -121.5,
+          Direction: 'EB',
+        },
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const ctx = createMockContext();
+    const cameras = await svc.searchCameras({ startMilepost: 5, endMilepost: 50 }, ctx);
+    expect(cameras).toHaveLength(1);
+    expect(cameras[0].cameraId).toBe(1);
   });
 });
 

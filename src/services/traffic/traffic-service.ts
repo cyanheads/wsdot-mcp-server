@@ -28,7 +28,7 @@ import type {
 const BASE_URL = 'https://www.wsdot.wa.gov/Traffic/api';
 const TIMEOUT_MS = 15_000;
 
-/** Alert search parameters for `SearchAlertsAsJson`. */
+/** Alert search parameters (client-side filtering against GetAlertsAsJson). */
 export interface AlertSearchParams {
   endMilepost?: number;
   region?: string;
@@ -36,7 +36,7 @@ export interface AlertSearchParams {
   stateRoute?: string;
 }
 
-/** Camera search parameters for `SearchCamerasAsJson`. */
+/** Camera search parameters (client-side filtering against GetCamerasAsJson). */
 export interface CameraSearchParams {
   endMilepost?: number;
   region?: string;
@@ -140,33 +140,38 @@ export class TrafficApiService {
   }
 
   async searchAlerts(params: AlertSearchParams, ctx: Context): Promise<HighwayAlert[]> {
-    const hasFilter =
-      params.stateRoute ||
-      params.region ||
-      params.startMilepost != null ||
-      params.endMilepost != null;
-    let raw: HighwayAlert[];
+    const result = await this.fetchJson<RawHighwayAlert[]>(
+      'HighwayAlerts/HighwayAlertsREST.svc/GetAlertsAsJson',
+      ctx,
+    );
+    let alerts = result.map(normalizeAlert);
 
-    if (hasFilter) {
-      const qs = new URLSearchParams();
-      if (params.stateRoute) qs.set('StateRoute', params.stateRoute);
-      if (params.region) qs.set('Region', params.region);
-      if (params.startMilepost != null) qs.set('StartingMilepost', String(params.startMilepost));
-      if (params.endMilepost != null) qs.set('EndingMilepost', String(params.endMilepost));
-      const result = await this.fetchJson<RawHighwayAlert[]>(
-        `HighwayAlerts/HighwayAlertsREST.svc/SearchAlertsAsJson?${qs.toString()}`,
-        ctx,
+    if (params.stateRoute) {
+      const route = params.stateRoute.toLowerCase();
+      alerts = alerts.filter(
+        (a) =>
+          a.startRoadwayLocation?.roadName?.toLowerCase().includes(route) ||
+          a.endRoadwayLocation?.roadName?.toLowerCase().includes(route),
       );
-      raw = result.map(normalizeAlert);
-    } else {
-      const result = await this.fetchJson<RawHighwayAlert[]>(
-        'HighwayAlerts/HighwayAlertsREST.svc/GetAlertsAsJson',
-        ctx,
+    }
+    if (params.region) {
+      const region = params.region.toLowerCase();
+      alerts = alerts.filter((a) => a.region?.toLowerCase() === region);
+    }
+    if (params.startMilepost != null) {
+      const minMp = params.startMilepost;
+      alerts = alerts.filter(
+        (a) => a.startRoadwayLocation?.milePost == null || a.startRoadwayLocation.milePost >= minMp,
       );
-      raw = result.map(normalizeAlert);
+    }
+    if (params.endMilepost != null) {
+      const maxMp = params.endMilepost;
+      alerts = alerts.filter(
+        (a) => a.startRoadwayLocation?.milePost == null || a.startRoadwayLocation.milePost <= maxMp,
+      );
     }
 
-    return raw;
+    return alerts;
   }
 
   async getTravelTimes(ctx: Context): Promise<TravelTime[]> {
@@ -209,15 +214,18 @@ export class TrafficApiService {
     return rates.map((r) => ({
       ...(r.TripName != null && { tripName: r.TripName }),
       ...(r.StateRoute != null && { stateRoute: r.StateRoute }),
+      ...(r.TravelDirection != null && { travelDirection: r.TravelDirection }),
       ...(r.StartMilepost != null && { startMilepost: r.StartMilepost }),
       ...(r.EndMilepost != null && { endMilepost: r.EndMilepost }),
-      ...(r.TollRate != null && { tollRateInDollars: r.TollRate }),
-      ...(r.Message != null && { message: r.Message }),
-      ...(r.SignText != null && { signText: r.SignText }),
+      ...(r.CurrentToll != null && { tollRateInDollars: r.CurrentToll / 100 }),
+      ...(r.CurrentMessage != null && { message: r.CurrentMessage }),
       ...(r.StartLocationName != null && { startLocationName: r.StartLocationName }),
       ...(r.EndLocationName != null && { endLocationName: r.EndLocationName }),
+      ...(r.StartLatitude != null && { startLatitude: r.StartLatitude }),
+      ...(r.StartLongitude != null && { startLongitude: r.StartLongitude }),
+      ...(r.EndLatitude != null && { endLatitude: r.EndLatitude }),
+      ...(r.EndLongitude != null && { endLongitude: r.EndLongitude }),
       ...(r.TimeUpdated != null && { timeUpdated: r.TimeUpdated }),
-      ...(r.TollCondition != null && { tollCondition: r.TollCondition }),
     }));
   }
 
@@ -254,30 +262,38 @@ export class TrafficApiService {
   }
 
   async searchCameras(params: CameraSearchParams, ctx: Context): Promise<Camera[]> {
-    const hasFilter =
-      params.stateRoute ||
-      params.region ||
-      params.startMilepost != null ||
-      params.endMilepost != null;
+    const result = await this.fetchJson<RawCamera[]>(
+      'HighwayCameras/HighwayCamerasREST.svc/GetCamerasAsJson',
+      ctx,
+    );
+    let cameras = result.map(normalizeCamera);
 
-    if (hasFilter) {
-      const qs = new URLSearchParams();
-      if (params.stateRoute) qs.set('StateRoute', params.stateRoute);
-      if (params.region) qs.set('Region', params.region);
-      if (params.startMilepost != null) qs.set('StartingMilepost', String(params.startMilepost));
-      if (params.endMilepost != null) qs.set('EndingMilepost', String(params.endMilepost));
-      const result = await this.fetchJson<RawCamera[]>(
-        `HighwayCameras/HighwayCamerasREST.svc/SearchCamerasAsJson?${qs.toString()}`,
-        ctx,
-      );
-      return result.map(normalizeCamera);
-    } else {
-      const result = await this.fetchJson<RawCamera[]>(
-        'HighwayCameras/HighwayCamerasREST.svc/GetCamerasAsJson',
-        ctx,
-      );
-      return result.map(normalizeCamera);
+    if (params.stateRoute) {
+      // Road names use formats like "I-90", "SR 520" — not zero-padded numbers.
+      // Strip leading zeros from the input ("090" → "90") and match as a number suffix.
+      const routeNum = params.stateRoute.replace(/^0+/, '') || params.stateRoute;
+      cameras = cameras.filter((c) => {
+        if (!c.roadName) return false;
+        // Match "I-90", "SR 520", "SR520", etc.
+        return /[-\s]/.test(c.roadName)
+          ? c.roadName.split(/[-\s]/).pop() === routeNum
+          : c.roadName.replace(/[^0-9]/g, '') === routeNum;
+      });
     }
+    if (params.region) {
+      const region = params.region.toUpperCase();
+      cameras = cameras.filter((c) => c.region?.toUpperCase() === region);
+    }
+    if (params.startMilepost != null) {
+      const minMp = params.startMilepost;
+      cameras = cameras.filter((c) => c.milePost == null || c.milePost >= minMp);
+    }
+    if (params.endMilepost != null) {
+      const maxMp = params.endMilepost;
+      cameras = cameras.filter((c) => c.milePost == null || c.milePost <= maxMp);
+    }
+
+    return cameras;
   }
 }
 
@@ -332,6 +348,7 @@ function normalizeAlert(a: RawHighwayAlert): HighwayAlert {
 }
 
 function normalizeCamera(c: RawCamera): Camera {
+  const loc = c.CameraLocation;
   return {
     ...(c.CameraID != null && { cameraId: c.CameraID }),
     ...(c.Title != null && { title: c.Title }),
@@ -339,12 +356,12 @@ function normalizeCamera(c: RawCamera): Camera {
     ...(c.ImageURL != null && { imageUrl: c.ImageURL }),
     ...(c.ImageWidth != null && { imageWidth: c.ImageWidth }),
     ...(c.ImageHeight != null && { imageHeight: c.ImageHeight }),
-    ...(c.RoadName != null && { roadName: c.RoadName }),
-    ...(c.Direction != null && { direction: c.Direction }),
-    ...(c.MilePost != null && { milePost: c.MilePost }),
+    ...(loc?.RoadName != null && { roadName: loc.RoadName }),
+    ...(loc?.Direction != null && { direction: loc.Direction }),
+    ...(loc?.MilePost != null && { milePost: loc.MilePost }),
     ...(c.Region != null && { region: c.Region }),
-    ...(c.Latitude != null && { latitude: c.Latitude }),
-    ...(c.Longitude != null && { longitude: c.Longitude }),
+    ...(loc?.Latitude != null && { latitude: loc.Latitude }),
+    ...(loc?.Longitude != null && { longitude: loc.Longitude }),
   };
 }
 
