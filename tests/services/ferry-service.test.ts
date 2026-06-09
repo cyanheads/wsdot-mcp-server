@@ -6,6 +6,7 @@
  * @module tests/services/ferry-service.test
  */
 
+import { McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -54,6 +55,14 @@ describe('FerryApiService.toFerryDate', () => {
 
   it('throws validationError for empty string', () => {
     expect(() => FerryApiService.toFerryDate('')).toThrow();
+  });
+
+  it('rejects slash-format US dates (does not slip through to the upstream)', () => {
+    expect(() => FerryApiService.toFerryDate('06/08/2026')).toThrow(/Invalid date/);
+  });
+
+  it('rejects an impossible YYYY-MM-DD date', () => {
+    expect(() => FerryApiService.toFerryDate('2026-13-40')).toThrow(/Invalid date/);
   });
 });
 
@@ -377,6 +386,21 @@ describe('FerryApiService.getVesselLocations', () => {
     expect('inService' in vessels[0]).toBe(false);
     expect('atDock' in vessels[0]).toBe(false);
   });
+
+  it('omits date fields when the WCF value is the .NET MinValue sentinel', async () => {
+    const raw = [
+      {
+        VesselID: 9,
+        VesselName: 'Tacoma',
+        LeftDock: '/Date(-62135568000000-0800)/',
+        OpRouteAbbrev: [],
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const ctx = createMockContext();
+    const vessels = await svc.getVesselLocations(ctx);
+    expect('leftDock' in vessels[0]).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -601,6 +625,14 @@ describe('FerryApiService — HTTP error handling', () => {
     await expect(svc.getSchedule(9999, 9998, '2026-05-23', false, ctx)).rejects.toThrow(
       /Invalid terminal IDs/,
     );
+  });
+
+  it('marks 4xx errors non-retryable (data.retryable === false)', async () => {
+    mockFetch.mockResolvedValue(makeResponse('Bad Request', 400, 'text/plain'));
+    const ctx = createMockContext();
+    const err = await svc.getTerminals(ctx).catch((e) => e);
+    expect(err).toBeInstanceOf(McpError);
+    expect((err as McpError).data).toMatchObject({ retryable: false, status: 400 });
   });
 
   it('appends apiaccesscode to every request URL', async () => {

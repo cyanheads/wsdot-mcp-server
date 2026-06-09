@@ -10,8 +10,9 @@ import { FerryApiService, getFerryApiService } from '@/services/ferry/ferry-serv
 export const getFerryRoutes = tool('wsdot_get_ferry_routes', {
   title: 'Get Ferry Routes',
   description:
-    'Returns all WSF ferry routes operating on a given date. ' +
-    'Route IDs correspond to impactedRouteIds in ferry alerts from wsdot_get_ferry_alerts. ' +
+    'Returns the main WSF ferry routes operating on a given date. ' +
+    'Route IDs correspond to impactedRouteIds in ferry alerts from wsdot_get_ferry_alerts, though some ' +
+    'alert route IDs (seasonal, San Juan interisland, or Sidney B.C.) may not appear in this list. ' +
     'To get terminal IDs for schedule and space lookups, use wsdot_get_ferry_terminals.',
   annotations: { readOnlyHint: true },
   input: z.object({

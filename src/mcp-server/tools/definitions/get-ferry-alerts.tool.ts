@@ -12,7 +12,8 @@ export const getFerryAlerts = tool('wsdot_get_ferry_alerts', {
   description:
     'Returns active WSF ferry service disruptions, delays, and bulletins. ' +
     'Each alert includes impacted route IDs — cross-reference with wsdot_get_ferry_routes ' +
-    'to resolve route IDs to human-readable route names.',
+    'to resolve route IDs to human-readable route names. Some IDs (seasonal, San Juan interisland, ' +
+    'or international Sidney B.C. routes) may not appear in wsdot_get_ferry_routes for a given date.',
   annotations: { readOnlyHint: true },
   input: z.object({}),
   output: z.object({
@@ -28,7 +29,8 @@ export const getFerryAlerts = tool('wsdot_get_ferry_alerts', {
             impactedRouteIds: z
               .array(z.number())
               .describe(
-                'Route IDs affected by this alert. Cross-reference with wsdot_get_ferry_routes to get route names.',
+                'Route IDs affected by this alert. Cross-reference with wsdot_get_ferry_routes to get route names; ' +
+                  'some seasonal or interisland route IDs may not be listed there for a given date.',
               ),
             publishDate: z.string().optional().describe('When the alert was published (ISO 8601).'),
           })

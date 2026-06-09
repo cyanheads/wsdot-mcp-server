@@ -359,6 +359,20 @@ describe('getFerrySchedule', () => {
     expect((err as McpError).data).toMatchObject({ reason: 'invalid_terminal_pair' });
   });
 
+  it('maps an HTTP 4xx from getSchedule to invalid_terminal_pair', async () => {
+    mockService.getSchedule.mockRejectedValue(
+      new McpError(JsonRpcErrorCode.ServiceUnavailable, 'WSF Ferry API returned HTTP 400.'),
+    );
+    const ctx = createMockContext({ errors: getFerrySchedule.errors });
+    const input = getFerrySchedule.input.parse({
+      departingTerminalId: 999,
+      arrivingTerminalId: 3,
+    });
+    const err = await getFerrySchedule.handler(input, ctx).catch((e) => e);
+    expect(err).toBeInstanceOf(McpError);
+    expect((err as McpError).data).toMatchObject({ reason: 'invalid_terminal_pair' });
+  });
+
   it('re-throws non-WSF errors from getSchedule without wrapping', async () => {
     mockService.getSchedule.mockRejectedValue(new Error('Network timeout'));
     const ctx = createMockContext({ errors: getFerrySchedule.errors });

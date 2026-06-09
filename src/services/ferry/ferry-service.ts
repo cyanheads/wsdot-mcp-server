@@ -10,6 +10,7 @@ import { serviceUnavailable, validationError } from '@cyanheads/mcp-ts-core/erro
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
+import { wcfDateField } from '@/services/wcf-date.js';
 import type {
   FerryAlert,
   FerryRoute,
@@ -49,9 +50,13 @@ export class FerryApiService {
           : AbortSignal.any([ctx.signal, timeoutSignal]);
         const response = await fetch(url, { signal });
         if (!response.ok) {
+          // 4xx is a client error that won't succeed on retry (e.g. an invalid terminal pair on the
+          // schedule endpoint) — mark non-retryable so withRetry fails fast instead of burning all attempts.
+          const isClientError = response.status >= 400 && response.status < 500;
           throw serviceUnavailable(`WSF Ferry API returned HTTP ${response.status}.`, {
             url,
             status: response.status,
+            ...(isClientError && { retryable: false }),
           });
         }
         const contentType = response.headers.get('content-type') ?? '';
@@ -89,16 +94,26 @@ export class FerryApiService {
     );
   }
 
-  /** Validate and normalize an ISO 8601 date string for use in ferry API paths. */
+  /**
+   * Validate and normalize a date for use in ferry API paths. Accepts a `YYYY-MM-DD` date or a full
+   * ISO 8601 datetime (the date part is taken); rejects slash-format ("06/08/2026") and impossible
+   * dates locally so a malformed value never reaches the upstream as a path segment (which it answers
+   * with an HTTP 400).
+   */
   static toFerryDate(isoDate: string): string {
-    const d = new Date(isoDate);
-    if (Number.isNaN(d.getTime())) {
+    const datePart = isoDate.trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
       throw validationError(
-        `Invalid date: "${isoDate}". Expected ISO 8601 format (e.g. 2026-05-23).`,
+        `Invalid date: "${isoDate}". Expected ISO 8601 date (YYYY-MM-DD), e.g. 2026-05-23.`,
       );
     }
-    // Return YYYY-MM-DD — the WSF Schedule API requires ISO 8601
-    return isoDate.trim().slice(0, 10);
+    const d = new Date(`${datePart}T00:00:00Z`);
+    if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== datePart) {
+      throw validationError(
+        `Invalid date: "${isoDate}". Not a real calendar date (use YYYY-MM-DD).`,
+      );
+    }
+    return datePart;
   }
 
   /** Return today's date in YYYY-MM-DD format. */
@@ -166,8 +181,8 @@ export class FerryApiService {
       }),
       tripDate,
       sailings: (combo?.Times ?? []).map((s) => ({
-        ...(s.DepartingTime != null && { departureTime: decodeWcfDate(s.DepartingTime) }),
-        ...(s.ArrivingTime != null && { arrivalTime: decodeWcfDate(s.ArrivingTime) }),
+        ...wcfDateField('departureTime', s.DepartingTime),
+        ...wcfDateField('arrivalTime', s.ArrivingTime),
         ...(typeof s.IsCancelled === 'boolean' && { isCancelled: s.IsCancelled }),
         ...(s.VesselName != null && { vesselName: s.VesselName }),
       })),
@@ -190,13 +205,11 @@ export class FerryApiService {
       ...(v.Longitude != null && { longitude: v.Longitude }),
       ...(v.Speed != null && { speed: v.Speed }),
       ...(v.Heading != null && { heading: v.Heading }),
-      ...(v.LeftDock != null && { leftDock: decodeWcfDate(v.LeftDock) }),
-      ...(v.Eta != null && { eta: decodeWcfDate(v.Eta) }),
-      ...(v.ScheduledDeparture != null && {
-        scheduledDeparture: decodeWcfDate(v.ScheduledDeparture),
-      }),
+      ...wcfDateField('leftDock', v.LeftDock),
+      ...wcfDateField('eta', v.Eta),
+      ...wcfDateField('scheduledDeparture', v.ScheduledDeparture),
       opRouteAbbrev: v.OpRouteAbbrev ?? [],
-      ...(v.TimeStamp != null && { timestamp: decodeWcfDate(v.TimeStamp) }),
+      ...wcfDateField('timestamp', v.TimeStamp),
     }));
   }
 
@@ -216,7 +229,7 @@ export class FerryApiService {
           // Departure with no arrival terminal breakdowns — emit a row with just the vessel/departure info
           return [
             {
-              ...(s.Departure != null && { departure: decodeWcfDate(s.Departure) }),
+              ...wcfDateField('departure', s.Departure),
               ...(typeof s.IsCancelled === 'boolean' && { isCancelled: s.IsCancelled }),
               ...(s.VesselName != null && { vesselName: s.VesselName }),
               ...(s.MaxSpaceCount != null && { maxSpaceCount: s.MaxSpaceCount }),
@@ -224,7 +237,7 @@ export class FerryApiService {
           ];
         }
         return arrivalTerminals.map((a) => ({
-          ...(s.Departure != null && { departure: decodeWcfDate(s.Departure) }),
+          ...wcfDateField('departure', s.Departure),
           ...(typeof s.IsCancelled === 'boolean' && { isCancelled: s.IsCancelled }),
           ...(s.VesselName != null && { vesselName: s.VesselName }),
           ...(a.TerminalName != null && { arrivingTerminalName: a.TerminalName }),
@@ -249,18 +262,9 @@ export class FerryApiService {
           ? { alertDescription: a.AlertFullTitle }
           : {}),
       impactedRouteIds: a.AffectedRouteIDs ?? [],
-      ...(a.PublishDate != null && { publishDate: decodeWcfDate(a.PublishDate) }),
+      ...wcfDateField('publishDate', a.PublishDate),
     }));
   }
-}
-
-// --- Utilities ---
-
-/** Decode a WCF JSON date string (`/Date(ms±offset)/`) to ISO 8601, or return input unchanged. */
-function decodeWcfDate(value: string): string {
-  const match = /^\/Date\((-?\d+)([+-]\d{4})?\)\/$/.exec(value);
-  if (!match) return value;
-  return new Date(Number(match[1])).toISOString();
 }
 
 // --- Init/accessor pattern ---

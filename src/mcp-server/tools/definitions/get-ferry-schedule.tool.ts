@@ -111,12 +111,22 @@ export const getFerrySchedule = tool('wsdot_get_ferry_schedule', {
         ctx,
       );
     } catch (err) {
-      if (err instanceof McpError && err.message.includes('WSF Ferry API error')) {
-        throw ctx.fail('invalid_terminal_pair', err.message, {
-          recovery: {
-            hint: 'Use wsdot_get_ferry_terminals to list valid terminal IDs and wsdot_get_ferry_routes to find valid pairs.',
+      // WSF rejects an invalid or non-through terminal pair with either a 200 + {"Message"} body
+      // (→ "WSF Ferry API error: …") or a real HTTP 4xx. Both mean the same to the caller: there is
+      // no direct schedule for this pair.
+      if (
+        err instanceof McpError &&
+        (err.message.includes('WSF Ferry API error') || /returned HTTP 4\d\d/.test(err.message))
+      ) {
+        throw ctx.fail(
+          'invalid_terminal_pair',
+          `No ferry schedule for terminal ${input.departingTerminalId} → ${input.arrivingTerminalId} on ${tripDate}. These terminals may not have direct service, or a terminal ID may be invalid.`,
+          {
+            recovery: {
+              hint: 'Use wsdot_get_ferry_terminals for valid IDs and wsdot_get_ferry_routes for served routes.',
+            },
           },
-        });
+        );
       }
       throw err;
     }
