@@ -47,12 +47,15 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
             timeUpdated: z
               .string()
               .optional()
-              .describe('When the travel time data was last updated.'),
+              .describe('When the travel time data was last updated (ISO 8601).'),
             distanceInMiles: z.number().optional().describe('Corridor distance in miles.'),
             startPoint: z
               .object({
                 roadName: z.string().optional().describe('Road name at the start.'),
-                direction: z.string().optional().describe('Travel direction.'),
+                direction: z
+                  .string()
+                  .optional()
+                  .describe('Travel direction code: N (north), S (south), E (east), W (west).'),
                 milePost: z.number().optional().describe('Starting milepost.'),
               })
               .optional()
@@ -60,7 +63,10 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
             endPoint: z
               .object({
                 roadName: z.string().optional().describe('Road name at the end.'),
-                direction: z.string().optional().describe('Travel direction.'),
+                direction: z
+                  .string()
+                  .optional()
+                  .describe('Travel direction code: N (north), S (south), E (east), W (west).'),
                 milePost: z.number().optional().describe('Ending milepost.'),
               })
               .optional()

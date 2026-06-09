@@ -44,22 +44,43 @@ export const getMountainPasses = tool('wsdot_get_mountain_passes', {
               .describe('True when a travel advisory is in effect.'),
             restrictionOne: z
               .object({
-                comment: z
+                text: z
                   .string()
                   .optional()
-                  .describe('Restriction description (e.g. "Traction Tires Required").'),
-                type: z.string().optional().describe('Restriction type code.'),
+                  .describe(
+                    'Restriction / traction-law text (e.g. "Traction Tires Required, Chains Required (Except All Wheel Drive)"). ' +
+                      'Reads "No current information available" or "No restrictions" when nothing is in effect.',
+                  ),
+                travelDirection: z
+                  .string()
+                  .optional()
+                  .describe(
+                    'Direction this restriction applies to (e.g. "Northbound", "Eastbound", "Both directions").',
+                  ),
               })
               .optional()
-              .describe('Primary travel restriction, if any.'),
+              .describe('Primary travel/traction restriction (typically one direction of travel).'),
             restrictionTwo: z
               .object({
-                comment: z.string().optional().describe('Restriction description.'),
-                type: z.string().optional().describe('Restriction type code.'),
+                text: z
+                  .string()
+                  .optional()
+                  .describe('Restriction / traction-law text for the second direction.'),
+                travelDirection: z
+                  .string()
+                  .optional()
+                  .describe(
+                    'Direction this restriction applies to (e.g. "Southbound", "Westbound").',
+                  ),
               })
               .optional()
-              .describe('Secondary travel restriction, if any.'),
-            dateUpdated: z.string().optional().describe('Timestamp of the last condition update.'),
+              .describe(
+                'Secondary travel/traction restriction (typically the opposite direction).',
+              ),
+            dateUpdated: z
+              .string()
+              .optional()
+              .describe('Timestamp of the last condition update (ISO 8601).'),
             latitude: z.number().optional().describe('Pass latitude.'),
             longitude: z.number().optional().describe('Pass longitude.'),
           })
@@ -118,12 +139,16 @@ export const getMountainPasses = tool('wsdot_get_mountain_passes', {
       if (typeof p.travelAdvisoryActive === 'boolean') {
         lines.push(`**Travel Advisory:** ${p.travelAdvisoryActive ? 'ACTIVE' : 'None'}`);
       }
-      if (p.restrictionOne?.comment || p.restrictionOne?.type) {
-        const r = [p.restrictionOne.type, p.restrictionOne.comment].filter(Boolean).join(' — ');
+      if (p.restrictionOne?.text || p.restrictionOne?.travelDirection) {
+        const r = [p.restrictionOne.travelDirection, p.restrictionOne.text]
+          .filter(Boolean)
+          .join(': ');
         lines.push(`**Restriction 1:** ${r}`);
       }
-      if (p.restrictionTwo?.comment || p.restrictionTwo?.type) {
-        const r = [p.restrictionTwo.type, p.restrictionTwo.comment].filter(Boolean).join(' — ');
+      if (p.restrictionTwo?.text || p.restrictionTwo?.travelDirection) {
+        const r = [p.restrictionTwo.travelDirection, p.restrictionTwo.text]
+          .filter(Boolean)
+          .join(': ');
         lines.push(`**Restriction 2:** ${r}`);
       }
       if (p.dateUpdated) lines.push(`**Updated:** ${p.dateUpdated}`);

@@ -10,9 +10,11 @@ import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
 export const getBorderWaits = tool('wsdot_get_border_waits', {
   title: 'Get Border Wait Times',
   description:
-    'Returns current vehicle wait times at all WA/Canada land border crossings: ' +
-    'Peace Arch (Blaine), Pacific Highway (Blaine), Sumas, Lynden, Oroville, and others. ' +
-    'Wait times are in minutes. Use for "how long is the border wait?" questions.',
+    'Returns current vehicle wait times at WA→Canada land border crossings on I-5 (Peace Arch and ' +
+    'Pacific Highway, Blaine), SR 539 (Lynden), and SR 9 (Sumas), including Nexus-lane variants. ' +
+    'crossingName is a route code (e.g. "I5", "I5Nexus", "SR539"); the readable name is in ' +
+    'location.description. Wait times are in minutes; a crossing reporting no current data is omitted. ' +
+    'Use for "how long is the border wait?" questions.',
   annotations: { readOnlyHint: true },
   input: z.object({}),
   output: z.object({
@@ -20,22 +22,45 @@ export const getBorderWaits = tool('wsdot_get_border_waits', {
       .array(
         z
           .object({
-            crossingName: z.string().optional().describe('Name of the border crossing.'),
+            crossingName: z
+              .string()
+              .optional()
+              .describe(
+                'Route-code crossing identifier (e.g. "I5", "I5Nexus", "SR539", "SR9"). ' +
+                  'See location.description for the readable name.',
+              ),
             waitTimeInMinutes: z
               .number()
               .optional()
-              .describe('Current vehicle wait time in minutes.'),
-            updateTime: z.string().optional().describe('When this wait time was last updated.'),
+              .describe(
+                'Current vehicle wait time in minutes. Omitted when the crossing reports no data ' +
+                  '(WSDOT emits a -1 sentinel for closed/unmonitored crossings).',
+              ),
+            updateTime: z
+              .string()
+              .optional()
+              .describe('When this wait time was last updated (ISO 8601).'),
             location: z
               .object({
+                description: z
+                  .string()
+                  .optional()
+                  .describe(
+                    'Readable crossing/lane name (e.g. "I-5 General Purpose", "I-5 Nexus Lane").',
+                  ),
                 roadName: z.string().optional().describe('Road serving the crossing.'),
-                direction: z.string().optional().describe('Travel direction.'),
+                direction: z
+                  .string()
+                  .optional()
+                  .describe(
+                    'Travel direction code (N/S/E/W/B); frequently null for border crossings.',
+                  ),
                 milePost: z.number().optional().describe('Milepost of the crossing.'),
                 latitude: z.number().optional().describe('Latitude of the crossing.'),
                 longitude: z.number().optional().describe('Longitude of the crossing.'),
               })
               .optional()
-              .describe('Geographic location of the crossing.'),
+              .describe('Geographic location and readable name of the crossing.'),
           })
           .describe('Wait time data for one border crossing.'),
       )
@@ -81,7 +106,9 @@ export const getBorderWaits = tool('wsdot_get_border_waits', {
     }
     const lines: string[] = [];
     for (const c of result.crossings) {
-      lines.push(`### ${c.crossingName ?? 'Border Crossing'}`);
+      const heading = c.location?.description ?? c.crossingName ?? 'Border Crossing';
+      lines.push(`### ${heading}`);
+      if (c.crossingName && c.crossingName !== heading) lines.push(`**Code:** ${c.crossingName}`);
       if (c.waitTimeInMinutes != null) {
         lines.push(`**Wait:** ${c.waitTimeInMinutes} min`);
       } else {

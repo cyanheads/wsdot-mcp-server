@@ -5,6 +5,7 @@
  * @module tests/services/traffic-service.test
  */
 
+import { McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -56,14 +57,14 @@ describe('TrafficApiService — mountain pass normalization', () => {
       {
         MountainPassId: 1,
         MountainPassName: 'Snoqualmie Pass',
-        Elevation: 3022,
+        ElevationInFeet: 3022,
         TemperatureInFahrenheit: 28,
         WeatherCondition: 'Snow',
         RoadCondition: 'Snow and Ice Covered',
         TravelAdvisoryActive: true,
         RestrictionOne: {
-          TravelRestrictionComment: 'Traction Tires Required',
-          RestrictionType: 'TractionsRequired',
+          RestrictionText: 'Traction Tires Required',
+          TravelDirection: 'Eastbound',
         },
         DateUpdated: '/Date(1700000000000-0800)/',
         Latitude: 47.4273,
@@ -83,8 +84,10 @@ describe('TrafficApiService — mountain pass normalization', () => {
     expect(p.weatherCondition).toBe('Snow');
     expect(p.roadCondition).toBe('Snow and Ice Covered');
     expect(p.travelAdvisoryActive).toBe(true);
-    expect(p.restrictionOne?.comment).toBe('Traction Tires Required');
-    expect(p.restrictionOne?.type).toBe('TractionsRequired');
+    expect(p.restrictionOne?.text).toBe('Traction Tires Required');
+    expect(p.restrictionOne?.travelDirection).toBe('Eastbound');
+    // WCF date decoded to ISO 8601
+    expect(p.dateUpdated).toBe('2023-11-14T22:13:20.000Z');
     expect(p.latitude).toBe(47.4273);
     expect(p.longitude).toBe(-121.4128);
   });
@@ -94,7 +97,7 @@ describe('TrafficApiService — mountain pass normalization', () => {
       {
         MountainPassId: 2,
         MountainPassName: 'Blewett Pass',
-        Elevation: null,
+        ElevationInFeet: null,
         TemperatureInFahrenheit: null,
         WeatherCondition: null,
         RoadCondition: null,
@@ -130,18 +133,32 @@ describe('TrafficApiService — mountain pass normalization', () => {
     expect(passes[0].mountainPassName).toBe('Unknown');
   });
 
-  it('omits restrictionOne when both comment and type are absent', async () => {
+  it('omits restrictionOne when both text and travelDirection are absent', async () => {
     const raw = [
       {
         MountainPassId: 3,
         MountainPassName: 'White Pass',
-        RestrictionOne: { TravelRestrictionComment: null, RestrictionType: null },
+        RestrictionOne: { RestrictionText: null, TravelDirection: null },
       },
     ];
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const passes = await svc.getMountainPasses(ctx);
     expect('restrictionOne' in passes[0]).toBe(false);
+  });
+
+  it('omits dateUpdated when DateUpdated is the .NET MinValue sentinel', async () => {
+    const raw = [
+      {
+        MountainPassId: 4,
+        MountainPassName: 'Cayuse Pass',
+        DateUpdated: '/Date(-62135568000000-0800)/',
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const ctx = createMockContext();
+    const passes = await svc.getMountainPasses(ctx);
+    expect('dateUpdated' in passes[0]).toBe(false);
   });
 
   it('returns empty array when API returns []', async () => {
@@ -196,6 +213,9 @@ describe('TrafficApiService — alert normalization', () => {
     expect(a.region).toBe('Northwest');
     expect(a.startRoadwayLocation?.roadName).toBe('I-90');
     expect(a.startRoadwayLocation?.milePost).toBe(30);
+    // WCF dates decoded to ISO 8601
+    expect(a.startTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(a.lastUpdatedTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   it('omits optional fields when raw values are null', async () => {
@@ -308,6 +328,7 @@ describe('TrafficApiService — travel time normalization', () => {
     expect(t.distanceInMiles).toBe(6.2);
     expect(t.startPoint?.roadName).toBe('I-5');
     expect(t.endPoint?.milePost).toBe(174);
+    expect(t.timeUpdated).toBe('2023-11-14T22:13:20.000Z');
   });
 
   it('omits optional fields when raw values are null', async () => {
@@ -367,6 +388,7 @@ describe('TrafficApiService — toll rate normalization', () => {
     expect(r.endLocationName).toBe('NB S Portal');
     expect(r.startLatitude).toBeCloseTo(47.626665944);
     expect(r.endLatitude).toBeCloseTo(47.587648851);
+    expect(r.timeUpdated).toBe('2023-11-14T22:13:20.000Z');
     // CurrentMessage was null — should be omitted
     expect('message' in r).toBe(false);
   });
@@ -410,13 +432,14 @@ describe('TrafficApiService — border crossing normalization', () => {
   it('maps raw border crossing fields to domain fields', async () => {
     const raw = [
       {
-        CrossingName: 'Peace Arch',
+        CrossingName: 'I5',
         WaitTime: 25,
-        UpdateTime: '/Date(1700000000000-0800)/',
+        Time: '/Date(1700000000000-0800)/',
         BorderCrossingLocation: {
-          RoadName: 'I-5',
+          Description: 'I-5 General Purpose',
+          RoadName: '005',
           Direction: 'N',
-          MilePost: 275,
+          MilePost: 0,
           Latitude: 49.002,
           Longitude: -122.755,
         },
@@ -428,10 +451,13 @@ describe('TrafficApiService — border crossing normalization', () => {
 
     expect(crossings).toHaveLength(1);
     const c = crossings[0];
-    expect(c.crossingName).toBe('Peace Arch');
+    expect(c.crossingName).toBe('I5');
     expect(c.waitTimeInMinutes).toBe(25);
-    expect(c.location?.roadName).toBe('I-5');
+    expect(c.location?.description).toBe('I-5 General Purpose');
+    expect(c.location?.roadName).toBe('005');
     expect(c.location?.latitude).toBe(49.002);
+    // WCF date decoded to ISO 8601 (field is `Time`, not `UpdateTime`)
+    expect(c.updateTime).toBe('2023-11-14T22:13:20.000Z');
   });
 
   it('omits location when BorderCrossingLocation is null', async () => {
@@ -440,6 +466,15 @@ describe('TrafficApiService — border crossing normalization', () => {
     const ctx = createMockContext();
     const crossings = await svc.getBorderCrossings(ctx);
     expect('location' in crossings[0]).toBe(false);
+    expect('waitTimeInMinutes' in crossings[0]).toBe(false);
+  });
+
+  it('omits waitTimeInMinutes when WaitTime is the -1 sentinel', async () => {
+    const raw = [{ CrossingName: 'SR9', WaitTime: -1, BorderCrossingLocation: null }];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const ctx = createMockContext();
+    const crossings = await svc.getBorderCrossings(ctx);
+    expect(crossings[0].crossingName).toBe('SR9');
     expect('waitTimeInMinutes' in crossings[0]).toBe(false);
   });
 });
@@ -611,6 +646,21 @@ describe('TrafficApiService — HTTP error handling', () => {
     mockFetch.mockResolvedValue(makeResponse('Unauthorized', 401, 'text/plain'));
     const ctx = createMockContext();
     await expect(svc.getMountainPasses(ctx)).rejects.toThrow(/401/);
+  });
+
+  it('marks 4xx errors non-retryable (data.retryable === false)', async () => {
+    mockFetch.mockResolvedValue(makeResponse('Bad Request', 400, 'text/plain'));
+    const ctx = createMockContext();
+    const err = await svc.getMountainPasses(ctx).catch((e) => e);
+    expect(err).toBeInstanceOf(McpError);
+    expect((err as McpError).data).toMatchObject({ retryable: false, status: 400 });
+  });
+
+  it('does not mark 5xx errors non-retryable', async () => {
+    mockFetch.mockResolvedValue(makeResponse('Server Error', 503, 'text/plain'));
+    const ctx = createMockContext();
+    const err = await svc.getMountainPasses(ctx).catch((e) => e);
+    expect((err as McpError).data?.retryable).toBeUndefined();
   });
 
   it('throws serviceUnavailable when Content-Type is text/html', async () => {

@@ -10,6 +10,7 @@ import { serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
+import { wcfDateField } from '@/services/wcf-date.js';
 import type {
   BorderCrossing,
   Camera,
@@ -61,9 +62,13 @@ export class TrafficApiService {
           : AbortSignal.any([ctx.signal, timeoutSignal]);
         const response = await fetch(url, { signal });
         if (!response.ok) {
+          // 4xx is a client error that won't succeed on retry — mark non-retryable so withRetry
+          // fails fast instead of burning all attempts (the data.retryable === false opt-out).
+          const isClientError = response.status >= 400 && response.status < 500;
           throw serviceUnavailable(`WSDOT Traffic API returned HTTP ${response.status}.`, {
             url,
             status: response.status,
+            ...(isClientError && { retryable: false }),
           });
         }
         // Auth failure returns HTML, not JSON — detect by Content-Type
@@ -100,7 +105,7 @@ export class TrafficApiService {
     return passes.map((p) => ({
       mountainPassId: p.MountainPassId ?? 0,
       mountainPassName: p.MountainPassName ?? 'Unknown',
-      ...(p.Elevation != null && { elevation: p.Elevation }),
+      ...(p.ElevationInFeet != null && { elevation: p.ElevationInFeet }),
       ...(p.TemperatureInFahrenheit != null && {
         temperatureInFahrenheit: p.TemperatureInFahrenheit,
       }),
@@ -109,31 +114,31 @@ export class TrafficApiService {
       ...(typeof p.TravelAdvisoryActive === 'boolean' && {
         travelAdvisoryActive: p.TravelAdvisoryActive,
       }),
-      ...(p.RestrictionOne?.TravelRestrictionComment || p.RestrictionOne?.RestrictionType
+      ...(p.RestrictionOne?.RestrictionText || p.RestrictionOne?.TravelDirection
         ? {
             restrictionOne: {
-              ...(p.RestrictionOne.TravelRestrictionComment != null && {
-                comment: p.RestrictionOne.TravelRestrictionComment,
+              ...(p.RestrictionOne.RestrictionText != null && {
+                text: p.RestrictionOne.RestrictionText,
               }),
-              ...(p.RestrictionOne.RestrictionType != null && {
-                type: p.RestrictionOne.RestrictionType,
+              ...(p.RestrictionOne.TravelDirection != null && {
+                travelDirection: p.RestrictionOne.TravelDirection,
               }),
             },
           }
         : {}),
-      ...(p.RestrictionTwo?.TravelRestrictionComment || p.RestrictionTwo?.RestrictionType
+      ...(p.RestrictionTwo?.RestrictionText || p.RestrictionTwo?.TravelDirection
         ? {
             restrictionTwo: {
-              ...(p.RestrictionTwo.TravelRestrictionComment != null && {
-                comment: p.RestrictionTwo.TravelRestrictionComment,
+              ...(p.RestrictionTwo.RestrictionText != null && {
+                text: p.RestrictionTwo.RestrictionText,
               }),
-              ...(p.RestrictionTwo.RestrictionType != null && {
-                type: p.RestrictionTwo.RestrictionType,
+              ...(p.RestrictionTwo.TravelDirection != null && {
+                travelDirection: p.RestrictionTwo.TravelDirection,
               }),
             },
           }
         : {}),
-      ...(p.DateUpdated != null && { dateUpdated: p.DateUpdated }),
+      ...wcfDateField('dateUpdated', p.DateUpdated),
       ...(p.Latitude != null && { latitude: p.Latitude }),
       ...(p.Longitude != null && { longitude: p.Longitude }),
     }));
@@ -186,7 +191,7 @@ export class TrafficApiService {
       ...(t.Description != null && { description: t.Description }),
       ...(t.CurrentTime != null && { currentTimeInMinutes: t.CurrentTime }),
       ...(t.AverageTime != null && { averageTimeInMinutes: t.AverageTime }),
-      ...(t.TimeUpdated != null && { timeUpdated: t.TimeUpdated }),
+      ...wcfDateField('timeUpdated', t.TimeUpdated),
       ...(t.Distance != null && { distanceInMiles: t.Distance }),
       ...(t.StartPoint != null && {
         startPoint: {
@@ -225,7 +230,7 @@ export class TrafficApiService {
       ...(r.StartLongitude != null && { startLongitude: r.StartLongitude }),
       ...(r.EndLatitude != null && { endLatitude: r.EndLatitude }),
       ...(r.EndLongitude != null && { endLongitude: r.EndLongitude }),
-      ...(r.TimeUpdated != null && { timeUpdated: r.TimeUpdated }),
+      ...wcfDateField('timeUpdated', r.TimeUpdated),
     }));
   }
 
@@ -237,10 +242,14 @@ export class TrafficApiService {
     );
     return crossings.map((c) => ({
       ...(c.CrossingName != null && { crossingName: c.CrossingName }),
-      ...(c.WaitTime != null && { waitTimeInMinutes: c.WaitTime }),
-      ...(c.UpdateTime != null && { updateTime: c.UpdateTime }),
+      // WSDOT emits -1 when a crossing has no current reading — drop it rather than surface a bogus wait.
+      ...(c.WaitTime != null && c.WaitTime >= 0 && { waitTimeInMinutes: c.WaitTime }),
+      ...wcfDateField('updateTime', c.Time),
       ...(c.BorderCrossingLocation != null && {
         location: {
+          ...(c.BorderCrossingLocation.Description != null && {
+            description: c.BorderCrossingLocation.Description,
+          }),
           ...(c.BorderCrossingLocation.RoadName != null && {
             roadName: c.BorderCrossingLocation.RoadName,
           }),
@@ -341,9 +350,9 @@ function normalizeAlert(a: RawHighwayAlert): HighwayAlert {
         }),
       },
     }),
-    ...(a.StartTime != null && { startTime: a.StartTime }),
-    ...(a.EndTime != null && { endTime: a.EndTime }),
-    ...(a.LastUpdatedTime != null && { lastUpdatedTime: a.LastUpdatedTime }),
+    ...wcfDateField('startTime', a.StartTime),
+    ...wcfDateField('endTime', a.EndTime),
+    ...wcfDateField('lastUpdatedTime', a.LastUpdatedTime),
   };
 }
 

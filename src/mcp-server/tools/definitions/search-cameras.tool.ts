@@ -46,7 +46,12 @@ export const searchCameras = tool('wsdot_search_cameras', {
             imageWidth: z.number().optional().describe('Image width in pixels.'),
             imageHeight: z.number().optional().describe('Image height in pixels.'),
             roadName: z.string().optional().describe('Road the camera monitors.'),
-            direction: z.string().optional().describe('Traffic direction monitored.'),
+            direction: z
+              .string()
+              .optional()
+              .describe(
+                'Traffic-direction code monitored: N/S/E/W, B (both), NB/SB/EB/WB. Some sites use other location-specific markers.',
+              ),
             milePost: z.number().optional().describe('Milepost location of the camera.'),
             region: z.string().optional().describe('WSDOT region.'),
             latitude: z.number().optional().describe('Camera latitude.'),

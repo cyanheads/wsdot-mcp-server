@@ -25,7 +25,9 @@ export const getTollRates = tool('wsdot_get_toll_rates', {
             travelDirection: z
               .string()
               .optional()
-              .describe('Travel direction for this toll segment (e.g. "N", "S", "E", "W").'),
+              .describe(
+                'Travel direction code for this toll segment: N (north), S (south), E (east), W (west).',
+              ),
             startMilepost: z.number().optional().describe('Starting milepost of the toll segment.'),
             endMilepost: z.number().optional().describe('Ending milepost of the toll segment.'),
             tollRateInDollars: z.number().optional().describe('Current toll rate in US dollars.'),
@@ -39,7 +41,10 @@ export const getTollRates = tool('wsdot_get_toll_rates', {
             startLongitude: z.number().optional().describe('Longitude of the segment start point.'),
             endLatitude: z.number().optional().describe('Latitude of the segment end point.'),
             endLongitude: z.number().optional().describe('Longitude of the segment end point.'),
-            timeUpdated: z.string().optional().describe('When this toll rate was last updated.'),
+            timeUpdated: z
+              .string()
+              .optional()
+              .describe('When this toll rate was last updated (ISO 8601).'),
           })
           .describe('Current toll rate for one segment or trip.'),
       )

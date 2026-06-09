@@ -48,8 +48,8 @@ describe('getMountainPasses', () => {
     weatherCondition: 'Snow',
     roadCondition: 'Snow and Ice Covered',
     travelAdvisoryActive: true,
-    restrictionOne: { comment: 'Traction Tires Required', type: 'TractionsRequired' },
-    dateUpdated: '/Date(1700000000000-0800)/',
+    restrictionOne: { text: 'Traction Tires Required', travelDirection: 'Eastbound' },
+    dateUpdated: '2023-11-14T22:13:20.000Z',
     latitude: 47.4273,
     longitude: -121.4128,
   };
@@ -136,8 +136,8 @@ describe('searchAlerts', () => {
       latitude: 47.5,
       longitude: -121.7,
     },
-    startTime: '/Date(1700000000000-0800)/',
-    lastUpdatedTime: '/Date(1700001000000-0800)/',
+    startTime: '2023-11-14T22:13:20.000Z',
+    lastUpdatedTime: '2023-11-14T22:30:00.000Z',
   };
 
   it('returns all alerts when no filters provided', async () => {
@@ -253,7 +253,7 @@ describe('getTravelTimes', () => {
     description: 'I-5 northbound',
     currentTimeInMinutes: 18,
     averageTimeInMinutes: 12,
-    timeUpdated: '/Date(1700000000000-0800)/',
+    timeUpdated: '2023-11-14T22:13:20.000Z',
     distanceInMiles: 6.2,
     startPoint: { roadName: 'I-5', direction: 'N', milePost: 168 },
     endPoint: { roadName: 'I-5', direction: 'N', milePost: 174 },
@@ -370,7 +370,7 @@ describe('getTollRates', () => {
     startLongitude: -122.343652437,
     endLatitude: 47.587648851,
     endLongitude: -122.338771924,
-    timeUpdated: '/Date(1700000000000-0800)/',
+    timeUpdated: '2023-11-14T22:13:20.000Z',
   };
 
   it('returns all toll rates', async () => {
@@ -436,13 +436,14 @@ describe('getTollRates', () => {
 
 describe('getBorderWaits', () => {
   const crossingFixture = {
-    crossingName: 'Peace Arch',
+    crossingName: 'I5',
     waitTimeInMinutes: 25,
-    updateTime: '/Date(1700000000000-0800)/',
+    updateTime: '2023-11-14T22:13:20.000Z',
     location: {
-      roadName: 'I-5',
+      description: 'I-5 General Purpose',
+      roadName: '005',
       direction: 'N',
-      milePost: 275,
+      milePost: 0,
       latitude: 49.002,
       longitude: -122.755,
     },
@@ -454,7 +455,7 @@ describe('getBorderWaits', () => {
     const input = getBorderWaits.input.parse({});
     const result = await getBorderWaits.handler(input, ctx);
     expect(result.crossings).toHaveLength(1);
-    expect(result.crossings[0].crossingName).toBe('Peace Arch');
+    expect(result.crossings[0].crossingName).toBe('I5');
     expect(result.crossings[0].waitTimeInMinutes).toBe(25);
   });
 
@@ -490,9 +491,10 @@ describe('getBorderWaits', () => {
     const output = { crossings: [crossingFixture] };
     const blocks = getBorderWaits.format!(output);
     const text = (blocks[0] as { text: string }).text;
-    expect(text).toContain('Peace Arch');
+    expect(text).toContain('I-5 General Purpose'); // readable heading (location.description)
+    expect(text).toContain('I5'); // crossing code line
     expect(text).toContain('25 min');
-    expect(text).toContain('I-5');
+    expect(text).toContain('005'); // roadName
     expect(text).toContain('49.002');
     expect(text).toContain('-122.755');
   });

@@ -50,7 +50,12 @@ export const searchAlerts = tool('wsdot_search_alerts', {
             startRoadwayLocation: z
               .object({
                 roadName: z.string().optional().describe('Road name.'),
-                direction: z.string().optional().describe('Travel direction.'),
+                direction: z
+                  .string()
+                  .optional()
+                  .describe(
+                    'Travel direction code: N/S/E/W, B (both directions), A (alternating); may appear as NB/SB/EB/WB.',
+                  ),
                 milePost: z.number().optional().describe('Starting milepost.'),
                 latitude: z.number().optional().describe('Latitude.'),
                 longitude: z.number().optional().describe('Longitude.'),
@@ -60,7 +65,12 @@ export const searchAlerts = tool('wsdot_search_alerts', {
             endRoadwayLocation: z
               .object({
                 roadName: z.string().optional().describe('Road name.'),
-                direction: z.string().optional().describe('Travel direction.'),
+                direction: z
+                  .string()
+                  .optional()
+                  .describe(
+                    'Travel direction code: N/S/E/W, B (both directions), A (alternating); may appear as NB/SB/EB/WB.',
+                  ),
                 milePost: z.number().optional().describe('Ending milepost.'),
                 latitude: z.number().optional().describe('Latitude.'),
                 longitude: z.number().optional().describe('Longitude.'),
@@ -70,9 +80,15 @@ export const searchAlerts = tool('wsdot_search_alerts', {
             startTime: z
               .string()
               .optional()
-              .describe('When the event started or is scheduled to start.'),
-            endTime: z.string().optional().describe('When the event is expected to end.'),
-            lastUpdatedTime: z.string().optional().describe('When this alert was last updated.'),
+              .describe('When the event started or is scheduled to start (ISO 8601).'),
+            endTime: z
+              .string()
+              .optional()
+              .describe('When the event is expected to end (ISO 8601).'),
+            lastUpdatedTime: z
+              .string()
+              .optional()
+              .describe('When this alert was last updated (ISO 8601).'),
           })
           .describe('A highway alert or incident.'),
       )

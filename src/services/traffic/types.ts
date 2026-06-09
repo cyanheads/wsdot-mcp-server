@@ -3,16 +3,17 @@
  * @module services/traffic/types
  */
 
-/** Raw travel restriction from upstream API. */
+/** Raw travel restriction from upstream API (WSDOT `TravelRestriction`). */
 export interface RawTravelRestriction {
-  RestrictionType?: string | null;
-  TravelRestrictionComment?: string | null;
+  RestrictionText?: string | null;
+  TravelDirection?: string | null;
 }
 
 /** Raw mountain pass condition from upstream API. */
 export interface RawMountainPass {
+  /** WCF `/Date(ms±offset)/` string — decoded to ISO 8601 during normalization. */
   DateUpdated?: string | null;
-  Elevation?: number | null;
+  ElevationInFeet?: number | null;
   Latitude?: number | null;
   Longitude?: number | null;
   MountainPassId?: number | null;
@@ -25,10 +26,10 @@ export interface RawMountainPass {
   WeatherCondition?: string | null;
 }
 
-/** Normalized travel restriction. */
+/** Normalized travel restriction (traction/chain requirement). */
 export interface TravelRestriction {
-  comment?: string;
-  type?: string;
+  text?: string;
+  travelDirection?: string;
 }
 
 /** Normalized mountain pass condition. */
@@ -177,6 +178,8 @@ export interface TollRate {
 
 /** Raw border crossing location from upstream API. */
 export interface RawBorderCrossingLocation {
+  /** Readable crossing/lane name, e.g. "I-5 General Purpose", "I-5 Nexus Lane". */
+  Description?: string | null;
   Direction?: string | null;
   Latitude?: number | null;
   Longitude?: number | null;
@@ -188,7 +191,9 @@ export interface RawBorderCrossingLocation {
 export interface RawBorderCrossing {
   BorderCrossingLocation?: RawBorderCrossingLocation | null;
   CrossingName?: string | null;
-  UpdateTime?: string | null;
+  /** WCF `/Date(ms±offset)/` string — decoded to ISO 8601 during normalization. */
+  Time?: string | null;
+  /** Wait in minutes; WSDOT emits -1 when the crossing reports no data (dropped during normalization). */
   WaitTime?: number | null;
 }
 
@@ -196,6 +201,7 @@ export interface RawBorderCrossing {
 export interface BorderCrossing {
   crossingName?: string;
   location?: {
+    description?: string;
     roadName?: string;
     direction?: string;
     milePost?: number;
