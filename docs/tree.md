@@ -1,6 +1,6 @@
 # wsdot-mcp-server - Directory Structure
 
-Generated on: 2026-06-02 15:10:48
+Generated on: 2026-06-09 00:20:28
 
 ```text
 wsdot-mcp-server/
@@ -147,9 +147,10 @@ wsdot-mcp-server/
 │   │   ├── ferry/
 │   │   │   ├── ferry-service.ts
 │   │   │   └── types.ts
-│   │   └── traffic/
-│   │       ├── traffic-service.ts
-│   │       └── types.ts
+│   │   ├── traffic/
+│   │   │   ├── traffic-service.ts
+│   │   │   └── types.ts
+│   │   └── wcf-date.ts
 │   └── index.ts
 ├── tests/
 │   ├── prompts/
@@ -158,7 +159,8 @@ wsdot-mcp-server/
 │   │   └── security.test.ts
 │   ├── services/
 │   │   ├── ferry-service.test.ts
-│   │   └── traffic-service.test.ts
+│   │   ├── traffic-service.test.ts
+│   │   └── wcf-date.test.ts
 │   └── tools/
 │       ├── ferry-tools.test.ts
 │       └── traffic-tools.test.ts

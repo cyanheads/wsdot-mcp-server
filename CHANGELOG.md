@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.9](changelog/0.1.x/0.1.9.md) — 2026-06-08
+
+Traffic WCF date decoding, mountain pass elevation/restrictions, ferry 4xx handling, and schema description fixes
+
 ## [0.1.8](changelog/0.1.x/0.1.8.md) — 2026-06-08
 
 Traffic data fixes — toll rates now return actual amounts, alerts and cameras filter the active feed client-side
