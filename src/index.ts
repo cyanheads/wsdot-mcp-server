@@ -23,6 +23,8 @@ import { initFerryApiService } from './services/ferry/ferry-service.js';
 import { initTrafficApiService } from './services/traffic/traffic-service.js';
 
 await createApp({
+  name: 'wsdot-mcp-server',
+  title: 'wsdot-mcp-server',
   tools: [
     getMountainPasses,
     searchAlerts,
