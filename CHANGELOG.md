@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.10](changelog/0.1.x/0.1.10.md) — 2026-06-12
+
+mcp-ts-core ^0.10.6 adoption, hyphenated display identity, MCPB bundle cleaner, Dockerfile healthcheck
+
 ## [0.1.9](changelog/0.1.x/0.1.9.md) — 2026-06-08
 
 Traffic WCF date decoding, mountain pass elevation/restrictions, ferry 4xx handling, and schema description fixes

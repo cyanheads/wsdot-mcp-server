@@ -1,6 +1,6 @@
 # wsdot-mcp-server - Directory Structure
 
-Generated on: 2026-06-09 00:20:28
+Generated on: 2026-06-13 04:31:45
 
 ```text
 wsdot-mcp-server/
@@ -31,6 +31,7 @@ wsdot-mcp-server/
 │   ├── check-framework-antipatterns.ts
 │   ├── check-skill-versions.ts
 │   ├── check-skills-sync.ts
+│   ├── clean-mcpb.ts
 │   ├── clean.ts
 │   ├── devcheck.ts
 │   ├── lint-mcp.ts
@@ -117,6 +118,10 @@ wsdot-mcp-server/
 │   ├── security-pass/
 │   │   └── SKILL.md
 │   ├── setup/
+│   │   └── SKILL.md
+│   ├── techniques/
+│   │   ├── references/
+│   │   │   └── outline-on-overflow.md
 │   │   └── SKILL.md
 │   └── tool-defs-analysis/
 │       └── SKILL.md
