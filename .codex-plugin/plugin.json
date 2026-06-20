@@ -1,6 +1,6 @@
 {
   "name": "wsdot-mcp-server",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Query WA highway conditions, ferry schedules, vessel locations, toll rates, border waits, and alerts via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "cyanheads",
@@ -15,7 +15,7 @@
   "interface": {
     "displayName": "wsdot-mcp-server",
     "shortDescription": "Query WA highway conditions, ferry schedules, vessel locations, toll rates, border waits, and alerts via MCP.",
-    "longDescription": "",
+    "longDescription": "Washington State travel data over MCP, spanning two domains: traffic from the WSDOT Traveler API (mountain pass conditions, highway alerts, travel times, toll rates, border waits, and traffic cameras) and ferries from the WSF Ferry API (terminals, routes, schedules, vessel locations, terminal space, and ferry alerts). Runs over STDIO or Streamable HTTP.",
     "developerName": "cyanheads",
     "category": "",
     "capabilities": ["Read"],

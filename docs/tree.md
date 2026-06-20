@@ -1,6 +1,6 @@
 # wsdot-mcp-server - Directory Structure
 
-Generated on: 2026-06-13 04:31:45
+Generated on: 2026-06-20 18:45:01
 
 ```text
 wsdot-mcp-server/
@@ -27,6 +27,7 @@ wsdot-mcp-server/
 ├── scripts/
 │   ├── build-changelog.ts
 │   ├── build.ts
+│   ├── check-dependency-specifiers.ts
 │   ├── check-docs-sync.ts
 │   ├── check-framework-antipatterns.ts
 │   ├── check-skill-versions.ts
