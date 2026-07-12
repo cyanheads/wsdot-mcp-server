@@ -12,7 +12,7 @@
 | `wsdot_get_toll_rates` | Current dynamic toll rates on SR 99, SR 520, I-405, I-90, SR 167 | (none — returns all active toll rates) | `readOnlyHint: true` |
 | `wsdot_get_border_waits` | Canada border crossing wait times for all WA crossings (Peace Arch, Pacific Highway, Sumas, etc.) | (none — returns all crossings) | `readOnlyHint: true` |
 | `wsdot_search_cameras` | Highway camera locations and metadata URLs (no image bytes — WSDOT copyright) filtered by route or region | `stateRoute?`, `region?`, `startMilepost?`, `endMilepost?` | `readOnlyHint: true` |
-| `wsdot_get_ferry_routes` | All WSF ferry routes operating on a given date with terminal pairs — use to discover which routes run and their terminal IDs when the user doesn't know the terminal names | `tripDate?` (defaults to today) | `readOnlyHint: true` |
+| `wsdot_get_ferry_routes` | All WSF ferry routes operating on a given date — route ID, abbreviation, and description for each, for route discovery and ferry-alert cross-reference (numeric terminal IDs come from `wsdot_get_ferry_terminals`) | `tripDate?` (defaults to today) | `readOnlyHint: true` |
 | `wsdot_get_ferry_schedule` | Departure times for a specific ferry route on a given date, optionally filtered to remaining sailings only | `departingTerminalId`, `arrivingTerminalId`, `tripDate?`, `onlyRemainingTimes?` | `readOnlyHint: true` |
 | `wsdot_get_vessel_locations` | Real-time AIS positions, speed, heading, ETA, and dock status for all active WSF vessels — use for "where is the ferry now?" or tracking a named vessel | (none — returns all vessels) | `readOnlyHint: true` |
 | `wsdot_get_terminal_space` | Real-time drive-up and reservable vehicle space available at each terminal for upcoming sailings | (none — returns all terminals) | `readOnlyHint: true` |
@@ -179,8 +179,8 @@ Excluded: `/allsailings` (full season dump — too large, not useful per-query),
 ### `wsdot_get_ferry_routes`
 
 - **Input:** `tripDate?` (ISO 8601 string, defaults to today if omitted — converted internally to `M/D/YYYY`)
-- **Output:** array of route objects — `routeId`, `routeName`, `crossingTime?`, `departingTerminalId`, `departingTerminalName`, `arrivingTerminalId`, `arrivingTerminalName`
-- **Notes:** Use `GET Schedule/rest/routes/{TripDate}`. The primary value here is `departingTerminalId` / `arrivingTerminalId` — these are the inputs needed for `wsdot_get_ferry_schedule` and `wsdot_get_terminal_space`. `routeId` is included for completeness but no current tool takes it as input; it may be useful for cross-referencing `wsdot_get_ferry_alerts`' `impactedRouteIds`. Verify during field-test whether `routeId` values match alert `impactedRouteIds`.
+- **Output:** array of route objects — `routeId`, `routeAbbrev`, `description`
+- **Notes:** Uses `GET Schedule/rest/routes/{TripDate}`. Returns route identity only — `routeId`, `routeAbbrev`, and `description`; no terminal IDs are returned (those come from `wsdot_get_ferry_terminals`). `routeId` matches `wsdot_get_ferry_alerts`' `impactedRouteIds`, so this tool resolves alert route IDs to human-readable route names.
 - **Ferry alerts cross-reference:** `wsdot_get_ferry_alerts` returns `impactedRouteIds[]` as integers; agents can correlate these against `routeId` values from this tool to get human-readable route names.
 
 ### `wsdot_get_ferry_schedule`
