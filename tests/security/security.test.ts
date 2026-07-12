@@ -71,6 +71,7 @@ afterEach(() => vi.clearAllMocks());
 const INJECTION_STRINGS = [
   "'; DROP TABLE users; --",
   '<script>alert("xss")</script>',
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: intentional literal injection input — must stay a raw string, not interpolate
   '${process.env.WSDOT_ACCESS_CODE}',
   '{{7*7}}',
   '../../../etc/passwd',
