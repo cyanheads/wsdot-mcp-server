@@ -116,9 +116,13 @@ export class FerryApiService {
     return datePart;
   }
 
-  /** Return today's date in YYYY-MM-DD format. */
+  /**
+   * Return the current Washington service date (`America/Los_Angeles`) in YYYY-MM-DD format.
+   * WSF runs on Pacific time, so the default trip date must track the local service day — the UTC
+   * date rolls over to tomorrow during the Pacific evening and would query the wrong day's sailings.
+   */
   static todayFerryDate(): string {
-    return new Date().toISOString().slice(0, 10);
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles' }).format(new Date());
   }
 
   async getTerminals(ctx: Context): Promise<FerryTerminal[]> {

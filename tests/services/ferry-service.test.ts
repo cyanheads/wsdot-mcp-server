@@ -71,14 +71,29 @@ describe('FerryApiService.toFerryDate', () => {
 // ---------------------------------------------------------------------------
 
 describe('FerryApiService.todayFerryDate', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('returns a string matching YYYY-MM-DD format', () => {
     const today = FerryApiService.todayFerryDate();
     expect(today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
-  it('matches the current date', () => {
-    const today = FerryApiService.todayFerryDate();
-    expect(today).toBe(new Date().toISOString().slice(0, 10));
+  it('returns the Washington/Pacific service date, not the UTC date, near the evening boundary', () => {
+    // 2026-06-29T05:00:00Z is 2026-06-28 22:00 PDT — UTC has already rolled to the 29th while the
+    // Washington service day is still the 28th. The default trip date must follow Pacific time.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-29T05:00:00Z'));
+    expect(FerryApiService.todayFerryDate()).toBe('2026-06-28');
+    expect(FerryApiService.todayFerryDate()).not.toBe('2026-06-29');
+  });
+
+  it('tracks the Pacific date across a year boundary (PST, UTC-8)', () => {
+    // 2026-01-01T05:00:00Z is 2025-12-31 21:00 PST.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T05:00:00Z'));
+    expect(FerryApiService.todayFerryDate()).toBe('2025-12-31');
   });
 });
 
