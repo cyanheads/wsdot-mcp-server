@@ -465,6 +465,16 @@ describe('getVesselLocations', () => {
     expect(text).toContain('20'); // vesselId
   });
 
+  it('renders full-precision coordinates in content[] — parity with structuredContent, no rounding', () => {
+    // structuredContent keeps upstream AIS precision; content[] must match it byte-for-byte.
+    const preciseVessel = { ...vesselFixture, latitude: 48.542482, longitude: -122.989813 };
+    const blocks = getVesselLocations.format!({ vessels: [preciseVessel] });
+    const text = (blocks[0] as { text: string }).text;
+    expect(text).toContain('**Position:** 48.542482, -122.989813');
+    // The pre-fix bug rounded to 5 decimals — assert the rounded position never appears.
+    expect(text).not.toContain('48.54248, -122.98981');
+  });
+
   it('formats empty vessels list', () => {
     const blocks = getVesselLocations.format!({ vessels: [] });
     const text = (blocks[0] as { text: string }).text;

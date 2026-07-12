@@ -121,7 +121,9 @@ export const getVesselLocations = tool('wsdot_get_vessel_locations', {
         );
       }
       if (v.latitude != null && v.longitude != null) {
-        lines.push(`**Position:** ${v.latitude.toFixed(5)}, ${v.longitude.toFixed(5)}`);
+        // Render full upstream precision so content[] matches structuredContent — rounding here
+        // creates client-dependent vessel positions (the two channels must carry identical data).
+        lines.push(`**Position:** ${v.latitude}, ${v.longitude}`);
       }
       if (v.speed != null) lines.push(`**Speed:** ${v.speed} knots`);
       if (v.heading != null) lines.push(`**Heading:** ${v.heading}°`);
