@@ -25,7 +25,7 @@ vi.mock('@cyanheads/mcp-ts-core/utils', () => ({
   withRetry: (fn: () => Promise<unknown>) => fn(),
 }));
 
-import { TrafficApiService } from '@/services/traffic/traffic-service.js';
+import { normalizeRoute, TrafficApiService } from '@/services/traffic/traffic-service.js';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -264,6 +264,35 @@ describe('TrafficApiService — alert normalization', () => {
     const alerts = await svc.searchAlerts({ stateRoute: '090' }, ctx);
     expect(alerts).toHaveLength(1);
     expect(alerts[0].alertId).toBe(1);
+  });
+
+  it('matches natural stateRoute forms and rejects substring false positives (I-90 vs SR 290)', async () => {
+    const raw = [
+      { AlertID: 1, StartRoadwayLocation: { RoadName: 'I-90', MilePost: 30 } },
+      { AlertID: 2, StartRoadwayLocation: { RoadName: 'SR 290', MilePost: 8 } },
+    ];
+
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const natural = await svc.searchAlerts({ stateRoute: 'I-90' }, createMockContext());
+    expect(natural.map((a) => a.alertId)).toEqual([1]);
+
+    // "90" must match I-90 but NOT SR 290 — the old .includes() substring bug.
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const bare = await svc.searchAlerts({ stateRoute: '90' }, createMockContext());
+    expect(bare.map((a) => a.alertId)).toEqual([1]);
+  });
+
+  it('matches an end-location roadName when the start location does not', async () => {
+    const raw = [
+      {
+        AlertID: 7,
+        StartRoadwayLocation: { RoadName: 'I-5', MilePost: 100 },
+        EndRoadwayLocation: { RoadName: 'SR 520', MilePost: 5 },
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const alerts = await svc.searchAlerts({ stateRoute: '520' }, createMockContext());
+    expect(alerts.map((a) => a.alertId)).toEqual([7]);
   });
 
   it('filters alerts by region client-side (case-insensitive)', async () => {
@@ -581,6 +610,32 @@ describe('TrafficApiService — camera normalization', () => {
     expect(cameras[0].cameraId).toBe(1);
   });
 
+  it('filters cameras by natural stateRoute forms (I-90, SR 520)', async () => {
+    const raw = [
+      { CameraID: 1, CameraLocation: { RoadName: 'I-90' } },
+      { CameraID: 2, CameraLocation: { RoadName: 'SR 520' } },
+      { CameraID: 3, CameraLocation: { RoadName: 'I-5' } },
+    ];
+
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const i90 = await svc.searchCameras({ stateRoute: 'I-90' }, createMockContext());
+    expect(i90.map((c) => c.cameraId)).toEqual([1]);
+
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const sr520 = await svc.searchCameras({ stateRoute: 'SR 520' }, createMockContext());
+    expect(sr520.map((c) => c.cameraId)).toEqual([2]);
+  });
+
+  it('does not substring-match "90" against SR 290 (camera)', async () => {
+    const raw = [
+      { CameraID: 1, CameraLocation: { RoadName: 'I-90' } },
+      { CameraID: 2, CameraLocation: { RoadName: 'SR 290' } },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const cameras = await svc.searchCameras({ stateRoute: '90' }, createMockContext());
+    expect(cameras.map((c) => c.cameraId)).toEqual([1]);
+  });
+
   it('filters cameras by region client-side (case-insensitive)', async () => {
     const raw = [
       { CameraID: 1, Region: 'NW', CameraLocation: null },
@@ -694,5 +749,24 @@ describe('TrafficApiService — HTTP error handling', () => {
     await svc.getMountainPasses(ctx);
     const url: string = mockFetch.mock.calls[0][0] as string;
     expect(url).toContain('https://www.wsdot.wa.gov/Traffic/api');
+  });
+});
+
+describe('normalizeRoute', () => {
+  it('canonicalizes natural, zero-padded, and bare route forms to the route number', () => {
+    expect(normalizeRoute('I-90')).toBe('90');
+    expect(normalizeRoute('90')).toBe('90');
+    expect(normalizeRoute('090')).toBe('90');
+    expect(normalizeRoute('SR 520')).toBe('520');
+    expect(normalizeRoute('sr520')).toBe('520');
+    expect(normalizeRoute('520')).toBe('520');
+    expect(normalizeRoute('I-5')).toBe('5');
+    expect(normalizeRoute('005')).toBe('5');
+    expect(normalizeRoute('US 2')).toBe('2');
+  });
+
+  it('keeps routes whose digits are substrings distinct (90 vs 290)', () => {
+    expect(normalizeRoute('SR 290')).toBe('290');
+    expect(normalizeRoute('90')).not.toBe(normalizeRoute('SR 290'));
   });
 });

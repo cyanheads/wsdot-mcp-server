@@ -567,15 +567,18 @@ describe('searchCameras', () => {
     expect(enrichment.notice).toContain('copyright');
   });
 
-  it('enriches truncation notice when more than 20 cameras returned', async () => {
+  it('pages results and reports continuation metadata when the total exceeds the page limit', async () => {
     const manyCameras = Array.from({ length: 25 }, (_, i) => ({ ...cameraFixture, cameraId: i }));
     mockService.searchCameras.mockResolvedValue(manyCameras);
     const ctx = createMockContext();
-    const input = searchCameras.input.parse({});
-    await searchCameras.handler(input, ctx);
+    const input = searchCameras.input.parse({ limit: 10 });
+    const result = await searchCameras.handler(input, ctx);
+    expect(result.cameras).toHaveLength(10);
     const enrichment = getEnrichment(ctx);
-    expect(enrichment.totalCount).toBe(25);
-    expect(enrichment.notice).toContain('first 20');
+    expect(enrichment.totalCount).toBe(25); // full match count, not the page size
+    expect(enrichment.hasMore).toBe(true);
+    expect(enrichment.nextOffset).toBe(10);
+    expect(enrichment.notice).toContain('offset=10');
   });
 
   it('returns all cameras when no filter provided', async () => {
@@ -602,12 +605,73 @@ describe('searchCameras', () => {
     expect(text).toContain('MP 52');
   });
 
-  it('formats empty cameras list', () => {
+  it('formats empty cameras list with a no-match summary', () => {
     const output = { cameras: [] };
     const blocks = searchCameras.format!(output);
     const text = (blocks[0] as { text: string }).text;
-    // Empty cameras → empty text (no header since no results)
-    expect(text).toBeDefined();
+    expect(text).toContain('No cameras found');
+  });
+
+  it('applies the default page limit on a no-arg call', async () => {
+    const manyCameras = Array.from({ length: 80 }, (_, i) => ({ ...cameraFixture, cameraId: i }));
+    mockService.searchCameras.mockResolvedValue(manyCameras);
+    const ctx = createMockContext();
+    const input = searchCameras.input.parse({});
+    const result = await searchCameras.handler(input, ctx);
+    expect(result.cameras).toHaveLength(50); // DEFAULT_LIMIT
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.totalCount).toBe(80);
+    expect(enrichment.hasMore).toBe(true);
+    expect(enrichment.nextOffset).toBe(50);
+  });
+
+  it('returns the requested page via offset/limit and keeps totalCount at the full count', async () => {
+    const manyCameras = Array.from({ length: 25 }, (_, i) => ({ ...cameraFixture, cameraId: i }));
+    mockService.searchCameras.mockResolvedValue(manyCameras);
+    const ctx = createMockContext();
+    const input = searchCameras.input.parse({ offset: 10, limit: 5 });
+    const result = await searchCameras.handler(input, ctx);
+    expect(result.cameras.map((c) => c.cameraId)).toEqual([10, 11, 12, 13, 14]);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.totalCount).toBe(25);
+    expect(enrichment.nextOffset).toBe(15);
+    expect(enrichment.hasMore).toBe(true);
+  });
+
+  it('reports hasMore false and null nextOffset on the final page', async () => {
+    const manyCameras = Array.from({ length: 25 }, (_, i) => ({ ...cameraFixture, cameraId: i }));
+    mockService.searchCameras.mockResolvedValue(manyCameras);
+    const ctx = createMockContext();
+    const input = searchCameras.input.parse({ offset: 20, limit: 10 });
+    const result = await searchCameras.handler(input, ctx);
+    expect(result.cameras).toHaveLength(5); // records 20..24
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.hasMore).toBe(false);
+    expect(enrichment.nextOffset).toBeNull();
+  });
+
+  it('renders exactly the structuredContent page in content[] (parity)', async () => {
+    const manyCameras = Array.from({ length: 25 }, (_, i) => ({
+      ...cameraFixture,
+      cameraId: i,
+      title: `Cam ${i}`,
+    }));
+    mockService.searchCameras.mockResolvedValue(manyCameras);
+    const ctx = createMockContext();
+    const input = searchCameras.input.parse({ offset: 5, limit: 3 });
+    const result = await searchCameras.handler(input, ctx);
+    const text = (searchCameras.format!(result)[0] as { text: string }).text;
+    // content[] carries the identical page as structuredContent — the 3 sliced records, no more.
+    expect(result.cameras.map((c) => c.cameraId)).toEqual([5, 6, 7]);
+    for (const c of result.cameras) expect(text).toContain(`Cam ${c.cameraId}`);
+    expect(text).not.toContain('Cam 0');
+    expect(text).not.toContain('Cam 24');
+    expect(text.match(/^### /gm)?.length).toBe(3);
+  });
+
+  it('rejects a limit above the maximum and a negative offset', () => {
+    expect(() => searchCameras.input.parse({ limit: 501 })).toThrow();
+    expect(() => searchCameras.input.parse({ offset: -1 })).toThrow();
   });
 
   it('strips whitespace-only stateRoute filter', async () => {

@@ -7,21 +7,24 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
 
-const MAX_INLINE_CAMERAS = 20;
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 500;
 
 export const searchCameras = tool('wsdot_search_cameras', {
   title: 'Search Highway Cameras',
   description:
     'Returns WSDOT highway camera locations, descriptions, and image URLs. ' +
     'Camera images are copyright WSDOT — only metadata and image URLs are returned, not image bytes. ' +
-    'Filter by state route (e.g. "090" for I-90), WSDOT region, or milepost range. ' +
-    'Omit all filters to list all cameras statewide (potentially hundreds).',
+    'Filter by state route ("I-90", "90", "SR 520", or "520" all work), WSDOT region, or milepost range. ' +
+    'Results are paged — pass offset/limit to page through the full set (the notice reports the next offset).',
   annotations: { readOnlyHint: true },
   input: z.object({
     stateRoute: z
       .string()
       .optional()
-      .describe('Zero-padded 3-digit state route number (e.g. "005" for I-5, "090" for I-90).'),
+      .describe(
+        'State route to filter by. Accepts natural forms — "I-90", "90", "090", "SR 520", "520" — matched case- and space-insensitively to the canonical WSDOT route number. Omit to include all routes.',
+      ),
     region: z
       .string()
       .optional()
@@ -30,6 +33,21 @@ export const searchCameras = tool('wsdot_search_cameras', {
       ),
     startMilepost: z.number().optional().describe('Start of milepost range to filter cameras.'),
     endMilepost: z.number().optional().describe('End of milepost range to filter cameras.'),
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe('Zero-based index of the first camera to return, for paging. Defaults to 0.'),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_LIMIT)
+      .optional()
+      .describe(
+        `Maximum cameras to return in this page (1–${MAX_LIMIT}). Defaults to ${DEFAULT_LIMIT}.`,
+      ),
   }),
   output: z.object({
     cameras: z
@@ -63,7 +81,14 @@ export const searchCameras = tool('wsdot_search_cameras', {
   }),
 
   enrichment: {
-    totalCount: z.number().describe('Total number of cameras returned.'),
+    totalCount: z
+      .number()
+      .describe('Total cameras matching the filters across all pages (not just this page).'),
+    nextOffset: z
+      .number()
+      .nullable()
+      .describe('Offset to pass to retrieve the next page, or null when this is the last page.'),
+    hasMore: z.boolean().describe('True when more cameras remain beyond the current page.'),
     appliedFilters: z
       .object({
         stateRoute: z.string().optional().describe('State route filter applied.'),
@@ -76,7 +101,7 @@ export const searchCameras = tool('wsdot_search_cameras', {
       .string()
       .optional()
       .describe(
-        'Informational note about result truncation, copyright, or empty results. Absent when not applicable.',
+        'Informational note about the page window, copyright, or empty results. Absent when not applicable.',
       ),
   },
 
@@ -84,7 +109,7 @@ export const searchCameras = tool('wsdot_search_cameras', {
     appliedFilters: {
       render: (filters) => {
         const parts: string[] = [];
-        if (filters.stateRoute) parts.push(`- **Route:** SR ${filters.stateRoute}`);
+        if (filters.stateRoute) parts.push(`- **Route:** ${filters.stateRoute}`);
         if (filters.region) parts.push(`- **Region:** ${filters.region}`);
         if (filters.startMilepost != null) parts.push(`- **Start MP:** ${filters.startMilepost}`);
         if (filters.endMilepost != null) parts.push(`- **End MP:** ${filters.endMilepost}`);
@@ -109,7 +134,7 @@ export const searchCameras = tool('wsdot_search_cameras', {
   async handler(input, ctx) {
     const stateRoute = input.stateRoute?.trim() || undefined;
     const region = input.region?.trim() || undefined;
-    const cameras = await getTrafficApiService().searchCameras(
+    const allCameras = await getTrafficApiService().searchCameras(
       {
         ...(stateRoute && { stateRoute }),
         ...(region && { region }),
@@ -126,32 +151,47 @@ export const searchCameras = tool('wsdot_search_cameras', {
       ...(input.endMilepost != null && { endMilepost: input.endMilepost }),
     };
 
-    ctx.log.info('Cameras fetched', { count: cameras.length });
+    // Page the full filtered set so structuredContent and content[] carry the identical
+    // page (the service stays filter-only; paging is a tool-handler concern). totalCount
+    // stays the full match count so the agent knows how much lies beyond this page.
+    const totalCount = allCameras.length;
+    const offset = input.offset ?? 0;
+    const limit = input.limit ?? DEFAULT_LIMIT;
+    const cameras = allCameras.slice(offset, offset + limit);
+    const hasMore = offset + cameras.length < totalCount;
+    const nextOffset = hasMore ? offset + cameras.length : null;
 
-    ctx.enrich({ totalCount: cameras.length, appliedFilters });
+    ctx.log.info('Cameras fetched', { totalCount, offset, limit, returned: cameras.length });
 
-    if (cameras.length === 0) {
+    ctx.enrich({ totalCount, appliedFilters, nextOffset, hasMore });
+
+    if (totalCount === 0) {
       const hasFilters = Object.keys(appliedFilters).length > 0;
       ctx.enrich.notice(
         hasFilters
           ? 'No cameras matched the applied filters. Try removing the stateRoute, region, or milepost filters.'
           : 'No camera data available statewide.',
       );
-    } else if (cameras.length > MAX_INLINE_CAMERAS) {
+    } else if (cameras.length === 0) {
       ctx.enrich.notice(
-        `Showing first ${MAX_INLINE_CAMERAS} of ${cameras.length} cameras in content[]. All cameras are in structuredContent. Add filters (stateRoute, region, or mileposts) to narrow results. Camera images are copyright WSDOT.`,
+        `Offset ${offset} is past the end of ${totalCount} matching cameras. Use an offset between 0 and ${totalCount - 1}.`,
       );
     } else {
-      ctx.enrich.notice('Camera images are copyright WSDOT. Follow image URLs to view live feeds.');
+      const window = `Showing cameras ${offset + 1}–${offset + cameras.length} of ${totalCount}. Camera images are copyright WSDOT.`;
+      ctx.enrich.notice(
+        hasMore ? `${window} Pass offset=${nextOffset} for the next page.` : window,
+      );
     }
 
     return { cameras };
   },
 
   format: (result) => {
+    if (result.cameras.length === 0) {
+      return [{ type: 'text', text: 'No cameras found.' }];
+    }
     const lines: string[] = [];
-    const display = result.cameras.slice(0, MAX_INLINE_CAMERAS);
-    for (const c of display) {
+    for (const c of result.cameras) {
       lines.push(`### ${c.title ?? `Camera ${c.cameraId ?? ''}`}`);
       if (c.description) lines.push(c.description);
       if (c.roadName) {
@@ -170,11 +210,6 @@ export const searchCameras = tool('wsdot_search_cameras', {
       }
       if (c.cameraId != null) lines.push(`**ID:** ${c.cameraId}`);
       lines.push('');
-    }
-    if (result.cameras.length > MAX_INLINE_CAMERAS) {
-      lines.push(
-        `_... ${result.cameras.length - MAX_INLINE_CAMERAS} more cameras in structuredContent_`,
-      );
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },

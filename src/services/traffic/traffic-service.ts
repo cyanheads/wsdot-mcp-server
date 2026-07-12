@@ -152,12 +152,17 @@ export class TrafficApiService {
     let alerts = result.map(normalizeAlert);
 
     if (params.stateRoute) {
-      const route = params.stateRoute.toLowerCase();
-      alerts = alerts.filter(
-        (a) =>
-          a.startRoadwayLocation?.roadName?.toLowerCase().includes(route) ||
-          a.endRoadwayLocation?.roadName?.toLowerCase().includes(route),
-      );
+      // Compare canonical route numbers (not a roadName substring) so "90" matches
+      // I-90 without also matching SR 290, and natural forms ("I-90") resolve too.
+      const target = normalizeRoute(params.stateRoute);
+      alerts = alerts.filter((a) => {
+        const start = a.startRoadwayLocation?.roadName;
+        const end = a.endRoadwayLocation?.roadName;
+        return (
+          (start != null && normalizeRoute(start) === target) ||
+          (end != null && normalizeRoute(end) === target)
+        );
+      });
     }
     if (params.region) {
       const region = params.region.toLowerCase();
@@ -278,16 +283,11 @@ export class TrafficApiService {
     let cameras = result.map(normalizeCamera);
 
     if (params.stateRoute) {
-      // Road names use formats like "I-90", "SR 520" — not zero-padded numbers.
-      // Strip leading zeros from the input ("090" → "90") and match as a number suffix.
-      const routeNum = params.stateRoute.replace(/^0+/, '') || params.stateRoute;
-      cameras = cameras.filter((c) => {
-        if (!c.roadName) return false;
-        // Match "I-90", "SR 520", "SR520", etc.
-        return /[-\s]/.test(c.roadName)
-          ? c.roadName.split(/[-\s]/).pop() === routeNum
-          : c.roadName.replace(/[^0-9]/g, '') === routeNum;
-      });
+      // Match on the canonical route number so natural forms ("I-90", "SR 520") and
+      // padded/bare numbers ("090", "90") all resolve to the same value — and "90"
+      // can't substring-match a different route such as "SR 290".
+      const target = normalizeRoute(params.stateRoute);
+      cameras = cameras.filter((c) => c.roadName != null && normalizeRoute(c.roadName) === target);
     }
     if (params.region) {
       const region = params.region.toUpperCase();
@@ -307,6 +307,21 @@ export class TrafficApiService {
 }
 
 // --- Normalization helpers ---
+
+/**
+ * Canonicalizes a route designation to its bare WSDOT route number for filtering.
+ * Accepts natural forms ("I-90", "SR 520", "US 2"), zero-padded ("090"), and bare
+ * numbers ("90"), case- and space-insensitively — all reduce to the route number
+ * ("90", "520", "5"). Strips any route-type prefix and leading zeros. Comparing two
+ * normalized values for exact equality avoids the substring false positives of a raw
+ * `roadName.includes()` match (so "90" no longer matches "SR 290"). Falls back to the
+ * lowercased, trimmed input when it has no digits, so a non-route string still
+ * compares deterministically without matching a numbered road.
+ */
+export function normalizeRoute(route: string): string {
+  const digits = route.replace(/\D/g, '').replace(/^0+/, '');
+  return digits || route.trim().toLowerCase();
+}
 
 function normalizeAlert(a: RawHighwayAlert): HighwayAlert {
   return {

@@ -140,7 +140,7 @@ Excluded: `/allsailings` (full season dump — too large, not useful per-query),
 
 ### `wsdot_search_alerts`
 
-- **Input:** `stateRoute?` (string, e.g., `"005"` or `"090"` — zero-padded 3-char SR number), `region?` (string enum of WSDOT regions: `Northwest`, `Olympic`, `Southwest`, `South Central`, `North Central`, `Eastern`), `startMilepost?` (number), `endMilepost?` (number)
+- **Input:** `stateRoute?` (string — natural forms `"I-90"`/`"90"`/`"090"`/`"SR 520"`/`"520"` normalized to the canonical route number, matched exactly so `"90"` never substring-hits `"SR 290"`), `region?` (string enum of WSDOT regions: `Northwest`, `Olympic`, `Southwest`, `South Central`, `North Central`, `Eastern`), `startMilepost?` (number), `endMilepost?` (number)
 - **Routing decision:** When `stateRoute` or `region` is provided, use `SearchAlertsAsJson` (filtered). When neither is provided, use `GetAlertsAsJson` (all current alerts). The search endpoint also accepts `SearchTimeStart` / `SearchTimeEnd` but this adds complexity for marginal benefit — omit for v1.
 - **Output:** array of alert objects — `alertId`, `headlineDescription`, `extendedDescription?`, `eventCategory`, `eventStatus`, `priority`, `region`, `county?`, `startRoadwayLocation` (roadName, direction, milepost, lat/lng), `endRoadwayLocation?`, `startTime?`, `endTime?`, `lastUpdatedTime?`
 - **Errors:** `api_unavailable`
@@ -165,8 +165,8 @@ Excluded: `/allsailings` (full season dump — too large, not useful per-query),
 
 ### `wsdot_search_cameras`
 
-- **Input:** `stateRoute?`, `region?`, `startMilepost?`, `endMilepost?`
-- **Routing:** Use `SearchCamerasAsJson` when any filter provided; use `GetCamerasAsJson` otherwise (returns all cameras — will be a large response, potentially hundreds of cameras; `format()` should summarize count and list top results with URLs)
+- **Input:** `stateRoute?` (natural route forms, normalized like alerts), `region?`, `startMilepost?`, `endMilepost?`, `offset?`/`limit?` (pagination — default limit 50, max 500)
+- **Routing:** Use `SearchCamerasAsJson` when any filter provided; use `GetCamerasAsJson` otherwise. The full filtered set is paged in the tool handler (`offset`/`limit`) so `structuredContent` and `content[]` carry the identical page; `totalCount`/`nextOffset`/`hasMore` disclose the full match count and continuation.
 - **Output:** array of camera objects — `cameraId`, `title`, `description?`, `imageUrl`, `imageWidth?`, `imageHeight?`, `roadName?`, `direction?`, `milepost?`, `region?`, `latitude?`, `longitude?`
 - **Notes:** Image URLs point to WSDOT-hosted JPEGs. Surface URLs only; do not proxy bytes. Add a note in the description that images are copyrighted by WSDOT.
 

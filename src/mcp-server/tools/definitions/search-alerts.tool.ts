@@ -11,7 +11,7 @@ export const searchAlerts = tool('wsdot_search_alerts', {
   title: 'Search Highway Alerts',
   description:
     'Returns active WA highway alerts: incidents, construction, closures, and restrictions. ' +
-    'Filter by state route (zero-padded 3-digit number, e.g. "005" for I-5, "090" for I-90, "520" for SR 520), ' +
+    'Filter by state route ("I-90", "90", "SR 520", or "520" all work), ' +
     'WSDOT region (Northwest, Olympic, Southwest, South Central, North Central, Eastern), ' +
     'or milepost range. Omit all filters to return all current statewide alerts.',
   annotations: { readOnlyHint: true },
@@ -20,7 +20,7 @@ export const searchAlerts = tool('wsdot_search_alerts', {
       .string()
       .optional()
       .describe(
-        'Zero-padded 3-digit state route number (e.g. "005" for I-5, "090" for I-90, "520" for SR 520).',
+        'State route to filter by. Accepts natural forms — "I-90", "90", "090", "SR 520", "520" — matched case- and space-insensitively to the canonical WSDOT route number. Omit to include all routes.',
       ),
     region: z
       .string()
@@ -117,7 +117,7 @@ export const searchAlerts = tool('wsdot_search_alerts', {
     appliedFilters: {
       render: (filters) => {
         const parts: string[] = [];
-        if (filters.stateRoute) parts.push(`- **Route:** SR ${filters.stateRoute}`);
+        if (filters.stateRoute) parts.push(`- **Route:** ${filters.stateRoute}`);
         if (filters.region) parts.push(`- **Region:** ${filters.region}`);
         if (filters.startMilepost != null) parts.push(`- **Start MP:** ${filters.startMilepost}`);
         if (filters.endMilepost != null) parts.push(`- **End MP:** ${filters.endMilepost}`);
