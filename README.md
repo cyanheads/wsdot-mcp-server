@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.1.12-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/wsdot-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/wsdot-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/wsdot-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.0+-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.1.13-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/wsdot-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/wsdot-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/wsdot-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.0+-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -36,7 +36,7 @@
 | `wsdot_get_border_waits` | Current vehicle wait times at all WA/Canada land border crossings. |
 | `wsdot_search_cameras` | Highway camera metadata and image URLs, filterable by state route, region, and milepost range. |
 | `wsdot_get_ferry_terminals` | All WSF ferry terminals with numeric IDs needed for schedule and space lookups. |
-| `wsdot_get_ferry_routes` | WSF routes operating on a given date with terminal ID pairs and crossing times. |
+| `wsdot_get_ferry_routes` | WSF routes operating on a given date — route ID, abbreviation, and description for each, for route discovery and ferry-alert cross-reference. |
 | `wsdot_get_ferry_schedule` | Departure times for a specific WSF route — today-remaining or full-day future mode. |
 | `wsdot_get_vessel_locations` | Real-time AIS positions, speed, heading, ETA, and dock status for all active WSF vessels. |
 | `wsdot_get_terminal_space` | Drive-up and reservable vehicle space available at WSF terminals for upcoming sailings. |
@@ -115,9 +115,9 @@ All WSF ferry terminals with numeric IDs.
 
 WSF ferry routes operating on a given date.
 
-- Returns terminal ID pairs and crossing times for each route
-- Route IDs correspond to `impactedRouteIds` in `wsdot_get_ferry_alerts`
-- Use to discover which routes are running and get terminal IDs for schedule lookups
+- Returns each route's ID, abbreviation, and description
+- Route IDs correspond to `impactedRouteIds` in `wsdot_get_ferry_alerts` — use this tool to resolve alert route IDs to route names
+- Use to discover which routes are running; for the numeric terminal IDs that schedule and space lookups need, call `wsdot_get_ferry_terminals`
 
 ---
 

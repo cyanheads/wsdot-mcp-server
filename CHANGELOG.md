@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.13](changelog/0.1.x/0.1.13.md) — 2026-07-11
+
+Ferry default trip date tracks Washington/Pacific local time, not UTC (#16); vessel-location `content[]` coordinates render at full precision to match `structuredContent` (#21); `wsdot_get_ferry_routes` docs corrected to its real route ID/abbreviation/description output (#19).
+
 ## [0.1.12](changelog/0.1.x/0.1.12.md) — 2026-07-11
 
 Camera and alert route normalization, camera pagination, and zero-result content fixes (#17, #18, #20); mcp-ts-core ^0.10.14 maintenance with Socket supply-chain scanning.
