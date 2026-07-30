@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.15](changelog/0.1.x/0.1.15.md) — 2026-07-30
+
+Route filters compare route-type prefix and lettered suffix, so `SR 26` no longer matches US 26 and `US 97` excludes US 97A (#30); travel-times route filtering matches corridor road names, not just names (#26); the CurrentTime=0 sentinel is dropped instead of a zero-minute trip (#29); milepost filtering tests an alert extent for overlap (#35).
+
 ## [0.1.14](changelog/0.1.x/0.1.14.md) — 2026-07-30 · 🛡️ Security
 
 WSDOT access code no longer leaks into error payloads (#27); a bad access code now surfaces as its own non-retryable `invalid_access_code` reason instead of a generic `api_unavailable` or bare HTTP 400 (#28); mcp-ts-core ^0.11.0 maintenance.
