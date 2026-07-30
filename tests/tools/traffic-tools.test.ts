@@ -390,6 +390,68 @@ describe('getTravelTimes', () => {
     expect(result.corridors).toHaveLength(1);
   });
 
+  it('matches the route against corridor start/end road names, not just the corridor name', async () => {
+    // Most corridor names are endpoint pairs with no route in them; the route lives on the points.
+    const endpointNamed = {
+      travelTimeId: 10,
+      name: 'Seattle-Everett',
+      startPoint: { roadName: '005', direction: 'N', milePost: 165 },
+      endPoint: { roadName: '005', direction: 'N', milePost: 192 },
+    };
+    const offRoute = {
+      travelTimeId: 11,
+      name: 'Bellevue-Issaquah',
+      startPoint: { roadName: 'I-90', direction: 'E', milePost: 10 },
+      endPoint: { roadName: 'I-90', direction: 'E', milePost: 17 },
+    };
+    mockService.getTravelTimes.mockResolvedValue([endpointNamed, offRoute]);
+    const ctx = createMockContext();
+    const result = await getTravelTimes.handler(getTravelTimes.input.parse({ route: 'I-5' }), ctx);
+    expect(result.corridors.map((c) => c.travelTimeId)).toEqual([10]);
+  });
+
+  it("matches a prefixed route filter across the feed's mixed bare and prefixed road names", async () => {
+    // The upstream reports both "405" and "I-405" for corridors on the same route.
+    const bare = { travelTimeId: 20, name: 'Bellevue-Renton', startPoint: { roadName: '405' } };
+    const prefixed = {
+      travelTimeId: 21,
+      name: 'Renton-Tukwila',
+      startPoint: { roadName: 'I-405' },
+    };
+    const other = { travelTimeId: 22, name: 'Tacoma-Federal Way', startPoint: { roadName: '005' } };
+    mockService.getTravelTimes.mockResolvedValue([bare, prefixed, other]);
+    const ctx = createMockContext();
+    const result = await getTravelTimes.handler(
+      getTravelTimes.input.parse({ route: 'I-405' }),
+      ctx,
+    );
+    expect(result.corridors.map((c) => c.travelTimeId)).toEqual([20, 21]);
+  });
+
+  it('returns corridors for "SR 520", the form the description advertises', async () => {
+    const sr520 = { travelTimeId: 30, name: 'Redmond-Seattle', endPoint: { roadName: '520' } };
+    const notOnRoute = { travelTimeId: 31, name: 'Everett-Seattle', endPoint: { roadName: '005' } };
+    mockService.getTravelTimes.mockResolvedValue([sr520, notOnRoute]);
+    const ctx = createMockContext();
+    const result = await getTravelTimes.handler(
+      getTravelTimes.input.parse({ route: 'SR 520' }),
+      ctx,
+    );
+    expect(result.corridors.map((c) => c.travelTimeId)).toEqual([30]);
+  });
+
+  it('keeps free-text corridor-name matching alongside route matching', async () => {
+    const everett = { travelTimeId: 40, name: 'Seattle-Everett', startPoint: { roadName: '005' } };
+    const tacoma = { travelTimeId: 41, name: 'Seattle-Tacoma', startPoint: { roadName: '005' } };
+    mockService.getTravelTimes.mockResolvedValue([everett, tacoma]);
+    const ctx = createMockContext();
+    const result = await getTravelTimes.handler(
+      getTravelTimes.input.parse({ route: 'Everett' }),
+      ctx,
+    );
+    expect(result.corridors.map((c) => c.travelTimeId)).toEqual([40]);
+  });
+
   it('calculates delayInMinutes as current minus average', async () => {
     mockService.getTravelTimes.mockResolvedValue([corridorFixture]);
     const ctx = createMockContext();
@@ -404,6 +466,28 @@ describe('getTravelTimes', () => {
     const input = getTravelTimes.input.parse({});
     const result = await getTravelTimes.handler(input, ctx);
     expect(result.corridors[0].delayInMinutes).toBeUndefined();
+  });
+
+  it('reports no delay and no zero-minute trip for an unmeasured corridor', async () => {
+    // The service drops WSDOT's 0 sentinel, so the corridor arrives with no times at all.
+    const unmeasured = {
+      travelTimeId: 4,
+      name: 'Everett-Seattle EL',
+      distanceInMiles: 26.72,
+      startPoint: { roadName: '005', direction: 'S', milePost: 192 },
+    };
+    mockService.getTravelTimes.mockResolvedValue([unmeasured]);
+    const ctx = createMockContext();
+    const result = await getTravelTimes.handler(getTravelTimes.input.parse({}), ctx);
+    const corridor = result.corridors[0];
+    expect(corridor.currentTimeInMinutes).toBeUndefined();
+    expect(corridor.delayInMinutes).toBeUndefined();
+
+    const text = (getTravelTimes.format!(result)[0] as { text: string }).text;
+    expect(text).toContain('Everett-Seattle EL');
+    expect(text).toContain('**Current:** Not available');
+    expect(text).not.toContain('0 min');
+    expect(text).toContain('26.72 mi');
   });
 
   it('formats corridors with key fields', () => {

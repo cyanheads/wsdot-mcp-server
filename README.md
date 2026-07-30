@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.1.14-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/wsdot-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/wsdot-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/wsdot-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.0+-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.1.15-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/wsdot-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/wsdot-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/wsdot-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.0+-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -58,7 +58,7 @@ Active WA highway alerts — incidents, construction, closures, restrictions.
 
 - Filter by state route — natural forms all work: `"I-90"`, `"90"`, `"090"`, or `"SR 520"` / `"520"`
 - Filter by WSDOT region: Northwest, Olympic, Southwest, South Central, North Central, Eastern
-- Filter by milepost range to scope to a corridor
+- Filter by milepost range to scope to a corridor — an alert matches when its extent overlaps the range, so a closure that spans the boundary is returned
 - Omit all filters to return all current statewide alerts
 
 ---
@@ -68,8 +68,9 @@ Active WA highway alerts — incidents, construction, closures, restrictions.
 Current vs. average travel times for named WA highway corridors.
 
 - Covers I-5, I-90, SR 520, SR 99, I-405, SR 167, and others
-- Filter by partial route name (e.g. `"I-5"`, `"SR 520"`) to narrow results
+- Filter by route (`"I-5"`, `"5"`, `"SR 520"`) to get every corridor measured on it, or by any text to match corridor names (`"Everett"`)
 - When current time exceeds average, the corridor is congested; the delta is the delay
+- Reversible express-lane corridors report no travel time while closed in the queried direction — those figures are omitted rather than reported as zero minutes
 
 ---
 
@@ -97,6 +98,7 @@ Current vehicle wait times at WA/Canada land border crossings.
 WSDOT highway camera metadata and image URLs.
 
 - Filter by state route (`"I-90"`, `"90"`, `"SR 520"`, or `"520"` all work), WSDOT region, or milepost range
+- Camera road names carry a route-type prefix, so `"SR 26"` excludes US 26 and `"US 97"` excludes US 97A; a bare `"26"` returns both
 - Returns metadata and image URLs — camera images are copyright WSDOT, not fetched as bytes
 - Results are paged (default 50, max 500) — pass `offset`/`limit` to page through the full statewide set; the notice reports the next offset
 

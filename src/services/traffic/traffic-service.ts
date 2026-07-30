@@ -11,6 +11,7 @@ import { withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
 import { wcfDateField } from '@/services/wcf-date.js';
 import { assertUpstreamJson, fetchUpstream, redactUrl } from '@/services/wsdot-http.js';
+import { routeMatches } from './route-match.js';
 import type {
   BorderCrossing,
   Camera,
@@ -20,8 +21,10 @@ import type {
   RawCamera,
   RawHighwayAlert,
   RawMountainPass,
+  RawRoadwayLocation,
   RawTollRate,
   RawTravelTime,
+  RoadwayLocation,
   TollRate,
   TravelTime,
 } from './types.js';
@@ -129,15 +132,16 @@ export class TrafficApiService {
     let alerts = result.map(normalizeAlert);
 
     if (params.stateRoute) {
-      // Compare canonical route numbers (not a roadName substring) so "90" matches
-      // I-90 without also matching SR 290, and natural forms ("I-90") resolve too.
-      const target = normalizeRoute(params.stateRoute);
+      // Compare route designations (not a roadName substring) so "90" matches I-90 without also
+      // matching SR 290, natural forms ("I-90") resolve against the feed's bare "090", and a
+      // prefixed filter such as "SR 26" does not pull in US 26.
+      const target = params.stateRoute;
       alerts = alerts.filter((a) => {
         const start = a.startRoadwayLocation?.roadName;
         const end = a.endRoadwayLocation?.roadName;
         return (
-          (start != null && normalizeRoute(start) === target) ||
-          (end != null && normalizeRoute(end) === target)
+          (start != null && routeMatches(target, start)) ||
+          (end != null && routeMatches(target, end))
         );
       });
     }
@@ -145,17 +149,19 @@ export class TrafficApiService {
       const region = params.region.toLowerCase();
       alerts = alerts.filter((a) => a.region?.toLowerCase() === region);
     }
-    if (params.startMilepost != null) {
-      const minMp = params.startMilepost;
-      alerts = alerts.filter(
-        (a) => a.startRoadwayLocation?.milePost == null || a.startRoadwayLocation.milePost >= minMp,
-      );
-    }
-    if (params.endMilepost != null) {
-      const maxMp = params.endMilepost;
-      alerts = alerts.filter(
-        (a) => a.startRoadwayLocation?.milePost == null || a.startRoadwayLocation.milePost <= maxMp,
-      );
+    if (params.startMilepost != null || params.endMilepost != null) {
+      // An alert is an extent, so the requested range is tested for overlap against the span
+      // between the mileposts the alert reports — a closure running from MP 10 to MP 30 covers a
+      // request for MP 20. Mileposts descend on a decreasing-direction record, so the span is
+      // taken as min/max rather than assuming start <= end. An alert with no milepost is kept.
+      const min = params.startMilepost ?? Number.NEGATIVE_INFINITY;
+      const max = params.endMilepost ?? Number.POSITIVE_INFINITY;
+      alerts = alerts.filter((a) => {
+        const posts = [a.startRoadwayLocation?.milePost, a.endRoadwayLocation?.milePost].filter(
+          (mp) => mp != null,
+        );
+        return posts.length === 0 || (Math.min(...posts) <= max && Math.max(...posts) >= min);
+      });
     }
 
     return alerts;
@@ -171,8 +177,8 @@ export class TrafficApiService {
       ...(t.TravelTimeID != null && { travelTimeId: t.TravelTimeID }),
       ...(t.Name != null && { name: t.Name }),
       ...(t.Description != null && { description: t.Description }),
-      ...(t.CurrentTime != null && { currentTimeInMinutes: t.CurrentTime }),
-      ...(t.AverageTime != null && { averageTimeInMinutes: t.AverageTime }),
+      ...(isMeasuredDuration(t.CurrentTime, t.Distance) && { currentTimeInMinutes: t.CurrentTime }),
+      ...(isMeasuredDuration(t.AverageTime, t.Distance) && { averageTimeInMinutes: t.AverageTime }),
       ...wcfDateField('timeUpdated', t.TimeUpdated),
       ...(t.Distance != null && { distanceInMiles: t.Distance }),
       ...(t.StartPoint != null && {
@@ -260,11 +266,11 @@ export class TrafficApiService {
     let cameras = result.map(normalizeCamera);
 
     if (params.stateRoute) {
-      // Match on the canonical route number so natural forms ("I-90", "SR 520") and
-      // padded/bare numbers ("090", "90") all resolve to the same value — and "90"
-      // can't substring-match a different route such as "SR 290".
-      const target = normalizeRoute(params.stateRoute);
-      cameras = cameras.filter((c) => c.roadName != null && normalizeRoute(c.roadName) === target);
+      // Match on the route designation so natural forms ("I-90", "SR 520") and padded/bare numbers
+      // ("090", "90") all resolve to the same route, "90" can't substring-match a different route
+      // such as "SR 290", and the prefixed camera road names stay distinct: "SR 26" is not US 26.
+      const target = params.stateRoute;
+      cameras = cameras.filter((c) => c.roadName != null && routeMatches(target, c.roadName));
     }
     if (params.region) {
       const region = params.region.toUpperCase();
@@ -286,18 +292,35 @@ export class TrafficApiService {
 // --- Normalization helpers ---
 
 /**
- * Canonicalizes a route designation to its bare WSDOT route number for filtering.
- * Accepts natural forms ("I-90", "SR 520", "US 2"), zero-padded ("090"), and bare
- * numbers ("90"), case- and space-insensitively — all reduce to the route number
- * ("90", "520", "5"). Strips any route-type prefix and leading zeros. Comparing two
- * normalized values for exact equality avoids the substring false positives of a raw
- * `roadName.includes()` match (so "90" no longer matches "SR 290"). Falls back to the
- * lowercased, trimmed input when it has no digits, so a non-route string still
- * compares deterministically without matching a numbered road.
+ * Reports whether a travel-time figure is a measurement. WSDOT emits 0 rather than null for a
+ * corridor it is not currently measuring — the reversible express lanes report 0 while closed in
+ * the queried direction — and a corridor with distance cannot be a zero-minute trip. Keyed on the
+ * value, not the corridor name: the opposite-direction express lanes carry real measurements under
+ * the same naming. A 0 stands when the feed reports no distance, since nothing contradicts it.
  */
-export function normalizeRoute(route: string): string {
-  const digits = route.replace(/\D/g, '').replace(/^0+/, '');
-  return digits || route.trim().toLowerCase();
+function isMeasuredDuration(
+  minutes: number | null | undefined,
+  distanceInMiles: number | null | undefined,
+): minutes is number {
+  if (minutes == null) return false;
+  return minutes !== 0 || distanceInMiles == null || distanceInMiles === 0;
+}
+
+/**
+ * WSDOT fills an *unpopulated* roadway location with zeros rather than omitting it — a point alert
+ * carries an end location whose MilePost, Latitude, and Longitude are all 0. Those are placeholders,
+ * not a position at MP 0 in the Gulf of Guinea, so they are dropped; the road name and direction
+ * the record does carry are kept.
+ */
+function normalizeRoadwayLocation(loc: RawRoadwayLocation): RoadwayLocation {
+  const unpopulated = loc.MilePost === 0 && loc.Latitude === 0 && loc.Longitude === 0;
+  return {
+    ...(loc.RoadName != null && { roadName: loc.RoadName }),
+    ...(loc.Direction != null && { direction: loc.Direction }),
+    ...(!unpopulated && loc.MilePost != null && { milePost: loc.MilePost }),
+    ...(!unpopulated && loc.Latitude != null && { latitude: loc.Latitude }),
+    ...(!unpopulated && loc.Longitude != null && { longitude: loc.Longitude }),
+  };
 }
 
 function normalizeAlert(a: RawHighwayAlert): HighwayAlert {
@@ -311,36 +334,10 @@ function normalizeAlert(a: RawHighwayAlert): HighwayAlert {
     ...(a.Region != null && { region: a.Region }),
     ...(a.County != null && { county: a.County }),
     ...(a.StartRoadwayLocation != null && {
-      startRoadwayLocation: {
-        ...(a.StartRoadwayLocation.RoadName != null && {
-          roadName: a.StartRoadwayLocation.RoadName,
-        }),
-        ...(a.StartRoadwayLocation.Direction != null && {
-          direction: a.StartRoadwayLocation.Direction,
-        }),
-        ...(a.StartRoadwayLocation.MilePost != null && {
-          milePost: a.StartRoadwayLocation.MilePost,
-        }),
-        ...(a.StartRoadwayLocation.Latitude != null && {
-          latitude: a.StartRoadwayLocation.Latitude,
-        }),
-        ...(a.StartRoadwayLocation.Longitude != null && {
-          longitude: a.StartRoadwayLocation.Longitude,
-        }),
-      },
+      startRoadwayLocation: normalizeRoadwayLocation(a.StartRoadwayLocation),
     }),
     ...(a.EndRoadwayLocation != null && {
-      endRoadwayLocation: {
-        ...(a.EndRoadwayLocation.RoadName != null && { roadName: a.EndRoadwayLocation.RoadName }),
-        ...(a.EndRoadwayLocation.Direction != null && {
-          direction: a.EndRoadwayLocation.Direction,
-        }),
-        ...(a.EndRoadwayLocation.MilePost != null && { milePost: a.EndRoadwayLocation.MilePost }),
-        ...(a.EndRoadwayLocation.Latitude != null && { latitude: a.EndRoadwayLocation.Latitude }),
-        ...(a.EndRoadwayLocation.Longitude != null && {
-          longitude: a.EndRoadwayLocation.Longitude,
-        }),
-      },
+      endRoadwayLocation: normalizeRoadwayLocation(a.EndRoadwayLocation),
     }),
     ...wcfDateField('startTime', a.StartTime),
     ...wcfDateField('endTime', a.EndTime),

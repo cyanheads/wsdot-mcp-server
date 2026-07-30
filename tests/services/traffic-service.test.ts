@@ -26,7 +26,7 @@ vi.mock('@cyanheads/mcp-ts-core/utils', () => ({
 }));
 
 import { getMountainPasses } from '@/mcp-server/tools/definitions/get-mountain-passes.tool.js';
-import { normalizeRoute, TrafficApiService } from '@/services/traffic/traffic-service.js';
+import { TrafficApiService } from '@/services/traffic/traffic-service.js';
 
 /**
  * Obviously-fake stand-in for the credential. It matches the value returned by the mocked
@@ -314,6 +314,31 @@ describe('TrafficApiService — alert normalization', () => {
     expect(alerts[0].alertId).toBe(1);
   });
 
+  it("matches a prefixed stateRoute against the feed's bare road names", async () => {
+    // Alert road names are always bare zero-padded numbers, so a prefixed filter has to fall
+    // back to comparing the number alone.
+    const raw = [
+      { AlertID: 1, StartRoadwayLocation: { RoadName: '005', MilePost: 100 } },
+      { AlertID: 2, StartRoadwayLocation: { RoadName: '026', MilePost: 12 } },
+      { AlertID: 3, StartRoadwayLocation: { RoadName: '520', MilePost: 3 } },
+    ];
+
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    expect(
+      (await svc.searchAlerts({ stateRoute: 'I-5' }, createMockContext())).map((a) => a.alertId),
+    ).toEqual([1]);
+
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    expect(
+      (await svc.searchAlerts({ stateRoute: 'SR 26' }, createMockContext())).map((a) => a.alertId),
+    ).toEqual([2]);
+
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    expect(
+      (await svc.searchAlerts({ stateRoute: 'SR 520' }, createMockContext())).map((a) => a.alertId),
+    ).toEqual([3]);
+  });
+
   it('filters alerts by milepost range client-side', async () => {
     const raw = [
       { AlertID: 1, StartRoadwayLocation: { MilePost: 10, RoadName: '005' } },
@@ -324,6 +349,101 @@ describe('TrafficApiService — alert normalization', () => {
     const alerts = await svc.searchAlerts({ startMilepost: 5, endMilepost: 50 }, ctx);
     expect(alerts).toHaveLength(1);
     expect(alerts[0].alertId).toBe(1);
+  });
+
+  it('keeps an alert whose extent spans the requested milepost range', async () => {
+    // The alert starts before the range and runs into it — testing the start point alone drops it.
+    const raw = [
+      {
+        AlertID: 1,
+        StartRoadwayLocation: { RoadName: '005', MilePost: 10, Latitude: 47.1, Longitude: -122.1 },
+        EndRoadwayLocation: { RoadName: '005', MilePost: 30, Latitude: 47.3, Longitude: -122.3 },
+      },
+    ];
+
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    expect(
+      (await svc.searchAlerts({ startMilepost: 20 }, createMockContext())).map((a) => a.alertId),
+    ).toEqual([1]);
+
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    expect(
+      (await svc.searchAlerts({ startMilepost: 20, endMilepost: 25 }, createMockContext())).map(
+        (a) => a.alertId,
+      ),
+    ).toEqual([1]);
+
+    // An extent wholly outside the range is still excluded.
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    expect(
+      await svc.searchAlerts({ startMilepost: 40, endMilepost: 50 }, createMockContext()),
+    ).toEqual([]);
+  });
+
+  it('handles an extent whose start milepost is greater than its end', async () => {
+    // Mileposts descend on a decreasing-direction record; the span is still MP 10–30.
+    const raw = [
+      {
+        AlertID: 2,
+        StartRoadwayLocation: { RoadName: '395', MilePost: 30, Latitude: 47.3, Longitude: -117.3 },
+        EndRoadwayLocation: { RoadName: '395', MilePost: 10, Latitude: 47.1, Longitude: -117.1 },
+      },
+    ];
+
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    expect(
+      (await svc.searchAlerts({ startMilepost: 20, endMilepost: 25 }, createMockContext())).map(
+        (a) => a.alertId,
+      ),
+    ).toEqual([2]);
+
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    expect(await svc.searchAlerts({ endMilepost: 5 }, createMockContext())).toEqual([]);
+  });
+
+  it('treats an unpopulated end location as absent, not as an extent reaching MP 0', async () => {
+    // WSDOT fills the end location of a point alert with zeros; reading them as a real endpoint
+    // would stretch every such alert from MP 0 and match almost any range.
+    const raw = [
+      {
+        AlertID: 3,
+        StartRoadwayLocation: {
+          RoadName: '101',
+          MilePost: 164.95,
+          Latitude: 47.71,
+          Longitude: -124.41,
+        },
+        EndRoadwayLocation: {
+          RoadName: '101',
+          Direction: 'B',
+          MilePost: 0,
+          Latitude: 0,
+          Longitude: 0,
+        },
+      },
+    ];
+
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const [alert] = await svc.searchAlerts({}, createMockContext());
+    expect(alert.endRoadwayLocation).toEqual({ roadName: '101', direction: 'B' });
+
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    expect(
+      (await svc.searchAlerts({ startMilepost: 160 }, createMockContext())).map((a) => a.alertId),
+    ).toEqual([3]);
+
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    expect(await svc.searchAlerts({ endMilepost: 50 }, createMockContext())).toEqual([]);
+  });
+
+  it('keeps an alert reporting no milepost at all', async () => {
+    const raw = [{ AlertID: 4, StartRoadwayLocation: { RoadName: '005' } }];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const alerts = await svc.searchAlerts(
+      { startMilepost: 20, endMilepost: 25 },
+      createMockContext(),
+    );
+    expect(alerts.map((a) => a.alertId)).toEqual([4]);
   });
 });
 
@@ -377,6 +497,53 @@ describe('TrafficApiService — travel time normalization', () => {
     expect('name' in t).toBe(false);
     expect('currentTimeInMinutes' in t).toBe(false);
     expect('averageTimeInMinutes' in t).toBe(false);
+  });
+
+  it('drops the 0 sentinel on a corridor with distance rather than reporting a zero-minute trip', async () => {
+    const raw = [
+      {
+        TravelTimeID: 10,
+        Name: 'Everett-Seattle EL',
+        CurrentTime: 0,
+        AverageTime: 0,
+        Distance: 26.72,
+        StartPoint: { RoadName: '005', Direction: 'S', MilePost: 192 },
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const [t] = await svc.getTravelTimes(createMockContext());
+    expect('currentTimeInMinutes' in t).toBe(false);
+    expect('averageTimeInMinutes' in t).toBe(false);
+    expect(t.distanceInMiles).toBe(26.72);
+    expect(t.name).toBe('Everett-Seattle EL');
+  });
+
+  it('keeps a measured time on an express-lane corridor (the sentinel is the value, not the name)', async () => {
+    // The opposite-direction reversible lanes carry real measurements under the same naming —
+    // suppressing by corridor name would drop live data.
+    const raw = [
+      {
+        TravelTimeID: 11,
+        Name: 'Seattle-Everett EL',
+        CurrentTime: 47,
+        AverageTime: 39,
+        Distance: 26.94,
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const [t] = await svc.getTravelTimes(createMockContext());
+    expect(t.currentTimeInMinutes).toBe(47);
+    expect(t.averageTimeInMinutes).toBe(39);
+  });
+
+  it('keeps a 0 when the corridor reports no distance to contradict it', async () => {
+    const raw = [
+      { TravelTimeID: 12, Name: 'Zero-length corridor', CurrentTime: 0, AverageTime: 0 },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const [t] = await svc.getTravelTimes(createMockContext());
+    expect(t.currentTimeInMinutes).toBe(0);
+    expect(t.averageTimeInMinutes).toBe(0);
   });
 });
 
@@ -631,6 +798,33 @@ describe('TrafficApiService — camera normalization', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const sr520 = await svc.searchCameras({ stateRoute: 'SR 520' }, createMockContext());
     expect(sr520.map((c) => c.cameraId)).toEqual([2]);
+  });
+
+  it('does not match a prefixed stateRoute against a different route type (SR 26 vs US 26)', async () => {
+    const raw = [
+      { CameraID: 1, CameraLocation: { RoadName: 'SR 26' } },
+      { CameraID: 2, CameraLocation: { RoadName: 'US 26' } },
+      { CameraID: 3, CameraLocation: { RoadName: 'US 97' } },
+      { CameraID: 4, CameraLocation: { RoadName: 'US 97A' } },
+    ];
+
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const sr26 = await svc.searchCameras({ stateRoute: 'SR 26' }, createMockContext());
+    expect(sr26.map((c) => c.cameraId)).toEqual([1]);
+
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const us26 = await svc.searchCameras({ stateRoute: 'US 26' }, createMockContext());
+    expect(us26.map((c) => c.cameraId)).toEqual([2]);
+
+    // A lettered suffix is part of the route number, so US 97 does not pull in US 97A.
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const us97 = await svc.searchCameras({ stateRoute: 'US 97' }, createMockContext());
+    expect(us97.map((c) => c.cameraId)).toEqual([3]);
+
+    // A bare number carries no route type, so it still returns both 26s.
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const bare26 = await svc.searchCameras({ stateRoute: '26' }, createMockContext());
+    expect(bare26.map((c) => c.cameraId)).toEqual([1, 2]);
   });
 
   it('does not substring-match "90" against SR 290 (camera)', async () => {
@@ -902,24 +1096,5 @@ describe('TrafficApiService — access code never reaches the error payload', ()
     const err = await svc.getMountainPasses(createMockContext()).catch((e) => e);
     expect((err as McpError).code).toBe(JsonRpcErrorCode.Timeout);
     expect(wirePayload(err)).not.toContain(ACCESS_CODE);
-  });
-});
-
-describe('normalizeRoute', () => {
-  it('canonicalizes natural, zero-padded, and bare route forms to the route number', () => {
-    expect(normalizeRoute('I-90')).toBe('90');
-    expect(normalizeRoute('90')).toBe('90');
-    expect(normalizeRoute('090')).toBe('90');
-    expect(normalizeRoute('SR 520')).toBe('520');
-    expect(normalizeRoute('sr520')).toBe('520');
-    expect(normalizeRoute('520')).toBe('520');
-    expect(normalizeRoute('I-5')).toBe('5');
-    expect(normalizeRoute('005')).toBe('5');
-    expect(normalizeRoute('US 2')).toBe('2');
-  });
-
-  it('keeps routes whose digits are substrings distinct (90 vs 290)', () => {
-    expect(normalizeRoute('SR 290')).toBe('290');
-    expect(normalizeRoute('90')).not.toBe(normalizeRoute('SR 290'));
   });
 });

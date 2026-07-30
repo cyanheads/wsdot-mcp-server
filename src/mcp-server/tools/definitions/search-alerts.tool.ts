@@ -13,14 +13,15 @@ export const searchAlerts = tool('wsdot_search_alerts', {
     'Returns active WA highway alerts: incidents, construction, closures, and restrictions. ' +
     'Filter by state route ("I-90", "90", "SR 520", or "520" all work), ' +
     'WSDOT region (Northwest, Olympic, Southwest, South Central, North Central, Eastern), ' +
-    'or milepost range. Omit all filters to return all current statewide alerts.',
+    "or milepost range, matched against the alert's full extent. " +
+    'Omit all filters to return all current statewide alerts.',
   annotations: { readOnlyHint: true },
   input: z.object({
     stateRoute: z
       .string()
       .optional()
       .describe(
-        'State route to filter by. Accepts natural forms — "I-90", "90", "090", "SR 520", "520" — matched case- and space-insensitively to the canonical WSDOT route number. Omit to include all routes.',
+        'State route to filter by. Accepts natural forms — "I-90", "90", "090", "SR 520", "520" — matched case- and space-insensitively to the route number. A route-type prefix is compared only when both sides carry one, so "SR 26" never matches US 26 while a bare "26" matches either. Omit to include all routes.',
       ),
     region: z
       .string()
@@ -28,8 +29,18 @@ export const searchAlerts = tool('wsdot_search_alerts', {
       .describe(
         'WSDOT region name as it appears in alert data: "Northwest", "Olympic", "Southwest", "South Central", "North Central", or "Eastern". Matching is case-insensitive.',
       ),
-    startMilepost: z.number().optional().describe('Start of milepost range to filter alerts.'),
-    endMilepost: z.number().optional().describe('End of milepost range to filter alerts.'),
+    startMilepost: z
+      .number()
+      .optional()
+      .describe(
+        'Start of the milepost range. An alert matches when its extent overlaps the range, so a closure running from MP 10 to MP 30 is returned for a range starting at MP 20. Either bound may be given alone. Alerts reporting no milepost are always included.',
+      ),
+    endMilepost: z
+      .number()
+      .optional()
+      .describe(
+        'End of the milepost range. Matched by extent overlap like startMilepost, so an alert beginning inside the range and continuing past it is returned.',
+      ),
   }),
   output: z.object({
     alerts: z

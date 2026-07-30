@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { routeMatches } from '@/services/traffic/route-match.js';
 import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
 
 export const getTravelTimes = tool('wsdot_get_travel_times', {
@@ -12,7 +13,8 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
   description:
     'Returns current vs. average travel times for named WA highway corridors (I-5, I-90, SR 520, SR 99, ' +
     'I-405, SR 167, etc.). Use for "how congested is I-5?" or commute time estimates. ' +
-    'Filter by partial route name (e.g. "I-5", "SR 520") to narrow results. ' +
+    'The route filter matches two ways: a route designation ("I-5", "5", "SR 520") returns every ' +
+    'corridor measured on that route, and any text also matches corridor names ("Everett"). ' +
     'When current time exceeds average, the corridor is congested.',
   annotations: { readOnlyHint: true },
   input: z.object({
@@ -20,8 +22,10 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
       .string()
       .optional()
       .describe(
-        'Optional text filter applied to corridor names (e.g. "I-5", "SR 520", "I-405"). ' +
-          'Case-insensitive. Omit to return all corridors.',
+        'Optional filter. A route designation — "I-5", "5", "005", "SR 520", "520" — matches every ' +
+          'corridor whose start or end point is on that route, whichever form the feed reports. ' +
+          'Any text also matches the corridor name as a case-insensitive substring, so "Everett" ' +
+          'finds the Seattle-Everett corridors. Omit to return all corridors.',
       ),
   }),
   output: z.object({
@@ -35,15 +39,24 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
               .optional()
               .describe('Corridor name (e.g. "I-5: Northgate to Downtown").'),
             description: z.string().optional().describe('Additional corridor description.'),
-            currentTimeInMinutes: z.number().optional().describe('Current travel time in minutes.'),
+            currentTimeInMinutes: z
+              .number()
+              .optional()
+              .describe(
+                'Current travel time in minutes. Absent when WSDOT reports no measurement for the corridor — a reversible express lane closed in this direction reports none.',
+              ),
             averageTimeInMinutes: z
               .number()
               .optional()
-              .describe('Historical average travel time in minutes.'),
+              .describe(
+                'Historical average travel time in minutes. Absent when WSDOT reports no measurement for the corridor.',
+              ),
             delayInMinutes: z
               .number()
               .optional()
-              .describe('Delay above average in minutes. Positive means congestion.'),
+              .describe(
+                'Delay above average in minutes. Positive means congestion. Absent when either travel time is unavailable.',
+              ),
             timeUpdated: z
               .string()
               .optional()
@@ -113,8 +126,17 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
   async handler(input, ctx) {
     const all = await getTrafficApiService().getTravelTimes(ctx);
     const routeFilter = input.route?.trim() ? input.route.trim().toLowerCase() : undefined;
+    // Two match paths: the route designation against the corridor's start/end road names — where
+    // the route actually lives, since most corridor names are endpoint pairs ("Seattle-Everett") —
+    // and the free-text substring against the corridor name.
     const filtered = routeFilter
-      ? all.filter((t) => t.name?.toLowerCase().includes(routeFilter))
+      ? all.filter(
+          (t) =>
+            t.name?.toLowerCase().includes(routeFilter) ||
+            [t.startPoint?.roadName, t.endPoint?.roadName].some(
+              (roadName) => roadName != null && routeMatches(routeFilter, roadName),
+            ),
+        )
       : all;
 
     const corridors = filtered.map((t) => ({
@@ -147,7 +169,11 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
     for (const c of result.corridors) {
       lines.push(`### ${c.name ?? 'Corridor'}`);
       if (c.description) lines.push(c.description);
-      if (c.currentTimeInMinutes != null) lines.push(`**Current:** ${c.currentTimeInMinutes} min`);
+      lines.push(
+        c.currentTimeInMinutes != null
+          ? `**Current:** ${c.currentTimeInMinutes} min`
+          : '**Current:** Not available — WSDOT reports no measurement for this corridor',
+      );
       if (c.averageTimeInMinutes != null) lines.push(`**Average:** ${c.averageTimeInMinutes} min`);
       if (c.delayInMinutes != null) {
         const sign = c.delayInMinutes > 0 ? '+' : '';

@@ -48,7 +48,10 @@ export interface MountainPass {
   weatherCondition?: string;
 }
 
-/** Raw roadway location from upstream API. */
+/**
+ * Raw roadway location from upstream API. An unpopulated location (the end point of a point alert)
+ * arrives with MilePost, Latitude, and Longitude all 0 — placeholders dropped during normalization.
+ */
 export interface RawRoadwayLocation {
   Direction?: string | null;
   Latitude?: number | null;
@@ -109,7 +112,9 @@ export interface RawRoadTimePoint {
 
 /** Raw travel time entry from upstream API. */
 export interface RawTravelTime {
+  /** Minutes; WSDOT emits 0 for a corridor it is not measuring (dropped during normalization). */
   AverageTime?: number | null;
+  /** Minutes; WSDOT emits 0 for a corridor it is not measuring (dropped during normalization). */
   CurrentTime?: number | null;
   Description?: string | null;
   Distance?: number | null;
@@ -129,7 +134,9 @@ export interface RoadTimePoint {
 
 /** Normalized travel time corridor. */
 export interface TravelTime {
+  /** Absent when WSDOT reports no measurement — e.g. a reversible express lane closed this way. */
   averageTimeInMinutes?: number;
+  /** Absent when WSDOT reports no measurement — e.g. a reversible express lane closed this way. */
   currentTimeInMinutes?: number;
   description?: string;
   distanceInMiles?: number;

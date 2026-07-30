@@ -23,7 +23,7 @@ export const searchCameras = tool('wsdot_search_cameras', {
       .string()
       .optional()
       .describe(
-        'State route to filter by. Accepts natural forms — "I-90", "90", "090", "SR 520", "520" — matched case- and space-insensitively to the canonical WSDOT route number. Omit to include all routes.',
+        'State route to filter by. Accepts natural forms — "I-90", "90", "090", "SR 520", "520" — matched case- and space-insensitively to the route number. Camera road names carry a route-type prefix, which is compared when the filter carries one too: "SR 26" excludes US 26, while a bare "26" returns both. A lettered suffix is part of the route, so "US 97" excludes US 97A. Omit to include all routes.',
       ),
     region: z
       .string()
