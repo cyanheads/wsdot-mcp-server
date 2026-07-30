@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.14](changelog/0.1.x/0.1.14.md) — 2026-07-30 · 🛡️ Security
+
+WSDOT access code no longer leaks into error payloads (#27); a bad access code now surfaces as its own non-retryable `invalid_access_code` reason instead of a generic `api_unavailable` or bare HTTP 400 (#28); mcp-ts-core ^0.11.0 maintenance.
+
 ## [0.1.13](changelog/0.1.x/0.1.13.md) — 2026-07-11
 
 Ferry default trip date tracks Washington/Pacific local time, not UTC (#16); vessel-location `content[]` coordinates render at full precision to match `structuredContent` (#21); `wsdot_get_ferry_routes` docs corrected to its real route ID/abbreviation/description output (#19).
