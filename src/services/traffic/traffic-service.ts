@@ -6,11 +6,11 @@
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
-import { serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
 import { wcfDateField } from '@/services/wcf-date.js';
+import { assertUpstreamJson, fetchUpstream, redactUrl } from '@/services/wsdot-http.js';
 import type {
   BorderCrossing,
   Camera,
@@ -28,6 +28,7 @@ import type {
 
 const BASE_URL = 'https://www.wsdot.wa.gov/Traffic/api';
 const TIMEOUT_MS = 15_000;
+const SERVICE = 'WSDOT Traffic API';
 
 /** Alert search parameters (client-side filtering against GetAlertsAsJson). */
 export interface AlertSearchParams {
@@ -54,39 +55,15 @@ export class TrafficApiService {
 
   private fetchJson<T>(path: string, ctx: Context): Promise<T> {
     const url = `${BASE_URL}/${path}${path.includes('?') ? '&' : '?'}AccessCode=${this.accessCode()}`;
+    const endpoint = redactUrl(url);
     return withRetry(
       async () => {
-        const timeoutSignal = AbortSignal.timeout(TIMEOUT_MS);
-        const signal = ctx.signal.aborted
-          ? ctx.signal
-          : AbortSignal.any([ctx.signal, timeoutSignal]);
-        const response = await fetch(url, { signal });
-        if (!response.ok) {
-          // 4xx is a client error that won't succeed on retry — mark non-retryable so withRetry
-          // fails fast instead of burning all attempts (the data.retryable === false opt-out).
-          const isClientError = response.status >= 400 && response.status < 500;
-          throw serviceUnavailable(`WSDOT Traffic API returned HTTP ${response.status}.`, {
-            url,
-            status: response.status,
-            ...(isClientError && { retryable: false }),
-          });
-        }
-        // Auth failure returns HTML, not JSON — detect by Content-Type
-        const contentType = response.headers.get('content-type') ?? '';
-        if (contentType.includes('text/html')) {
-          throw serviceUnavailable(
-            'WSDOT Traffic API returned an HTML page instead of JSON. Verify that WSDOT_ACCESS_CODE is set to a valid access code.',
-            { url },
-          );
-        }
-        const text = await response.text();
-        if (/^\s*<(!DOCTYPE\s+html|html[\s>])/i.test(text)) {
-          throw serviceUnavailable(
-            'WSDOT Traffic API returned HTML content. Verify that WSDOT_ACCESS_CODE is set to a valid access code.',
-            { url },
-          );
-        }
-        return JSON.parse(text) as T;
+        const response = await fetchUpstream(url, endpoint, SERVICE, TIMEOUT_MS, ctx);
+        // The body is read before any status check: an unregistered access code comes back as a
+        // 400 whose body carries WSDOT's own explanation, which a status-first throw discards.
+        const body = await response.text();
+        assertUpstreamJson({ body, endpoint, response, service: SERVICE }, ctx);
+        return JSON.parse(body) as T;
       },
       {
         operation: 'TrafficApiService.fetchJson',

@@ -4,6 +4,13 @@
  * @module tests/tools/traffic-tools.test
  */
 
+import type { Context } from '@cyanheads/mcp-ts-core';
+import {
+  configurationError,
+  JsonRpcErrorCode,
+  McpError,
+  serviceUnavailable,
+} from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -33,6 +40,75 @@ import { searchCameras } from '@/mcp-server/tools/definitions/search-cameras.too
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+// ---------------------------------------------------------------------------
+// Upstream failure contract — shared by every traffic tool
+// ---------------------------------------------------------------------------
+
+describe('traffic tools — upstream failure contract', () => {
+  const trafficTools = [
+    getBorderWaits,
+    getMountainPasses,
+    getTollRates,
+    getTravelTimes,
+    searchAlerts,
+    searchCameras,
+  ];
+
+  for (const t of trafficTools) {
+    it(`${t.name} declares api_unavailable and invalid_access_code with distinct recovery`, () => {
+      const byReason = new Map(t.errors!.map((e) => [e.reason, e]));
+      expect(byReason.get('api_unavailable')?.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+      expect(byReason.get('invalid_access_code')?.code).toBe(JsonRpcErrorCode.ConfigurationError);
+      expect(byReason.get('invalid_access_code')?.retryable).toBe(false);
+      expect(byReason.get('api_unavailable')?.recovery).not.toBe(
+        byReason.get('invalid_access_code')?.recovery,
+      );
+    });
+  }
+
+  it('surfaces api_unavailable with its recovery hint when the service reports an outage', async () => {
+    // Mirrors what TrafficApiService.fetchJson throws for a non-2xx.
+    mockService.getMountainPasses.mockImplementation((c: Context) => {
+      throw serviceUnavailable('WSDOT Traffic API returned HTTP 503.', {
+        status: 503,
+        reason: 'api_unavailable',
+        ...c.recoveryFor('api_unavailable'),
+      });
+    });
+    const ctx = createMockContext({ errors: getMountainPasses.errors });
+    const err = await getMountainPasses
+      .handler(getMountainPasses.input.parse({}), ctx)
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(McpError);
+    expect((err as McpError).data).toMatchObject({
+      reason: 'api_unavailable',
+      recovery: { hint: expect.stringContaining('Retry in 30 seconds') },
+    });
+  });
+
+  it('surfaces invalid_access_code with a configuration-repair recovery hint', async () => {
+    mockService.getMountainPasses.mockImplementation((c: Context) => {
+      throw configurationError(
+        'WSDOT Traffic API returned an HTML page instead of JSON — WSDOT_ACCESS_CODE is missing, invalid, or not registered.',
+        {
+          status: 400,
+          reason: 'invalid_access_code',
+          ...c.recoveryFor('invalid_access_code'),
+        },
+      );
+    });
+    const ctx = createMockContext({ errors: getMountainPasses.errors });
+    const err = await getMountainPasses
+      .handler(getMountainPasses.input.parse({}), ctx)
+      .catch((e) => e);
+    expect((err as McpError).code).toBe(JsonRpcErrorCode.ConfigurationError);
+    expect((err as McpError).data).toMatchObject({
+      reason: 'invalid_access_code',
+      recovery: { hint: expect.stringContaining('WSDOT_ACCESS_CODE') },
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

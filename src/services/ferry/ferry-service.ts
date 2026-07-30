@@ -6,11 +6,12 @@
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
-import { serviceUnavailable, validationError } from '@cyanheads/mcp-ts-core/errors';
+import { validationError } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
 import { wcfDateField } from '@/services/wcf-date.js';
+import { assertUpstreamJson, fetchUpstream, redactUrl } from '@/services/wsdot-http.js';
 import type {
   FerryAlert,
   FerryRoute,
@@ -28,6 +29,7 @@ import type {
 
 const BASE_URL = 'https://www.wsdot.wa.gov/Ferries/API';
 const TIMEOUT_MS = 15_000;
+const SERVICE = 'WSF Ferry API';
 
 export class FerryApiService {
   constructor(_config: AppConfig, _storage: StorageService) {}
@@ -42,38 +44,16 @@ export class FerryApiService {
 
   private fetchJson<T>(path: string, ctx: Context): Promise<T> {
     const url = this.buildUrl(path);
+    const endpoint = redactUrl(url);
     return withRetry(
       async () => {
-        const timeoutSignal = AbortSignal.timeout(TIMEOUT_MS);
-        const signal = ctx.signal.aborted
-          ? ctx.signal
-          : AbortSignal.any([ctx.signal, timeoutSignal]);
-        const response = await fetch(url, { signal });
-        if (!response.ok) {
-          // 4xx is a client error that won't succeed on retry (e.g. an invalid terminal pair on the
-          // schedule endpoint) — mark non-retryable so withRetry fails fast instead of burning all attempts.
-          const isClientError = response.status >= 400 && response.status < 500;
-          throw serviceUnavailable(`WSF Ferry API returned HTTP ${response.status}.`, {
-            url,
-            status: response.status,
-            ...(isClientError && { retryable: false }),
-          });
-        }
-        const contentType = response.headers.get('content-type') ?? '';
-        if (contentType.includes('text/html')) {
-          throw serviceUnavailable(
-            'WSF Ferry API returned an HTML page instead of JSON. Verify that WSDOT_ACCESS_CODE is set to a valid access code.',
-            { url },
-          );
-        }
-        const text = await response.text();
-        if (/^\s*<(!DOCTYPE\s+html|html[\s>])/i.test(text)) {
-          throw serviceUnavailable(
-            'WSF Ferry API returned HTML content. Verify that WSDOT_ACCESS_CODE is set to a valid access code.',
-            { url },
-          );
-        }
-        const parsed = JSON.parse(text) as T;
+        const response = await fetchUpstream(url, endpoint, SERVICE, TIMEOUT_MS, ctx);
+        // The body is read before any status check: WSF explains an unregistered access code in
+        // the body of a 400, which a status-first throw discards unread.
+        const body = await response.text();
+        assertUpstreamJson({ body, endpoint, response, service: SERVICE }, ctx);
+
+        const parsed = JSON.parse(body) as T;
         // Ferry API returns HTTP 200 with {"Message":"..."} for validation errors
         if (
           parsed !== null &&
@@ -82,7 +62,7 @@ export class FerryApiService {
           'Message' in (parsed as Record<string, unknown>)
         ) {
           const msg = (parsed as Record<string, unknown>).Message as string;
-          throw validationError(`WSF Ferry API error: ${msg}`, { url });
+          throw validationError(`WSF Ferry API error: ${msg}`, { url: endpoint });
         }
         return parsed;
       },

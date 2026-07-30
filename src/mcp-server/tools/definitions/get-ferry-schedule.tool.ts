@@ -73,6 +73,14 @@ export const getFerrySchedule = tool('wsdot_get_ferry_schedule', {
         'Retry in 30 seconds. If the issue persists, check wsdot.wa.gov/ferries for service status.',
     },
     {
+      reason: 'invalid_access_code',
+      code: JsonRpcErrorCode.ConfigurationError,
+      when: 'WSF rejected the request because WSDOT_ACCESS_CODE is missing, invalid, or not registered.',
+      retryable: false,
+      recovery:
+        'Register an access code at https://wsdot.wa.gov/traffic/api/, set WSDOT_ACCESS_CODE on the server, and restart it.',
+    },
+    {
       reason: 'invalid_terminal_pair',
       code: JsonRpcErrorCode.ValidationError,
       when: 'The terminal ID pair is invalid or does not form a valid ferry route.',
@@ -113,22 +121,23 @@ export const getFerrySchedule = tool('wsdot_get_ferry_schedule', {
     } catch (err) {
       // WSF rejects an invalid or non-through terminal pair with either a 200 + {"Message"} body
       // (→ "WSF Ferry API error: …") or a real HTTP 4xx. Both mean the same to the caller: there is
-      // no direct schedule for this pair.
-      if (
-        err instanceof McpError &&
-        (err.message.includes('WSF Ferry API error') || /returned HTTP 4\d\d/.test(err.message))
-      ) {
-        throw ctx.fail(
-          'invalid_terminal_pair',
-          `No ferry schedule for terminal ${input.departingTerminalId} → ${input.arrivingTerminalId} on ${tripDate}. These terminals may not have direct service, or a terminal ID may be invalid.`,
-          {
-            recovery: {
-              hint: 'Use wsdot_get_ferry_terminals for valid IDs and wsdot_get_ferry_routes for served routes.',
-            },
+      // no direct schedule for this pair. An unregistered access code is also a 4xx but is a server
+      // configuration fault — it keeps its own reason instead of being reported as a bad pair.
+      if (!(err instanceof McpError) || err.data?.reason === 'invalid_access_code') throw err;
+      const status = err.data?.status;
+      const noDirectService =
+        err.message.includes('WSF Ferry API error') ||
+        (typeof status === 'number' && status >= 400 && status < 500);
+      if (!noDirectService) throw err;
+      throw ctx.fail(
+        'invalid_terminal_pair',
+        `No ferry schedule for terminal ${input.departingTerminalId} → ${input.arrivingTerminalId} on ${tripDate}. These terminals may not have direct service, or a terminal ID may be invalid.`,
+        {
+          recovery: {
+            hint: 'Use wsdot_get_ferry_terminals for valid IDs and wsdot_get_ferry_routes for served routes.',
           },
-        );
-      }
-      throw err;
+        },
+      );
     }
 
     ctx.log.info('Ferry schedule fetched', {

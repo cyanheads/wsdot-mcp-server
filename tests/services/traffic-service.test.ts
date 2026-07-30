@@ -5,7 +5,7 @@
  * @module tests/services/traffic-service.test
  */
 
-import { McpError } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -25,7 +25,14 @@ vi.mock('@cyanheads/mcp-ts-core/utils', () => ({
   withRetry: (fn: () => Promise<unknown>) => fn(),
 }));
 
+import { getMountainPasses } from '@/mcp-server/tools/definitions/get-mountain-passes.tool.js';
 import { normalizeRoute, TrafficApiService } from '@/services/traffic/traffic-service.js';
+
+/**
+ * Obviously-fake stand-in for the credential. It matches the value returned by the mocked
+ * `getServerConfig` above, so a leak assertion checks the real thing the service builds URLs with.
+ */
+const ACCESS_CODE = 'test-access-code';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -697,10 +704,55 @@ describe('TrafficApiService — HTTP error handling', () => {
     await expect(svc.getMountainPasses(ctx)).rejects.toThrow(/503/);
   });
 
-  it('throws serviceUnavailable on HTTP 401', async () => {
-    mockFetch.mockResolvedValue(makeResponse('Unauthorized', 401, 'text/plain'));
+  it('resolves the api_unavailable contract on a non-2xx (reason + recovery hint)', async () => {
+    mockFetch.mockResolvedValue(makeResponse('Service Unavailable', 503, 'text/plain'));
+    const ctx = createMockContext({ errors: getMountainPasses.errors });
+    const err = await svc.getMountainPasses(ctx).catch((e) => e);
+    expect(err).toBeInstanceOf(McpError);
+    expect((err as McpError).code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+    expect((err as McpError).data).toMatchObject({
+      reason: 'api_unavailable',
+      status: 503,
+      recovery: { hint: expect.stringContaining('Retry in 30 seconds') },
+    });
+  });
+
+  it('surfaces the upstream body on a non-2xx instead of discarding it', async () => {
+    mockFetch.mockResolvedValue(makeResponse('Upstream is draining', 503, 'text/plain'));
     const ctx = createMockContext();
-    await expect(svc.getMountainPasses(ctx)).rejects.toThrow(/401/);
+    const err = await svc.getMountainPasses(ctx).catch((e) => e);
+    expect((err as McpError).message).toContain('Upstream is draining');
+    expect((err as McpError).data).toMatchObject({ body: 'Upstream is draining' });
+  });
+
+  it('classifies HTTP 401 as invalid_access_code naming WSDOT_ACCESS_CODE', async () => {
+    mockFetch.mockResolvedValue(makeResponse('Unauthorized', 401, 'text/plain'));
+    const ctx = createMockContext({ errors: getMountainPasses.errors });
+    const err = await svc.getMountainPasses(ctx).catch((e) => e);
+    expect((err as McpError).code).toBe(JsonRpcErrorCode.ConfigurationError);
+    expect((err as McpError).message).toMatch(/401/);
+    expect((err as McpError).message).toContain('WSDOT_ACCESS_CODE');
+    expect((err as McpError).data).toMatchObject({
+      reason: 'invalid_access_code',
+      status: 401,
+      recovery: { hint: expect.stringContaining('WSDOT_ACCESS_CODE') },
+    });
+  });
+
+  it('reads the 400 body an unregistered access code produces (text/html "Bad Request")', async () => {
+    // WSDOT answers an unregistered code with HTTP 400 + Content-Type text/html + body "Bad Request".
+    // Before the fix the status check threw first and the body was never read.
+    mockFetch.mockResolvedValue(makeResponse('Bad Request', 400, 'text/html'));
+    const ctx = createMockContext({ errors: getMountainPasses.errors });
+    const err = await svc.getMountainPasses(ctx).catch((e) => e);
+    expect((err as McpError).code).toBe(JsonRpcErrorCode.ConfigurationError);
+    expect((err as McpError).message).toContain('WSDOT_ACCESS_CODE');
+    expect((err as McpError).message).toContain('Bad Request');
+    expect((err as McpError).data).toMatchObject({
+      reason: 'invalid_access_code',
+      status: 400,
+      body: 'Bad Request',
+    });
   });
 
   it('marks 4xx errors non-retryable (data.retryable === false)', async () => {
@@ -718,13 +770,15 @@ describe('TrafficApiService — HTTP error handling', () => {
     expect((err as McpError).data?.retryable).toBeUndefined();
   });
 
-  it('throws serviceUnavailable when Content-Type is text/html', async () => {
+  it('treats an HTML page (Content-Type) as an access-code failure', async () => {
     mockFetch.mockResolvedValue(makeResponse('<html>Login</html>', 200, 'text/html'));
     const ctx = createMockContext();
-    await expect(svc.getMountainPasses(ctx)).rejects.toThrow(/HTML page/);
+    const err = await svc.getMountainPasses(ctx).catch((e) => e);
+    expect((err as McpError).message).toMatch(/HTML page/);
+    expect((err as McpError).data).toMatchObject({ reason: 'invalid_access_code' });
   });
 
-  it('throws serviceUnavailable when body is an HTML document (no CT header)', async () => {
+  it('treats an HTML document body (no CT header) as an access-code failure', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
@@ -732,7 +786,23 @@ describe('TrafficApiService — HTTP error handling', () => {
       text: () => Promise.resolve('<!DOCTYPE html><html><body>Login</body></html>'),
     });
     const ctx = createMockContext();
-    await expect(svc.getMountainPasses(ctx)).rejects.toThrow(/HTML content/);
+    const err = await svc.getMountainPasses(ctx).catch((e) => e);
+    expect((err as McpError).message).toMatch(/HTML content/);
+    expect((err as McpError).data).toMatchObject({ reason: 'invalid_access_code' });
+  });
+
+  it('keeps a 5xx HTML outage page as a retryable api_unavailable', async () => {
+    // IIS and CDN outage pages are HTML too. Blaming the access code for an upstream outage sends
+    // the operator after their credential and drops the retry the failure deserves.
+    mockFetch.mockResolvedValue(
+      makeResponse('<html><body>503 Service Unavailable</body></html>', 503, 'text/html'),
+    );
+    const ctx = createMockContext({ errors: getMountainPasses.errors });
+    const err = await svc.getMountainPasses(ctx).catch((e) => e);
+    expect((err as McpError).code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+    expect((err as McpError).message).not.toContain('WSDOT_ACCESS_CODE');
+    expect((err as McpError).data).toMatchObject({ reason: 'api_unavailable', status: 503 });
+    expect((err as McpError).data?.retryable).toBeUndefined();
   });
 
   it('appends AccessCode to every request URL', async () => {
@@ -749,6 +819,89 @@ describe('TrafficApiService — HTTP error handling', () => {
     await svc.getMountainPasses(ctx);
     const url: string = mockFetch.mock.calls[0][0] as string;
     expect(url).toContain('https://www.wsdot.wa.gov/Traffic/api');
+  });
+});
+
+describe('TrafficApiService — access code never reaches the error payload', () => {
+  let svc: TrafficApiService;
+
+  /**
+   * Everything a client or log sink would see from a thrown service error, including own
+   * properties the runtime hung off it — Bun and Node attach the requested URL as `path`, which
+   * a log sink serializing the error would pick up.
+   */
+  function wirePayload(err: unknown): string {
+    const mcp = err as McpError;
+    return JSON.stringify({
+      ...(err as object),
+      code: mcp.code,
+      message: mcp.message,
+      data: mcp.data,
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    svc = new TrafficApiService({} as never, {} as never);
+  });
+
+  afterEach(() => vi.clearAllMocks());
+
+  it('strips the query string from data.url on a non-2xx', async () => {
+    mockFetch.mockResolvedValue(makeResponse('Service Unavailable', 503, 'text/plain'));
+    const err = await svc.getMountainPasses(createMockContext()).catch((e) => e);
+    expect(wirePayload(err)).not.toContain(ACCESS_CODE);
+    expect((err as McpError).data?.url).toBe(
+      'https://www.wsdot.wa.gov/Traffic/api/MountainPassConditions/MountainPassConditionsREST.svc/GetMountainPassConditionsAsJson',
+    );
+  });
+
+  it('strips the query string on an access-code rejection', async () => {
+    mockFetch.mockResolvedValue(makeResponse('Bad Request', 400, 'text/html'));
+    const err = await svc.getMountainPasses(createMockContext()).catch((e) => e);
+    expect(wirePayload(err)).not.toContain(ACCESS_CODE);
+    expect(String((err as McpError).data?.url)).not.toContain('?');
+  });
+
+  it('scrubs an upstream body that echoes the request query string', async () => {
+    // ASP.NET error pages echo the request line — the credential must not ride back out in data.body.
+    mockFetch.mockResolvedValue(
+      makeResponse(
+        `Server Error in '/Traffic' Application. GET /Traffic/api/x?AccessCode=${ACCESS_CODE} failed.`,
+        500,
+        'text/plain',
+      ),
+    );
+    const err = await svc.getMountainPasses(createMockContext()).catch((e) => e);
+    expect(wirePayload(err)).not.toContain(ACCESS_CODE);
+    expect((err as McpError).data?.body).toContain('[credential redacted]');
+    // An echoed query parameter must not be mistaken for the upstream naming the credential.
+    expect((err as McpError).data).toMatchObject({ reason: 'api_unavailable' });
+  });
+
+  it('strips the query string when the network layer fails', async () => {
+    // Bun and Node hang the requested URL off network errors as `error.path`.
+    const networkError = Object.assign(
+      new Error('Unable to connect. Is the computer able to access the url?'),
+      {
+        path: `https://www.wsdot.wa.gov/Traffic/api/x?AccessCode=${ACCESS_CODE}`,
+        code: 'ConnectionRefused',
+      },
+    );
+    mockFetch.mockRejectedValue(networkError);
+    const err = await svc.getMountainPasses(createMockContext()).catch((e) => e);
+    expect(err).toBeInstanceOf(McpError);
+    expect(wirePayload(err)).not.toContain(ACCESS_CODE);
+    expect((err as McpError).data).toMatchObject({ reason: 'api_unavailable' });
+  });
+
+  it('classifies an upstream timeout as Timeout without the query string', async () => {
+    const timeoutError = new Error('The operation timed out.');
+    timeoutError.name = 'TimeoutError';
+    mockFetch.mockRejectedValue(timeoutError);
+    const err = await svc.getMountainPasses(createMockContext()).catch((e) => e);
+    expect((err as McpError).code).toBe(JsonRpcErrorCode.Timeout);
+    expect(wirePayload(err)).not.toContain(ACCESS_CODE);
   });
 });
 

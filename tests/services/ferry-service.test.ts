@@ -6,7 +6,7 @@
  * @module tests/services/ferry-service.test
  */
 
-import { McpError } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -18,7 +18,20 @@ vi.mock('@cyanheads/mcp-ts-core/utils', () => ({
   withRetry: (fn: () => Promise<unknown>) => fn(),
 }));
 
+import { getFerryTerminals } from '@/mcp-server/tools/definitions/get-ferry-terminals.tool.js';
 import { FerryApiService } from '@/services/ferry/ferry-service.js';
+
+/**
+ * Obviously-fake stand-in for the credential. It matches the value returned by the mocked
+ * `getServerConfig` above, so a leak assertion checks the real thing the service builds URLs with.
+ */
+const ACCESS_CODE = 'test-access-code';
+
+/** WSF's verbatim response body when the access code is not registered. */
+const UNREGISTERED_CODE_BODY = {
+  Message:
+    "Use of WSDOT Traveler API failed.  Please make sure you've registered (at this location https://wsdot.wa.gov/traffic/api/) for a developer Access Code.  This value should then be passed with every service request.",
+};
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -616,13 +629,63 @@ describe('FerryApiService — HTTP error handling', () => {
     await expect(svc.getTerminals(ctx)).rejects.toThrow(/503/);
   });
 
-  it('throws serviceUnavailable when Content-Type is text/html', async () => {
-    mockFetch.mockResolvedValue(makeResponse('<html>Login</html>', 200, 'text/html'));
-    const ctx = createMockContext();
-    await expect(svc.getTerminals(ctx)).rejects.toThrow(/HTML page/);
+  it('resolves the api_unavailable contract on a non-2xx (reason + recovery hint)', async () => {
+    mockFetch.mockResolvedValue(makeResponse('Service Unavailable', 503, 'text/plain'));
+    const ctx = createMockContext({ errors: getFerryTerminals.errors });
+    const err = await svc.getTerminals(ctx).catch((e) => e);
+    expect(err).toBeInstanceOf(McpError);
+    expect((err as McpError).code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+    expect((err as McpError).data).toMatchObject({
+      reason: 'api_unavailable',
+      status: 503,
+      recovery: { hint: expect.stringContaining('Retry in 30 seconds') },
+    });
   });
 
-  it('throws serviceUnavailable when body is an HTML document', async () => {
+  it('reads the WSF explanation on a 400 from an unregistered access code', async () => {
+    // Before the fix the status check threw first and this body was discarded unread.
+    mockFetch.mockResolvedValue(makeResponse(UNREGISTERED_CODE_BODY, 400));
+    const ctx = createMockContext({ errors: getFerryTerminals.errors });
+    const err = await svc.getTerminals(ctx).catch((e) => e);
+    expect((err as McpError).code).toBe(JsonRpcErrorCode.ConfigurationError);
+    expect((err as McpError).message).toContain('WSDOT_ACCESS_CODE');
+    expect((err as McpError).message).toContain('Use of WSDOT Traveler API failed');
+    expect((err as McpError).data).toMatchObject({
+      reason: 'invalid_access_code',
+      status: 400,
+      recovery: { hint: expect.stringContaining('WSDOT_ACCESS_CODE') },
+    });
+  });
+
+  it('classifies HTTP 401 as invalid_access_code naming WSDOT_ACCESS_CODE', async () => {
+    mockFetch.mockResolvedValue(makeResponse('Unauthorized', 401, 'text/plain'));
+    const ctx = createMockContext();
+    const err = await svc.getTerminals(ctx).catch((e) => e);
+    expect((err as McpError).code).toBe(JsonRpcErrorCode.ConfigurationError);
+    expect((err as McpError).message).toContain('WSDOT_ACCESS_CODE');
+    expect((err as McpError).data).toMatchObject({ reason: 'invalid_access_code' });
+  });
+
+  it('leaves a 400 that is not about the access code as api_unavailable', async () => {
+    // The schedule endpoint answers an invalid terminal pair with a 400 — a request fault,
+    // not a credential fault, and the tool maps it to invalid_terminal_pair.
+    mockFetch.mockResolvedValue(makeResponse({ Message: 'Invalid terminal pair.' }, 400));
+    const ctx = createMockContext();
+    const err = await svc.getSchedule(9999, 9998, '2026-05-23', false, ctx).catch((e) => e);
+    expect((err as McpError).code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+    expect((err as McpError).message).toMatch(/returned HTTP 400/);
+    expect((err as McpError).data).toMatchObject({ reason: 'api_unavailable', retryable: false });
+  });
+
+  it('treats an HTML page (Content-Type) as an access-code failure', async () => {
+    mockFetch.mockResolvedValue(makeResponse('<html>Login</html>', 200, 'text/html'));
+    const ctx = createMockContext();
+    const err = await svc.getTerminals(ctx).catch((e) => e);
+    expect((err as McpError).message).toMatch(/HTML page/);
+    expect((err as McpError).data).toMatchObject({ reason: 'invalid_access_code' });
+  });
+
+  it('treats an HTML document body as an access-code failure', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
@@ -630,7 +693,9 @@ describe('FerryApiService — HTTP error handling', () => {
       text: () => Promise.resolve('<!DOCTYPE html><html><body>Login</body></html>'),
     });
     const ctx = createMockContext();
-    await expect(svc.getTerminals(ctx)).rejects.toThrow(/HTML content/);
+    const err = await svc.getTerminals(ctx).catch((e) => e);
+    expect((err as McpError).message).toMatch(/HTML content/);
+    expect((err as McpError).data).toMatchObject({ reason: 'invalid_access_code' });
   });
 
   it('throws validationError when API returns {"Message":"..."} body', async () => {
@@ -664,5 +729,98 @@ describe('FerryApiService — HTTP error handling', () => {
     await svc.getTerminals(ctx);
     const url: string = mockFetch.mock.calls[0][0] as string;
     expect(url).toContain('https://www.wsdot.wa.gov/Ferries/API');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Credential containment
+// ---------------------------------------------------------------------------
+
+describe('FerryApiService — access code never reaches the error payload', () => {
+  let svc: FerryApiService;
+
+  /**
+   * Everything a client or log sink would see from a thrown service error, including own
+   * properties the runtime hung off it — Bun and Node attach the requested URL as `path`, which
+   * a log sink serializing the error would pick up.
+   */
+  function wirePayload(err: unknown): string {
+    const mcp = err as McpError;
+    return JSON.stringify({
+      ...(err as object),
+      code: mcp.code,
+      message: mcp.message,
+      data: mcp.data,
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    svc = new FerryApiService({} as never, {} as never);
+  });
+
+  afterEach(() => vi.clearAllMocks());
+
+  it('strips the query string from data.url on a non-2xx', async () => {
+    mockFetch.mockResolvedValue(makeResponse('Service Unavailable', 503, 'text/plain'));
+    const err = await svc.getTerminals(createMockContext()).catch((e) => e);
+    expect(wirePayload(err)).not.toContain(ACCESS_CODE);
+    expect((err as McpError).data?.url).toBe(
+      'https://www.wsdot.wa.gov/Ferries/API/Terminals/rest/terminalbasics',
+    );
+  });
+
+  it('strips the query string on an access-code rejection', async () => {
+    mockFetch.mockResolvedValue(makeResponse(UNREGISTERED_CODE_BODY, 400));
+    const err = await svc.getTerminals(createMockContext()).catch((e) => e);
+    expect(wirePayload(err)).not.toContain(ACCESS_CODE);
+    expect(String((err as McpError).data?.url)).not.toContain('?');
+  });
+
+  it('strips the query string from the HTTP 200 + {"Message"} validation error', async () => {
+    mockFetch.mockResolvedValue(makeResponse({ Message: 'Invalid terminal IDs provided.' }));
+    const err = await svc
+      .getSchedule(9999, 9998, '2026-05-23', false, createMockContext())
+      .catch((e) => e);
+    expect(wirePayload(err)).not.toContain(ACCESS_CODE);
+    expect(String((err as McpError).data?.url)).not.toContain('?');
+  });
+
+  it('scrubs an upstream body that echoes the request query string', async () => {
+    mockFetch.mockResolvedValue(
+      makeResponse(
+        `Server Error. GET /Ferries/API/Terminals/rest/terminalbasics?apiaccesscode=${ACCESS_CODE} failed.`,
+        500,
+        'text/plain',
+      ),
+    );
+    const err = await svc.getTerminals(createMockContext()).catch((e) => e);
+    expect(wirePayload(err)).not.toContain(ACCESS_CODE);
+    expect((err as McpError).data?.body).toContain('[credential redacted]');
+    expect((err as McpError).data).toMatchObject({ reason: 'api_unavailable' });
+  });
+
+  it('strips the query string when the network layer fails', async () => {
+    const networkError = Object.assign(
+      new Error('Unable to connect. Is the computer able to access the url?'),
+      {
+        path: `https://www.wsdot.wa.gov/Ferries/API/Terminals/rest/terminalbasics?apiaccesscode=${ACCESS_CODE}`,
+        code: 'ConnectionRefused',
+      },
+    );
+    mockFetch.mockRejectedValue(networkError);
+    const err = await svc.getTerminals(createMockContext()).catch((e) => e);
+    expect(err).toBeInstanceOf(McpError);
+    expect(wirePayload(err)).not.toContain(ACCESS_CODE);
+    expect((err as McpError).data).toMatchObject({ reason: 'api_unavailable' });
+  });
+
+  it('classifies an upstream timeout as Timeout without the query string', async () => {
+    const timeoutError = new Error('The operation timed out.');
+    timeoutError.name = 'TimeoutError';
+    mockFetch.mockRejectedValue(timeoutError);
+    const err = await svc.getTerminals(createMockContext()).catch((e) => e);
+    expect((err as McpError).code).toBe(JsonRpcErrorCode.Timeout);
+    expect(wirePayload(err)).not.toContain(ACCESS_CODE);
   });
 });

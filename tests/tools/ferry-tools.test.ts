@@ -4,7 +4,13 @@
  * @module tests/tools/ferry-tools.test
  */
 
-import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
+import type { Context } from '@cyanheads/mcp-ts-core';
+import {
+  configurationError,
+  JsonRpcErrorCode,
+  McpError,
+  serviceUnavailable,
+} from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -42,6 +48,75 @@ beforeEach(() => {
   vi.clearAllMocks();
   // Restore default (valid) implementation before each test
   mockToFerryDate.mockImplementation((isoDate: string) => isoDate.trim().slice(0, 10));
+});
+
+// ---------------------------------------------------------------------------
+// Upstream failure contract — shared by every ferry tool
+// ---------------------------------------------------------------------------
+
+describe('ferry tools — upstream failure contract', () => {
+  const ferryTools = [
+    getFerryAlerts,
+    getFerryRoutes,
+    getFerrySchedule,
+    getFerryTerminals,
+    getTerminalSpace,
+    getVesselLocations,
+  ];
+
+  for (const t of ferryTools) {
+    it(`${t.name} declares api_unavailable and invalid_access_code with distinct recovery`, () => {
+      const byReason = new Map(t.errors!.map((e) => [e.reason, e]));
+      expect(byReason.get('api_unavailable')?.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+      expect(byReason.get('invalid_access_code')?.code).toBe(JsonRpcErrorCode.ConfigurationError);
+      expect(byReason.get('invalid_access_code')?.retryable).toBe(false);
+      expect(byReason.get('api_unavailable')?.recovery).not.toBe(
+        byReason.get('invalid_access_code')?.recovery,
+      );
+    });
+  }
+
+  it('surfaces api_unavailable with its recovery hint when the service reports an outage', async () => {
+    // Mirrors what FerryApiService.fetchJson throws for a non-2xx.
+    mockService.getTerminals.mockImplementation((c: Context) => {
+      throw serviceUnavailable('WSF Ferry API returned HTTP 503.', {
+        status: 503,
+        reason: 'api_unavailable',
+        ...c.recoveryFor('api_unavailable'),
+      });
+    });
+    const ctx = createMockContext({ errors: getFerryTerminals.errors });
+    const err = await getFerryTerminals
+      .handler(getFerryTerminals.input.parse({}), ctx)
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(McpError);
+    expect((err as McpError).data).toMatchObject({
+      reason: 'api_unavailable',
+      recovery: { hint: expect.stringContaining('Retry in 30 seconds') },
+    });
+  });
+
+  it('surfaces invalid_access_code with a configuration-repair recovery hint', async () => {
+    mockService.getTerminals.mockImplementation((c: Context) => {
+      throw configurationError(
+        'WSF Ferry API rejected the request with HTTP 400 — WSDOT_ACCESS_CODE is missing, invalid, or not registered.',
+        {
+          status: 400,
+          reason: 'invalid_access_code',
+          ...c.recoveryFor('invalid_access_code'),
+        },
+      );
+    });
+    const ctx = createMockContext({ errors: getFerryTerminals.errors });
+    const err = await getFerryTerminals
+      .handler(getFerryTerminals.input.parse({}), ctx)
+      .catch((e) => e);
+    expect((err as McpError).code).toBe(JsonRpcErrorCode.ConfigurationError);
+    expect((err as McpError).data).toMatchObject({
+      reason: 'invalid_access_code',
+      recovery: { hint: expect.stringContaining('WSDOT_ACCESS_CODE') },
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -361,7 +436,11 @@ describe('getFerrySchedule', () => {
 
   it('maps an HTTP 4xx from getSchedule to invalid_terminal_pair', async () => {
     mockService.getSchedule.mockRejectedValue(
-      new McpError(JsonRpcErrorCode.ServiceUnavailable, 'WSF Ferry API returned HTTP 400.'),
+      new McpError(JsonRpcErrorCode.ServiceUnavailable, 'WSF Ferry API returned HTTP 400.', {
+        reason: 'api_unavailable',
+        status: 400,
+        retryable: false,
+      }),
     );
     const ctx = createMockContext({ errors: getFerrySchedule.errors });
     const input = getFerrySchedule.input.parse({
@@ -371,6 +450,26 @@ describe('getFerrySchedule', () => {
     const err = await getFerrySchedule.handler(input, ctx).catch((e) => e);
     expect(err).toBeInstanceOf(McpError);
     expect((err as McpError).data).toMatchObject({ reason: 'invalid_terminal_pair' });
+  });
+
+  it('keeps an access-code rejection as invalid_access_code, not invalid_terminal_pair', async () => {
+    // WSF answers an unregistered access code with a 400 too — the same status a bad terminal
+    // pair produces. The reason, not the status, decides which failure the caller is told about.
+    mockService.getSchedule.mockRejectedValue(
+      new McpError(
+        JsonRpcErrorCode.ConfigurationError,
+        'WSF Ferry API rejected the request with HTTP 400 — WSDOT_ACCESS_CODE is missing, invalid, or not registered.',
+        { reason: 'invalid_access_code', status: 400 },
+      ),
+    );
+    const ctx = createMockContext({ errors: getFerrySchedule.errors });
+    const input = getFerrySchedule.input.parse({
+      departingTerminalId: 7,
+      arrivingTerminalId: 3,
+    });
+    const err = await getFerrySchedule.handler(input, ctx).catch((e) => e);
+    expect((err as McpError).code).toBe(JsonRpcErrorCode.ConfigurationError);
+    expect((err as McpError).data).toMatchObject({ reason: 'invalid_access_code' });
   });
 
   it('re-throws non-WSF errors from getSchedule without wrapping', async () => {

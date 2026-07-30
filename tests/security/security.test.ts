@@ -2,11 +2,12 @@
  * @fileoverview Security and input validation tests for the WSDOT MCP server tools.
  * Covers: injection attempts in string inputs, oversized inputs, Zod schema validation
  * (missing required fields, wrong types, out-of-range values), and explicit assertion
- * that no API key/access code appears in tool output or error messages.
+ * that no API key/access code appears in tool output or in a thrown upstream error.
  * All external HTTP is mocked — no real network calls.
  * @module tests/security/security.test
  */
 
+import type { McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -60,6 +61,7 @@ import { getTravelTimes } from '@/mcp-server/tools/definitions/get-travel-times.
 import { getVesselLocations } from '@/mcp-server/tools/definitions/get-vessel-locations.tool.js';
 import { searchAlerts } from '@/mcp-server/tools/definitions/search-alerts.tool.js';
 import { searchCameras } from '@/mcp-server/tools/definitions/search-cameras.tool.js';
+import { assertUpstreamJson, redactUrl } from '@/services/wsdot-http.js';
 
 beforeEach(() => vi.clearAllMocks());
 afterEach(() => vi.clearAllMocks());
@@ -82,14 +84,12 @@ const INJECTION_STRINGS = [
   '\n\r\t',
 ];
 
-const SECRET_PATTERNS = [
-  /WSDOT_ACCESS_CODE/,
-  /apiaccesscode/i,
-  /AccessCode/i,
-  /test-access-code/i,
-  /secret/i,
-  /api.?key/i,
-];
+/**
+ * Shapes that mean a credential escaped: the fake access code's value, or a query parameter
+ * still carrying one (`AccessCode=…`, `apiaccesscode=…`). The env var *name* is deliberately
+ * not listed — an actionable error names the variable an operator must fix, which leaks nothing.
+ */
+const SECRET_PATTERNS = [/test-access-code/i, /access_?code=[^&\s"']/i, /secret/i, /api.?key/i];
 
 function containsSecret(value: string): boolean {
   return SECRET_PATTERNS.some((p) => p.test(value));
@@ -388,6 +388,58 @@ describe('API key non-leak — output does not expose access code or secrets', (
     checkOutputForSecrets(result);
     const formatted = getTerminalSpace.format!(result);
     checkOutputForSecrets(formatted);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// API key non-leak — the upstream error path
+// ---------------------------------------------------------------------------
+
+describe('API key non-leak — thrown upstream errors carry no credential', () => {
+  const ACCESS_CODE = 'test-access-code';
+  const REQUEST_URL = `https://www.wsdot.wa.gov/Traffic/api/x/GetAsJson?AccessCode=${ACCESS_CODE}`;
+
+  function upstreamError(body: string, status: number, contentType: string): McpError {
+    const response = {
+      ok: status >= 200 && status < 300,
+      status,
+      headers: { get: (h: string) => (h === 'content-type' ? contentType : null) },
+    } as unknown as Response;
+    try {
+      assertUpstreamJson(
+        { body, endpoint: redactUrl(REQUEST_URL), response, service: 'WSDOT Traffic API' },
+        createMockContext(),
+      );
+    } catch (err) {
+      return err as McpError;
+    }
+    throw new Error('assertUpstreamJson did not throw');
+  }
+
+  it('redactUrl drops the credential-bearing query string', () => {
+    expect(redactUrl(REQUEST_URL)).toBe('https://www.wsdot.wa.gov/Traffic/api/x/GetAsJson');
+    checkOutputForSecrets(redactUrl(REQUEST_URL));
+  });
+
+  it('scrubs a credential echoed by the upstream on the api_unavailable path', () => {
+    const err = upstreamError(`Server Error: GET ${REQUEST_URL} failed`, 503, 'text/plain');
+    expect(err.data).toMatchObject({ reason: 'api_unavailable' });
+    checkOutputForSecrets({ message: err.message, data: err.data });
+  });
+
+  it('scrubs a credential echoed by the upstream on the invalid_access_code path', () => {
+    const err = upstreamError(`Bad Request — GET ${REQUEST_URL}`, 400, 'text/html');
+    expect(err.message).toContain('WSDOT_ACCESS_CODE');
+    expect(err.data).toMatchObject({ reason: 'invalid_access_code' });
+    checkOutputForSecrets({ message: err.message, data: err.data });
+  });
+
+  it('scrubs before truncating, so a cut cannot leave a partial credential behind', () => {
+    // The assignment straddles the 300-char body cap: truncating first would keep `AccessCode=test-`.
+    const body = `${'x'.repeat(282)} ?AccessCode=${ACCESS_CODE} and more text`;
+    const err = upstreamError(body, 503, 'text/plain');
+    expect(String(err.data?.body)).not.toContain(ACCESS_CODE);
+    checkOutputForSecrets({ message: err.message, data: err.data });
   });
 });
 

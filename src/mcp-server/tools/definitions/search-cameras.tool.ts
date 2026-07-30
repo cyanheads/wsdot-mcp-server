@@ -129,6 +129,14 @@ export const searchCameras = tool('wsdot_search_cameras', {
       recovery:
         'Retry in 30 seconds. If the issue persists, check wsdot.wa.gov for service status.',
     },
+    {
+      reason: 'invalid_access_code',
+      code: JsonRpcErrorCode.ConfigurationError,
+      when: 'WSDOT rejected the request because WSDOT_ACCESS_CODE is missing, invalid, or not registered.',
+      retryable: false,
+      recovery:
+        'Register an access code at https://wsdot.wa.gov/traffic/api/, set WSDOT_ACCESS_CODE on the server, and restart it.',
+    },
   ],
 
   async handler(input, ctx) {
