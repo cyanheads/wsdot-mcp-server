@@ -32,7 +32,7 @@
 | `wsdot_get_mountain_passes` | Current conditions for all WA mountain passes: status, road condition, traction laws, temperature, elevation. |
 | `wsdot_search_alerts` | Active highway alerts — incidents, construction, closures — filterable by state route, WSDOT region, and milepost range. |
 | `wsdot_get_travel_times` | Current vs. average travel times for named WA highway corridors (I-5, I-90, SR 520, etc.) with congestion delay. |
-| `wsdot_get_toll_rates` | Dynamic toll rates for WA express lanes and tolled facilities: SR 99, SR 520, I-405, I-90 Two-Way, SR 167 HOT. |
+| `wsdot_get_toll_rates` | Dynamic toll rates for WA express lanes and tolled facilities: SR 99, SR 167 HOT, I-405 Express, SR 509, SR 520. |
 | `wsdot_get_border_waits` | Current vehicle wait times at all WA/Canada land border crossings. |
 | `wsdot_search_cameras` | Highway camera metadata and image URLs, filterable by state route, region, and milepost range. |
 | `wsdot_get_ferry_terminals` | All WSF ferry terminals with numeric IDs needed for schedule and space lookups. |
@@ -46,7 +46,7 @@
 
 Current road conditions for all WA mountain passes.
 
-- Covers all ~12 passes: Snoqualmie, Stevens, White, Blewett, Cayuse, and others
+- Covers all 16 passes: Snoqualmie, Stevens, White, Blewett, Cayuse, and others
 - Fields include status (Open/Closed/Caution), road surface, active traction law, temperature, and elevation
 - Use for "is the pass open?", traction law checks, or winter driving planning
 
@@ -81,8 +81,10 @@ Current vs. average travel times for named WA highway corridors.
 
 Current dynamic toll rates for WA tolled facilities.
 
-- SR 99 (WSDOT Tunnel), SR 520 Bridge, I-405 Express Lanes, I-90 Two-Way Express Lanes, SR 167 HOT Lanes
+- SR 99 (WSDOT Tunnel), SR 167 HOT Lanes, I-405 Express Lanes, the SR 509 tolled segment, and the SR 520 Bridge
 - Rates are time-banded and change dynamically based on traffic conditions
+- `stateRoute` is a bare, zero-padded route number (`"099"`, `"405"`) with no route type; the rendered text resolves the posted designation, so I-405 reads as `I-405` rather than `SR 405`
+- Each entry leads with its readable `startLocationName → endLocationName` segment; the opaque upstream trip key stays available as `tripName`
 - Results are paged (default 50, max 500) — pass `offset`/`limit` to page through the full statewide set; the notice reports the next offset
 
 ---
@@ -91,9 +93,10 @@ Current dynamic toll rates for WA tolled facilities.
 
 Current vehicle wait times at WA/Canada land border crossings.
 
-- Covers I-5 (Peace Arch & Pacific Highway, Blaine), SR 539 (Lynden), and SR 9 (Sumas), including Nexus-lane variants
-- `crossingName` is a route code (e.g. `I5`, `SR539`); `location.description` holds the readable name
-- Wait times in minutes; a crossing reporting no current data is omitted; `updateTime` is ISO 8601
+- Covers I-5 (Peace Arch, Blaine), SR 543 (Pacific Highway, Blaine), SR 539 (Lynden), and SR 9 (Sumas)
+- Each crossing reports a general-purpose lane and a Nexus lane; SR 539 adds a truck lane and SR 543 adds truck and FAST truck lanes — eleven entries in `crossings[]`, one per lane
+- `crossingName` is a route code (e.g. `I5`, `SR543Trucks`); `location.description` holds the readable name
+- Wait times in minutes; `updateTime` is ISO 8601. A crossing reporting no current data is still returned — only `waitTimeInMinutes` is omitted, and the rendered text reads `Not available`
 
 ---
 
@@ -112,7 +115,7 @@ WSDOT highway camera metadata and image URLs.
 
 All WSF ferry terminals with numeric IDs.
 
-- ~22 terminals; the list rarely changes
+- 20 terminals; the list rarely changes
 - Call this first to resolve human-readable names (e.g. "Bainbridge Island", "Seattle", "Kingston") to the numeric IDs required by `wsdot_get_ferry_schedule` and `wsdot_get_terminal_space`
 
 ---
@@ -134,6 +137,8 @@ Departure times for a specific WSF ferry route.
 - Requires numeric terminal IDs — use `wsdot_get_ferry_terminals` first
 - `remainingOnly: true` returns only future departures for today (useful for "next ferry" queries)
 - For future dates, all sailings for that day are returned
+- `departureTime` and `arrivalTime` are ISO 8601 **UTC**, while `tripDate` is the Pacific service day — an evening sailing therefore carries the following UTC calendar date and will not match `tripDate`. Convert to `America/Los_Angeles` before quoting a clock time
+- `arrivalTime` is populated on some routes and absent on others
 - No cancellation status — WSF drops a cancelled sailing from the schedule rather than flagging it, so a listed sailing is not confirmation it will run; check `wsdot_get_ferry_alerts`, which reports disruptions at route level
 
 ---
@@ -145,6 +150,8 @@ Real-time AIS positions for all active WSF vessels.
 - Fields include position, speed, heading, ETA, and dock status
 - Use for "where is the ferry now?" or checking if a specific vessel is in service
 - Position data may lag 30–60 seconds; many fields are null for vessels not currently operating
+- Coordinates render at full upstream AIS precision — no rounding, so both response surfaces report the same position
+- A vessel between assignments reports an empty `opRouteAbbrev`, rendered as `none reported` rather than omitted
 
 ---
 
@@ -193,6 +200,7 @@ Agent-friendly output:
 - Cross-tool linking built into descriptions — ferry tools document which tool to call first for terminal and route ID resolution
 - `driveUpSpaceCount: 0` and congestion delta fields give agents actionable signal without string parsing
 - Partial data preserved — sparse upstream payloads surface `null`/`undefined` rather than synthetic defaults
+- `content[]` and `structuredContent` carry the same values, not just the same fields — a `false` flag, an empty list, and one populated half of a coordinate pair all render rather than dropping out of the markdown surface that some clients read
 
 ## Getting started
 

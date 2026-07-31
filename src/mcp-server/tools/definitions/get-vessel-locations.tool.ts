@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { coordinatePair } from '@/mcp-server/tools/coordinate-pair.js';
 import { getFerryApiService } from '@/services/ferry/ferry-service.js';
 
 export const getVesselLocations = tool('wsdot_get_vessel_locations', {
@@ -128,17 +129,22 @@ export const getVesselLocations = tool('wsdot_get_vessel_locations', {
           `**Arriving:** ${v.arrivingTerminalName ?? ''}${v.arrivingTerminalId != null ? ` (ID: ${v.arrivingTerminalId})` : ''}`,
         );
       }
-      if (v.latitude != null && v.longitude != null) {
-        // Render full upstream precision so content[] matches structuredContent — rounding here
-        // creates client-dependent vessel positions (the two channels must carry identical data).
-        lines.push(`**Position:** ${v.latitude}, ${v.longitude}`);
-      }
+      // Render full upstream precision so content[] matches structuredContent — rounding here
+      // creates client-dependent vessel positions (the two channels must carry identical data).
+      const position = coordinatePair(v.latitude, v.longitude);
+      if (position) lines.push(`**Position:** ${position}`);
       if (v.speed != null) lines.push(`**Speed:** ${v.speed} knots`);
       if (v.heading != null) lines.push(`**Heading:** ${v.heading}°`);
       if (v.leftDock) lines.push(`**Left Dock:** ${v.leftDock}`);
       if (v.eta) lines.push(`**ETA:** ${v.eta}`);
       if (v.scheduledDeparture) lines.push(`**Scheduled Departure:** ${v.scheduledDeparture}`);
-      if (v.opRouteAbbrev.length > 0) lines.push(`**Routes:** ${v.opRouteAbbrev.join(', ')}`);
+      // A vessel between assignments reports an empty route list; that is a fact structuredContent
+      // states, so content[] says it rather than omitting the field.
+      lines.push(
+        v.opRouteAbbrev.length > 0
+          ? `**Routes:** ${v.opRouteAbbrev.join(', ')}`
+          : '**Routes:** none reported',
+      );
       if (v.timestamp) lines.push(`**Position Timestamp:** ${v.timestamp}`);
       if (v.vesselId != null) lines.push(`**Vessel ID:** ${v.vesselId}`);
       lines.push('');

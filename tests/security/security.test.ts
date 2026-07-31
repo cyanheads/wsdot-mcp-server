@@ -61,8 +61,11 @@ import { getTravelTimes } from '@/mcp-server/tools/definitions/get-travel-times.
 import { getVesselLocations } from '@/mcp-server/tools/definitions/get-vessel-locations.tool.js';
 import { searchAlerts } from '@/mcp-server/tools/definitions/search-alerts.tool.js';
 import { searchCameras } from '@/mcp-server/tools/definitions/search-cameras.tool.js';
+import { FerryApiService } from '@/services/ferry/ferry-service.js';
 import { htmlToText } from '@/services/html-text.js';
 import { assertUpstreamJson, redactUrl } from '@/services/wsdot-http.js';
+import { formattedText, nth } from '../helpers/assertions.js';
+import { toolContext } from '../helpers/tool-context.js';
 
 beforeEach(() => vi.clearAllMocks());
 afterEach(() => vi.clearAllMocks());
@@ -195,52 +198,109 @@ describe('Input validation — type coercion', () => {
 // Injection attempts in string inputs
 // ---------------------------------------------------------------------------
 
-describe('Injection attempts — string inputs pass through without execution', () => {
+describe('Injection attempts — payloads stay inert on both response paths', () => {
+  /**
+   * Carries the payload in `extendedDescription`, which `format()` renders verbatim on its own
+   * line, so a payload holding newlines or control characters reaches `content[]` whole rather
+   * than being split across the alert heading.
+   */
+  const alertCarrying = (payload: string) => ({
+    alertId: 900,
+    headlineDescription: 'Injection probe',
+    extendedDescription: payload,
+  });
+
   for (const injection of INJECTION_STRINGS) {
-    it(`searchAlerts: stateRoute injection "${injection.slice(0, 30)}" reaches service as-is`, async () => {
-      mockTrafficService.searchAlerts.mockResolvedValue([]);
-      const ctx = createMockContext();
-      // Parse must succeed (Zod accepts any string for stateRoute)
+    it(`searchAlerts renders ${JSON.stringify(injection)} as literal text in both surfaces`, async () => {
+      mockTrafficService.searchAlerts.mockResolvedValue([alertCarrying(injection)]);
+      const ctx = toolContext(searchAlerts);
+      // Parse must succeed — Zod accepts any string for stateRoute.
       const input = searchAlerts.input.parse({ stateRoute: injection });
-      await searchAlerts.handler(input, ctx);
-      // The important invariant: the handler doesn't crash, and the injection
-      // string doesn't appear in any tool output
-      const result = await (async () => {
-        mockTrafficService.searchAlerts.mockResolvedValue([]);
-        const c2 = createMockContext();
-        return searchAlerts.handler(input, c2);
-      })();
+      const result = await searchAlerts.handler(input, ctx);
+
+      // The filter reaches the service as the string the caller sent. A payload that trims away
+      // to nothing is dropped rather than forwarded as an empty filter.
+      const trimmed = injection.trim();
+      expect(mockTrafficService.searchAlerts).toHaveBeenCalledWith(
+        trimmed ? { stateRoute: trimmed } : {},
+        ctx,
+      );
+
+      // Both response paths carry the payload byte for byte: nothing evaluated it, re-parsed it
+      // as markup, or rewrote it on the way through.
+      const text = formattedText(searchAlerts.format!(result));
+      expect(nth(result.alerts).extendedDescription).toBe(injection);
+      expect(text).toContain(injection);
       checkOutputForSecrets(result);
+      checkOutputForSecrets(text);
     });
   }
 
-  it('searchCameras: stateRoute injection does not corrupt output', async () => {
+  it('leaves a template reference and an arithmetic expression unresolved', async () => {
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: the literal payload under test — resolving it is the failure this asserts against
+    const template = '${process.env.WSDOT_ACCESS_CODE}';
+    const expression = '{{7*7}}';
+    mockTrafficService.searchAlerts.mockResolvedValue([
+      alertCarrying([template, expression].join(' ')),
+    ]);
+    const ctx = toolContext(searchAlerts);
+    const result = await searchAlerts.handler(searchAlerts.input.parse({}), ctx);
+    const text = formattedText(searchAlerts.format!(result));
+
+    for (const surface of [JSON.stringify(result), text]) {
+      expect(surface).toContain(template);
+      expect(surface).toContain(expression);
+      expect(surface).not.toContain('49');
+    }
+    checkOutputForSecrets(result);
+    checkOutputForSecrets(text);
+  });
+
+  it('searchCameras forwards an injection filter verbatim and returns the served rows', async () => {
     const injection = "'; DROP TABLE cameras; --";
-    mockTrafficService.searchCameras.mockResolvedValue([]);
-    const ctx = createMockContext();
+    mockTrafficService.searchCameras.mockResolvedValue([
+      {
+        cameraId: 1001,
+        title: 'I-90 at Snoqualmie Pass',
+        imageUrl: 'https://images.wsdot.wa.gov/nc/090vc12345.jpg',
+        opRouteAbbrev: [],
+      },
+    ]);
+    const ctx = toolContext(searchCameras);
     const input = searchCameras.input.parse({ stateRoute: injection });
     const result = await searchCameras.handler(input, ctx);
-    expect(result.cameras).toBeDefined();
+    expect(mockTrafficService.searchCameras).toHaveBeenCalledWith({ stateRoute: injection }, ctx);
+    expect(nth(result.cameras).cameraId).toBe(1001);
     checkOutputForSecrets(result);
+    checkOutputForSecrets(formattedText(searchCameras.format!(result)));
   });
 
-  it('getTravelTimes: route injection does not corrupt output', async () => {
+  it('getTravelTimes matches no corridor for an injection route and renders none', async () => {
+    // The corridor filter runs in the handler, so the payload is compared against real names
+    // rather than forwarded upstream — a served corridor must not survive the match.
     const injection = '<script>alert(1)</script>';
-    mockTrafficService.getTravelTimes.mockResolvedValue([]);
-    const ctx = createMockContext();
+    mockTrafficService.getTravelTimes.mockResolvedValue([{ travelTimeId: 1, name: 'I-5 NB' }]);
+    const ctx = toolContext(getTravelTimes);
     const input = getTravelTimes.input.parse({ route: injection });
     const result = await getTravelTimes.handler(input, ctx);
-    expect(result.corridors).toBeDefined();
+    expect(result.corridors).toHaveLength(0);
+    const text = formattedText(getTravelTimes.format!(result));
+    expect(text).not.toContain('<script>');
     checkOutputForSecrets(result);
+    checkOutputForSecrets(text);
   });
 
-  it('getFerryRoutes: tripDate injection is passed to FerryApiService.toFerryDate', async () => {
-    // toFerryDate is mocked to return a slice — injection strings don't crash
+  it('getFerryRoutes normalizes an injection tripDate before it reaches the upstream call', async () => {
+    // The upstream request path is built from a date, so the raw argument must never reach it:
+    // the handler hands the service what FerryApiService.toFerryDate produced, nothing else.
+    const injection = '../../../etc/passwd';
     mockFerryService.getRoutes.mockResolvedValue([]);
-    const ctx = createMockContext();
-    const input = getFerryRoutes.input.parse({ tripDate: '2026-05-23' });
+    const ctx = toolContext(getFerryRoutes);
+    const input = getFerryRoutes.input.parse({ tripDate: injection });
     const result = await getFerryRoutes.handler(input, ctx);
-    expect(result.routes).toBeDefined();
+    const [forwarded] = nth(mockFerryService.getRoutes.mock.calls);
+    expect(forwarded).toBe(FerryApiService.toFerryDate(injection));
+    expect(forwarded).not.toBe(injection);
     checkOutputForSecrets(result);
   });
 });
@@ -250,20 +310,23 @@ describe('Injection attempts — string inputs pass through without execution', 
 // ---------------------------------------------------------------------------
 
 describe('Oversized inputs — handler does not crash', () => {
-  it('searchAlerts: 10,000-char stateRoute is accepted by Zod and passed to service', async () => {
+  it('searchAlerts: a 10,000-char stateRoute reaches the service whole, uncapped', async () => {
     const oversized = 'A'.repeat(10_000);
-    mockTrafficService.searchAlerts.mockResolvedValue([]);
-    const ctx = createMockContext();
+    mockTrafficService.searchAlerts.mockResolvedValue([{ alertId: 1, headlineDescription: 'A' }]);
+    const ctx = toolContext(searchAlerts);
     const input = searchAlerts.input.parse({ stateRoute: oversized });
     const result = await searchAlerts.handler(input, ctx);
-    expect(result.alerts).toBeDefined();
+    // Alert filtering lives in the service, so the invariant here is that the handler forwards
+    // the filter unshortened — a silent truncation would widen the query the caller asked for.
+    expect(mockTrafficService.searchAlerts).toHaveBeenCalledWith({ stateRoute: oversized }, ctx);
+    expect(result.alerts).toHaveLength(1);
     checkOutputForSecrets(result);
   });
 
   it('getTravelTimes: 10,000-char route filter is accepted by Zod and yields empty results', async () => {
     const oversized = 'X'.repeat(10_000);
     mockTrafficService.getTravelTimes.mockResolvedValue([{ travelTimeId: 1, name: 'I-5 NB' }]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTravelTimes);
     const input = getTravelTimes.input.parse({ route: oversized });
     const result = await getTravelTimes.handler(input, ctx);
     // No corridor name matches 10k X's — empty result, not a crash
@@ -271,13 +334,14 @@ describe('Oversized inputs — handler does not crash', () => {
     checkOutputForSecrets(result);
   });
 
-  it('searchCameras: 10,000-char stateRoute is accepted', async () => {
+  it('searchCameras: a 10,000-char stateRoute reaches the service whole, uncapped', async () => {
     const oversized = 'B'.repeat(10_000);
-    mockTrafficService.searchCameras.mockResolvedValue([]);
-    const ctx = createMockContext();
+    mockTrafficService.searchCameras.mockResolvedValue([{ cameraId: 1, title: 'Cam' }]);
+    const ctx = toolContext(searchCameras);
     const input = searchCameras.input.parse({ stateRoute: oversized });
     const result = await searchCameras.handler(input, ctx);
-    expect(result.cameras).toBeDefined();
+    expect(mockTrafficService.searchCameras).toHaveBeenCalledWith({ stateRoute: oversized }, ctx);
+    expect(result.cameras).toHaveLength(1);
     checkOutputForSecrets(result);
   });
 });
@@ -294,7 +358,7 @@ describe('API key non-leak — output does not expose access code or secrets', (
       roadCondition: 'Wet',
     };
     mockTrafficService.getMountainPasses.mockResolvedValue([pass]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getMountainPasses);
     const input = getMountainPasses.input.parse({});
     const result = await getMountainPasses.handler(input, ctx);
     checkOutputForSecrets(result);
@@ -305,7 +369,7 @@ describe('API key non-leak — output does not expose access code or secrets', (
   it('searchAlerts output contains no secret patterns', async () => {
     const alert = { alertId: 101, headlineDescription: 'I-90 Lane Closure' };
     mockTrafficService.searchAlerts.mockResolvedValue([alert]);
-    const ctx = createMockContext();
+    const ctx = toolContext(searchAlerts);
     const input = searchAlerts.input.parse({});
     const result = await searchAlerts.handler(input, ctx);
     checkOutputForSecrets(result);
@@ -321,7 +385,7 @@ describe('API key non-leak — output does not expose access code or secrets', (
       averageTimeInMinutes: 12,
     };
     mockTrafficService.getTravelTimes.mockResolvedValue([corridor]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTravelTimes);
     const input = getTravelTimes.input.parse({});
     const result = await getTravelTimes.handler(input, ctx);
     checkOutputForSecrets(result);
@@ -332,7 +396,7 @@ describe('API key non-leak — output does not expose access code or secrets', (
   it('getTollRates output contains no secret patterns', async () => {
     const rate = { tripName: 'SR 520', stateRoute: '520', tollRateInDollars: 3.5 };
     mockTrafficService.getTollRates.mockResolvedValue([rate]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTollRates);
     const input = getTollRates.input.parse({});
     const result = await getTollRates.handler(input, ctx);
     checkOutputForSecrets(result);
@@ -343,7 +407,7 @@ describe('API key non-leak — output does not expose access code or secrets', (
   it('getBorderWaits output contains no secret patterns', async () => {
     const crossing = { crossingName: 'Peace Arch', waitTimeInMinutes: 25 };
     mockTrafficService.getBorderCrossings.mockResolvedValue([crossing]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getBorderWaits);
     const input = getBorderWaits.input.parse({});
     const result = await getBorderWaits.handler(input, ctx);
     checkOutputForSecrets(result);
@@ -359,7 +423,7 @@ describe('API key non-leak — output does not expose access code or secrets', (
       opRouteAbbrev: [],
     };
     mockTrafficService.searchCameras.mockResolvedValue([camera]);
-    const ctx = createMockContext();
+    const ctx = toolContext(searchCameras);
     const input = searchCameras.input.parse({});
     const result = await searchCameras.handler(input, ctx);
     checkOutputForSecrets(result);
@@ -370,7 +434,7 @@ describe('API key non-leak — output does not expose access code or secrets', (
   it('getFerryTerminals output contains no secret patterns', async () => {
     const terminal = { terminalId: 3, terminalName: 'Bainbridge Island' };
     mockFerryService.getTerminals.mockResolvedValue([terminal]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getFerryTerminals);
     const input = getFerryTerminals.input.parse({});
     const result = await getFerryTerminals.handler(input, ctx);
     checkOutputForSecrets(result);
@@ -381,7 +445,7 @@ describe('API key non-leak — output does not expose access code or secrets', (
   it('getFerryRoutes output contains no secret patterns', async () => {
     const route = { routeId: 1, routeAbbrev: 'SEA-BI', description: 'Seattle/Bainbridge Island' };
     mockFerryService.getRoutes.mockResolvedValue([route]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getFerryRoutes);
     const input = getFerryRoutes.input.parse({});
     const result = await getFerryRoutes.handler(input, ctx);
     checkOutputForSecrets(result);
@@ -400,7 +464,7 @@ describe('API key non-leak — output does not expose access code or secrets', (
       impactedRouteIds: [1],
     };
     mockFerryService.getAlerts.mockResolvedValue([alert]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getFerryAlerts);
     const input = getFerryAlerts.input.parse({});
     const result = await getFerryAlerts.handler(input, ctx);
     checkOutputForSecrets(result);
@@ -425,7 +489,7 @@ describe('API key non-leak — output does not expose access code or secrets', (
       ],
     };
     mockFerryService.getTerminalSailingSpace.mockResolvedValue([space]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTerminalSpace);
     const input = getTerminalSpace.input.parse({});
     const result = await getTerminalSpace.handler(input, ctx);
     checkOutputForSecrets(result);
@@ -491,21 +555,25 @@ describe('API key non-leak — thrown upstream errors carry no credential', () =
 // ---------------------------------------------------------------------------
 
 describe('Unicode and encoding edge cases', () => {
-  it('searchAlerts: stateRoute with unicode is accepted and yields empty results', async () => {
-    mockTrafficService.searchAlerts.mockResolvedValue([]);
-    const ctx = createMockContext();
-    const input = searchAlerts.input.parse({ stateRoute: '日本語テスト' });
+  it('searchAlerts: a unicode stateRoute reaches the service without re-encoding', async () => {
+    const unicode = '日本語テスト';
+    mockTrafficService.searchAlerts.mockResolvedValue([
+      { alertId: 1, headlineDescription: '日本語' },
+    ]);
+    const ctx = toolContext(searchAlerts);
+    const input = searchAlerts.input.parse({ stateRoute: unicode });
     const result = await searchAlerts.handler(input, ctx);
-    expect(result.alerts).toBeDefined();
+    expect(mockTrafficService.searchAlerts).toHaveBeenCalledWith({ stateRoute: unicode }, ctx);
+    expect(formattedText(searchAlerts.format!(result))).toContain('日本語');
     checkOutputForSecrets(result);
   });
 
-  it('getTravelTimes: route with RTL text is handled without crash', async () => {
-    mockTrafficService.getTravelTimes.mockResolvedValue([]);
-    const ctx = createMockContext();
+  it('getTravelTimes: an RTL route filter matches no corridor rather than crashing', async () => {
+    mockTrafficService.getTravelTimes.mockResolvedValue([{ travelTimeId: 1, name: 'I-5 NB' }]);
+    const ctx = toolContext(getTravelTimes);
     const input = getTravelTimes.input.parse({ route: 'مسار اختبار' });
     const result = await getTravelTimes.handler(input, ctx);
-    expect(result.corridors).toBeDefined();
+    expect(result.corridors).toHaveLength(0);
   });
 
   it('ferry alerts with unicode description renders safely in format()', () => {
@@ -552,7 +620,7 @@ describe('Upstream HTML — normalization strips markup before either response p
     mockFerryService.getAlerts.mockResolvedValue([alert]);
     const result = await getFerryAlerts.handler(
       getFerryAlerts.input.parse({}),
-      createMockContext(),
+      toolContext(getFerryAlerts),
     );
     const text = (getFerryAlerts.format!(result)[0] as { text: string }).text;
 
@@ -627,10 +695,10 @@ describe('Sparse upstream payloads — no fabricated data', () => {
     mockTrafficService.getMountainPasses.mockResolvedValue([
       { mountainPassId: 99, mountainPassName: 'Sparse Pass' },
     ]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getMountainPasses);
     const input = getMountainPasses.input.parse({});
     const result = await getMountainPasses.handler(input, ctx);
-    const p = result.passes[0];
+    const p = nth(result.passes);
     expect('elevation' in p).toBe(false);
     expect('temperatureInFahrenheit' in p).toBe(false);
     expect('weatherCondition' in p).toBe(false);

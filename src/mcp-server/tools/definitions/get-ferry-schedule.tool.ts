@@ -15,6 +15,8 @@ export const getFerrySchedule = tool('wsdot_get_ferry_schedule', {
     'Requires numeric terminal IDs — use wsdot_get_ferry_terminals to resolve terminal names to IDs. ' +
     'Set remainingOnly to true to show only future departures for today (useful for "next ferry" queries). ' +
     'For future dates, all sailings for that day are returned. ' +
+    'Sailing times are ISO 8601 UTC while tripDate is the Pacific service day, so evening sailings ' +
+    'carry the next UTC date — convert to America/Los_Angeles before quoting a clock time. ' +
     'Cancellations are not carried here — WSF drops a cancelled sailing from the schedule instead ' +
     'of flagging it, so a listed sailing is not confirmation that it will run. Check ' +
     'wsdot_get_ferry_alerts for disruptions; those are scoped to a route, not an individual sailing.',
@@ -44,8 +46,21 @@ export const getFerrySchedule = tool('wsdot_get_ferry_schedule', {
       .array(
         z
           .object({
-            departureTime: z.string().optional().describe('Scheduled departure time.'),
-            arrivalTime: z.string().optional().describe('Scheduled arrival time.'),
+            departureTime: z
+              .string()
+              .optional()
+              .describe(
+                'Scheduled departure time (ISO 8601, UTC). WSF publishes schedules in Pacific time, ' +
+                  'so a sailing late in the service day carries the following UTC calendar date and ' +
+                  'will not match tripDate. Convert to America/Los_Angeles before showing a clock time.',
+              ),
+            arrivalTime: z
+              .string()
+              .optional()
+              .describe(
+                'Scheduled arrival time (ISO 8601, UTC), on the same terms as departureTime. ' +
+                  'Absent on the routes WSF publishes no arrival time for.',
+              ),
             vesselName: z.string().optional().describe('Vessel assigned to this sailing.'),
           })
           .describe('One scheduled sailing with departure time and vessel assignment.'),

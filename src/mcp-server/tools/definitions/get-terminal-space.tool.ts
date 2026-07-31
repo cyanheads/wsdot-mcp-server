@@ -229,26 +229,60 @@ export const getTerminalSpace = tool('wsdot_get_terminal_space', {
         lines.push('No upcoming sailings.');
       } else {
         for (const s of t.departingSpaces) {
-          const cancelled = s.isCancelled ? ' [CANCELLED]' : '';
+          /**
+           * Every sailing WSF publishes carries an explicit cancellation flag, so rendering
+           * only the `true` case leaves `content[]` silent about a status `structuredContent`
+           * states outright.
+           */
+          const cancelled =
+            s.isCancelled === true
+              ? ' [CANCELLED]'
+              : s.isCancelled === false
+                ? ' [not cancelled]'
+                : '';
           const itinerary = s.itineraryLabel ? ` → ${s.itineraryLabel}` : '';
           const vessel = s.vesselName ? ` | ${s.vesselName}` : '';
           lines.push(`**${s.departure ?? 'Unknown'}**${itinerary}${vessel}${cancelled}`);
-          if (s.arrivingTerminalIds?.length) {
-            lines.push(`  arrivingTerminalIds: ${s.arrivingTerminalIds.join(', ')}`);
+          if (s.arrivingTerminalIds) {
+            lines.push(
+              s.arrivingTerminalIds.length > 0
+                ? `  arrivingTerminalIds: ${s.arrivingTerminalIds.join(', ')}`
+                : '  arrivingTerminalIds: none listed',
+            );
           }
+          /**
+           * The display flag and the count it describes are independently optional: nothing
+           * upstream guarantees a cleared flag comes with a null count, so each is rendered on
+           * its own terms rather than one gating the other. A set flag rides the count line
+           * below when there is one; without a count it has nothing else to carry it.
+           */
           if (s.displayDriveUpSpace === false) {
             lines.push('  Drive-up: not reported for this sailing (displayDriveUpSpace: false)');
-          } else if (s.driveUpSpaceCount != null) {
+          } else if (s.displayDriveUpSpace === true && s.driveUpSpaceCount == null) {
+            lines.push(
+              '  Drive-up: reported for this sailing, count absent (displayDriveUpSpace: true)',
+            );
+          }
+          if (s.driveUpSpaceCount != null) {
             const full = s.driveUpSpaceCount <= 0 ? ' (FULL)' : '';
             lines.push(
               `  Drive-up: ${s.driveUpSpaceCount}${s.maxSpaceCount != null ? `/${s.maxSpaceCount}` : ''} spaces${full}`,
             );
+          } else if (s.maxSpaceCount != null) {
+            // Capacity otherwise rides the drive-up line, so a sailing reporting capacity with
+            // no drive-up count (an empty SpaceForArrivalTerminals) would drop it from content[].
+            lines.push(`  Capacity: ${s.maxSpaceCount} spaces`);
           }
           if (s.displayReservableSpace === false) {
             lines.push(
               '  Reservable: no reservations on this sailing (displayReservableSpace: false)',
             );
-          } else if (s.reservableSpaceCount != null) {
+          } else if (s.displayReservableSpace === true && s.reservableSpaceCount == null) {
+            lines.push(
+              '  Reservable: reservations taken on this sailing, count absent (displayReservableSpace: true)',
+            );
+          }
+          if (s.reservableSpaceCount != null) {
             const full = s.reservableSpaceCount <= 0 ? ' (FULL)' : '';
             lines.push(`  Reservable: ${s.reservableSpaceCount} spaces${full}`);
           }

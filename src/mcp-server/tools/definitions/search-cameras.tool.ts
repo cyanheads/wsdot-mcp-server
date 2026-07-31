@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { coordinatePair } from '@/mcp-server/tools/coordinate-pair.js';
 import { byIdThenContent } from '@/services/traffic/stable-order.js';
 import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
 
@@ -208,20 +209,23 @@ export const searchCameras = tool('wsdot_search_cameras', {
     for (const c of result.cameras) {
       lines.push(`### ${c.title ?? `Camera ${c.cameraId ?? ''}`}`);
       if (c.description) lines.push(c.description);
-      if (c.roadName) {
-        const loc = [c.roadName, c.direction, c.milePost != null ? `MP ${c.milePost}` : undefined]
-          .filter(Boolean)
-          .join(' ');
-        lines.push(`**Location:** ${loc}`);
-      }
+      // Direction and milepost stand on their own — gating the whole line on roadName drops
+      // them from content[] for a camera that reports a position but no road name.
+      const loc = [c.roadName, c.direction, c.milePost != null ? `MP ${c.milePost}` : undefined]
+        .filter(Boolean)
+        .join(' ');
+      if (loc) lines.push(`**Location:** ${loc}`);
       if (c.region) lines.push(`**Region:** ${c.region}`);
       if (c.imageUrl) lines.push(`**Image:** ${c.imageUrl}`);
       if (c.imageWidth != null && c.imageHeight != null) {
         lines.push(`**Size:** ${c.imageWidth}×${c.imageHeight}px`);
+      } else if (c.imageWidth != null) {
+        lines.push(`**Size:** ${c.imageWidth}px wide (height not reported)`);
+      } else if (c.imageHeight != null) {
+        lines.push(`**Size:** ${c.imageHeight}px tall (width not reported)`);
       }
-      if (c.latitude != null && c.longitude != null) {
-        lines.push(`**Coords:** ${c.latitude}, ${c.longitude}`);
-      }
+      const coords = coordinatePair(c.latitude, c.longitude);
+      if (coords) lines.push(`**Coords:** ${coords}`);
       if (c.cameraId != null) lines.push(`**ID:** ${c.cameraId}`);
       lines.push('');
     }

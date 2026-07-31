@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { coordinatePair } from '@/mcp-server/tools/coordinate-pair.js';
 import { getFerryApiService } from '@/services/ferry/ferry-service.js';
 
 export const getFerryTerminals = tool('wsdot_get_ferry_terminals', {
@@ -13,7 +14,7 @@ export const getFerryTerminals = tool('wsdot_get_ferry_terminals', {
     'Returns all WSF ferry terminals with their numeric IDs, names, and abbreviations. ' +
     'Call this first to resolve human-readable terminal names (e.g. "Bainbridge Island", ' +
     '"Seattle", "Kingston") to the numeric terminal IDs required by the schedule and space tools. ' +
-    'The terminal list is small (~22 terminals) and rarely changes.',
+    'The terminal list is small (20 terminals) and rarely changes.',
   annotations: { readOnlyHint: true },
   input: z.object({}),
   output: z.object({
@@ -82,9 +83,10 @@ export const getFerryTerminals = tool('wsdot_get_ferry_terminals', {
     const lines: string[] = [];
     for (const t of result.terminals) {
       const abbrev = t.terminalAbbrev ? ` (${t.terminalAbbrev})` : '';
-      const coords =
-        t.latitude != null && t.longitude != null ? ` | ${t.latitude}, ${t.longitude}` : '';
-      lines.push(`- **${t.terminalName}**${abbrev} — ID: ${t.terminalId}${coords}`);
+      const pair = coordinatePair(t.latitude, t.longitude);
+      lines.push(
+        `- **${t.terminalName}**${abbrev} — ID: ${t.terminalId}${pair ? ` | ${pair}` : ''}`,
+      );
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },

@@ -5,13 +5,14 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { coordinatePair } from '@/mcp-server/tools/coordinate-pair.js';
 import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
 
 export const getMountainPasses = tool('wsdot_get_mountain_passes', {
   title: 'Get Mountain Pass Conditions',
   description:
     'Returns current road conditions for all Washington State mountain passes: status, weather, ' +
-    'road condition, traction laws, temperature, and elevation. Includes all ~12 passes ' +
+    'road condition, traction laws, temperature, and elevation. Includes all 16 passes ' +
     '(Snoqualmie, Stevens, White, Blewett, Cayuse, etc.). Use for "is the pass open?", ' +
     'traction law status, or winter driving planning.',
   annotations: { readOnlyHint: true },
@@ -161,9 +162,8 @@ export const getMountainPasses = tool('wsdot_get_mountain_passes', {
       }
       if (p.dateUpdated) lines.push(`**Updated:** ${p.dateUpdated}`);
       lines.push(`**ID:** ${p.mountainPassId}`);
-      if (p.latitude != null && p.longitude != null) {
-        lines.push(`**Coords:** ${p.latitude}, ${p.longitude}`);
-      }
+      const coords = coordinatePair(p.latitude, p.longitude);
+      if (coords) lines.push(`**Coords:** ${coords}`);
       lines.push('');
     }
     return [{ type: 'text', text: lines.join('\n') }];

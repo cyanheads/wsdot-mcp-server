@@ -5,18 +5,34 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { coordinatePair } from '@/mcp-server/tools/coordinate-pair.js';
 import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 500;
 
+/**
+ * Washington's Interstate route numbers. The feed reports a bare, zero-padded route number with
+ * no route type, so a blanket "SR" prefix mislabels I-405; every other number the feed carries
+ * is a state route.
+ */
+const INTERSTATE_ROUTE_NUMBERS = new Set(['5', '82', '90', '182', '205', '405', '705']);
+
+/** Turns an upstream route number ("099", "405") into its posted designation ("SR 99", "I-405"). */
+function routeDesignation(stateRoute: string): string {
+  const number = stateRoute.replace(/^0+(?=\d)/, '');
+  return INTERSTATE_ROUTE_NUMBERS.has(number) ? `I-${number}` : `SR ${number}`;
+}
+
 export const getTollRates = tool('wsdot_get_toll_rates', {
   title: 'Get Toll Rates',
   description:
     'Returns current dynamic toll rates for WA express lanes and tolled facilities: SR 99 (WSDOT Tunnel), ' +
-    'SR 520 Bridge, I-405 Express Lanes, I-90 Two-Way Express Lanes, and SR 167 HOT Lanes. ' +
+    'SR 167 HOT Lanes, I-405 Express Lanes, SR 509 tolled segment, and the SR 520 Bridge. ' +
     'Rates are time-banded and change dynamically based on traffic conditions. ' +
-    'Results are paged — pass offset/limit to page through the full set (the notice reports the next offset).',
+    'stateRoute is a bare, zero-padded route number ("099", "405") — the posted designation is in ' +
+    'the rendered text. Results are paged — pass offset/limit to page through the full set ' +
+    '(the notice reports the next offset).',
   annotations: { readOnlyHint: true },
   input: z.object({
     offset: z
@@ -148,22 +164,24 @@ export const getTollRates = tool('wsdot_get_toll_rates', {
     }
     const lines: string[] = [];
     for (const r of result.rates) {
-      const name = r.tripName ?? 'Toll segment';
-      lines.push(`### ${name}`);
-      if (r.stateRoute) lines.push(`**Route:** SR ${r.stateRoute}`);
+      // tripName is an opaque upstream key ("099tp03268"); the endpoint names read as a segment,
+      // so they lead. A segment whose ends carry the same name collapses to one.
+      const ends = [r.startLocationName, r.endLocationName].filter(Boolean);
+      const segment = [...new Set(ends)].join(' → ');
+      lines.push(`### ${segment || r.tripName || 'Toll segment'}`);
+      if (r.tripName) lines.push(`**Trip:** ${r.tripName}`);
+      if (r.stateRoute) lines.push(`**Route:** ${routeDesignation(r.stateRoute)}`);
       if (r.travelDirection) lines.push(`**Direction:** ${r.travelDirection}`);
-      if (r.startLocationName || r.endLocationName) {
-        const seg = [r.startLocationName, r.endLocationName].filter(Boolean).join(' → ');
-        lines.push(`**Segment:** ${seg}`);
-      }
+      if (r.startLocationName) lines.push(`**From:** ${r.startLocationName}`);
+      if (r.endLocationName) lines.push(`**To:** ${r.endLocationName}`);
       if (r.startMilepost != null) lines.push(`**Start MP:** ${r.startMilepost}`);
       if (r.endMilepost != null) lines.push(`**End MP:** ${r.endMilepost}`);
       if (r.tollRateInDollars != null) lines.push(`**Rate:** $${r.tollRateInDollars.toFixed(2)}`);
       if (r.message) lines.push(`**Message:** ${r.message}`);
-      if (r.startLatitude != null && r.startLongitude != null)
-        lines.push(`**Start Coords:** ${r.startLatitude}, ${r.startLongitude}`);
-      if (r.endLatitude != null && r.endLongitude != null)
-        lines.push(`**End Coords:** ${r.endLatitude}, ${r.endLongitude}`);
+      const startCoords = coordinatePair(r.startLatitude, r.startLongitude);
+      if (startCoords) lines.push(`**Start Coords:** ${startCoords}`);
+      const endCoords = coordinatePair(r.endLatitude, r.endLongitude);
+      if (endCoords) lines.push(`**End Coords:** ${endCoords}`);
       if (r.timeUpdated) lines.push(`**Updated:** ${r.timeUpdated}`);
       lines.push('');
     }

@@ -20,6 +20,8 @@ vi.mock('@cyanheads/mcp-ts-core/utils', () => ({
 
 import { getFerryTerminals } from '@/mcp-server/tools/definitions/get-ferry-terminals.tool.js';
 import { FerryApiService } from '@/services/ferry/ferry-service.js';
+import { nth } from '../helpers/assertions.js';
+import { toolContext } from '../helpers/tool-context.js';
 
 /**
  * Obviously-fake stand-in for the credential. It matches the value returned by the mocked
@@ -139,11 +141,11 @@ describe('FerryApiService.getTerminals', () => {
     const terminals = await svc.getTerminals(ctx);
 
     expect(terminals).toHaveLength(1);
-    expect(terminals[0].terminalId).toBe(3);
-    expect(terminals[0].terminalName).toBe('Bainbridge Island');
-    expect(terminals[0].terminalAbbrev).toBe('BI');
-    expect(terminals[0].latitude).toBe(47.6237);
-    expect(terminals[0].longitude).toBe(-122.5112);
+    expect(nth(terminals).terminalId).toBe(3);
+    expect(nth(terminals).terminalName).toBe('Bainbridge Island');
+    expect(nth(terminals).terminalAbbrev).toBe('BI');
+    expect(nth(terminals).latitude).toBe(47.6237);
+    expect(nth(terminals).longitude).toBe(-122.5112);
   });
 
   it('omits optional fields when raw values are null', async () => {
@@ -159,7 +161,7 @@ describe('FerryApiService.getTerminals', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const terminals = await svc.getTerminals(ctx);
-    const t = terminals[0];
+    const t = nth(terminals);
     expect(t.terminalId).toBe(7);
     expect(t.terminalName).toBe('Seattle');
     expect('terminalAbbrev' in t).toBe(false);
@@ -172,8 +174,8 @@ describe('FerryApiService.getTerminals', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const terminals = await svc.getTerminals(ctx);
-    expect(terminals[0].terminalId).toBe(0);
-    expect(terminals[0].terminalName).toBe('Unknown');
+    expect(nth(terminals).terminalId).toBe(0);
+    expect(nth(terminals).terminalName).toBe('Unknown');
   });
 
   it('returns empty array when API returns []', async () => {
@@ -212,9 +214,9 @@ describe('FerryApiService.getRoutes', () => {
     const routes = await svc.getRoutes('2026-05-23', ctx);
 
     expect(routes).toHaveLength(1);
-    expect(routes[0].routeId).toBe(1);
-    expect(routes[0].routeAbbrev).toBe('SEA-BI');
-    expect(routes[0].description).toBe('Seattle/Bainbridge Island');
+    expect(nth(routes).routeId).toBe(1);
+    expect(nth(routes).routeAbbrev).toBe('SEA-BI');
+    expect(nth(routes).description).toBe('Seattle/Bainbridge Island');
   });
 
   it('omits optional fields when raw values are null', async () => {
@@ -222,16 +224,16 @@ describe('FerryApiService.getRoutes', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const routes = await svc.getRoutes('2026-05-23', ctx);
-    expect('routeId' in routes[0]).toBe(false);
-    expect('routeAbbrev' in routes[0]).toBe(false);
-    expect('description' in routes[0]).toBe(false);
+    expect('routeId' in nth(routes)).toBe(false);
+    expect('routeAbbrev' in nth(routes)).toBe(false);
+    expect('description' in nth(routes)).toBe(false);
   });
 
   it('includes the trip date in the request URL', async () => {
     mockFetch.mockResolvedValue(makeResponse([]));
     const ctx = createMockContext();
     await svc.getRoutes('2026-05-23', ctx);
-    const url: string = mockFetch.mock.calls[0][0] as string;
+    const url: string = nth(mockFetch.mock.calls)[0] as string;
     expect(url).toContain('2026-05-23');
   });
 });
@@ -271,7 +273,7 @@ describe('FerryApiService.getSchedule', () => {
     const ctx = createMockContext();
     const today = FerryApiService.todayFerryDate();
     await svc.getSchedule(7, 3, today, false, ctx);
-    const url: string = mockFetch.mock.calls[0][0] as string;
+    const url: string = nth(mockFetch.mock.calls)[0] as string;
     expect(url).toContain('scheduletoday');
   });
 
@@ -279,7 +281,7 @@ describe('FerryApiService.getSchedule', () => {
     mockFetch.mockResolvedValue(makeResponse(scheduleRaw));
     const ctx = createMockContext();
     await svc.getSchedule(7, 3, '2027-01-01', false, ctx);
-    const url: string = mockFetch.mock.calls[0][0] as string;
+    const url: string = nth(mockFetch.mock.calls)[0] as string;
     expect(url).toContain('/schedule/2027-01-01/');
   });
 
@@ -288,7 +290,7 @@ describe('FerryApiService.getSchedule', () => {
     const ctx = createMockContext();
     const today = FerryApiService.todayFerryDate();
     await svc.getSchedule(7, 3, today, true, ctx);
-    const url: string = mockFetch.mock.calls[0][0] as string;
+    const url: string = nth(mockFetch.mock.calls)[0] as string;
     expect(url).toContain('scheduletoday/7/3/true');
   });
 
@@ -296,7 +298,7 @@ describe('FerryApiService.getSchedule', () => {
     mockFetch.mockResolvedValue(makeResponse(scheduleRaw));
     const ctx = createMockContext();
     await svc.getSchedule(7, 3, '2027-01-01', true, ctx);
-    const url: string = mockFetch.mock.calls[0][0] as string;
+    const url: string = nth(mockFetch.mock.calls)[0] as string;
     expect(url).toContain('/schedule/2027-01-01/');
     expect(url).not.toContain('scheduletoday');
   });
@@ -305,7 +307,7 @@ describe('FerryApiService.getSchedule', () => {
     mockFetch.mockResolvedValue(makeResponse(scheduleRaw));
     const ctx = createMockContext();
     await svc.getSchedule(7, 3, '2027-01-01', false, ctx);
-    const url: string = mockFetch.mock.calls[0][0] as string;
+    const url: string = nth(mockFetch.mock.calls)[0] as string;
     expect(url).toContain('7');
     expect(url).toContain('3');
   });
@@ -322,8 +324,8 @@ describe('FerryApiService.getSchedule', () => {
     mockFetch.mockResolvedValue(makeResponse(scheduleRaw));
     const ctx = createMockContext();
     const schedule = await svc.getSchedule(7, 3, '2026-05-23', false, ctx);
-    expect(schedule.sailings[0].departureTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-    expect(schedule.sailings[0].arrivalTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(nth(schedule.sailings).departureTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(nth(schedule.sailings).arrivalTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   it('returns empty sailings array when TerminalCombos is empty', async () => {
@@ -364,8 +366,8 @@ describe('FerryApiService.getSchedule', () => {
     const ctx = createMockContext();
     const schedule = await svc.getSchedule(7, 3, '2026-05-23', false, ctx);
     expect(schedule.sailings).toHaveLength(1);
-    expect('isCancelled' in schedule.sailings[0]).toBe(false);
-    expect(schedule.sailings[0].vesselName).toBe('Yakima');
+    expect('isCancelled' in nth(schedule.sailings)).toBe(false);
+    expect(nth(schedule.sailings).vesselName).toBe('Yakima');
   });
 });
 
@@ -410,7 +412,7 @@ describe('FerryApiService.getVesselLocations', () => {
     const vessels = await svc.getVesselLocations(ctx);
 
     expect(vessels).toHaveLength(1);
-    const v = vessels[0];
+    const v = nth(vessels);
     expect(v.vesselId).toBe(20);
     expect(v.vesselName).toBe('Yakima');
     expect(v.inService).toBe(true);
@@ -428,7 +430,7 @@ describe('FerryApiService.getVesselLocations', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const vessels = await svc.getVesselLocations(ctx);
-    expect(vessels[0].opRouteAbbrev).toEqual([]);
+    expect(nth(vessels).opRouteAbbrev).toEqual([]);
   });
 
   it('omits boolean fields when raw values are null', async () => {
@@ -438,8 +440,8 @@ describe('FerryApiService.getVesselLocations', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const vessels = await svc.getVesselLocations(ctx);
-    expect('inService' in vessels[0]).toBe(false);
-    expect('atDock' in vessels[0]).toBe(false);
+    expect('inService' in nth(vessels)).toBe(false);
+    expect('atDock' in nth(vessels)).toBe(false);
   });
 
   it('omits date fields when the WCF value is the .NET MinValue sentinel', async () => {
@@ -454,7 +456,7 @@ describe('FerryApiService.getVesselLocations', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const vessels = await svc.getVesselLocations(ctx);
-    expect('leftDock' in vessels[0]).toBe(false);
+    expect('leftDock' in nth(vessels)).toBe(false);
   });
 });
 
@@ -514,16 +516,16 @@ describe('FerryApiService.getTerminalSailingSpace', () => {
     const spaces = await svc.getTerminalSailingSpace(ctx);
 
     expect(spaces).toHaveLength(1);
-    expect(spaces[0].terminalId).toBe(7);
+    expect(nth(spaces).terminalId).toBe(7);
     // One entry per arrival terminal
-    expect(spaces[0].departingSpaces).toHaveLength(2);
-    expect(spaces[0].departingSpaces[0].itineraryLabel).toBe('Bainbridge Island');
-    expect(spaces[0].departingSpaces[0].arrivingTerminalIds).toEqual([3]);
-    expect(spaces[0].departingSpaces[0].displayReservableSpace).toBe(true);
-    expect(spaces[0].departingSpaces[0].driveUpSpaceCount).toBe(50);
-    expect(spaces[0].departingSpaces[1].itineraryLabel).toBe('Kingston');
-    expect(spaces[0].departingSpaces[1].arrivingTerminalIds).toEqual([12]);
-    expect(spaces[0].departingSpaces[1].displayReservableSpace).toBe(false);
+    expect(nth(spaces).departingSpaces).toHaveLength(2);
+    expect(nth(nth(spaces).departingSpaces).itineraryLabel).toBe('Bainbridge Island');
+    expect(nth(nth(spaces).departingSpaces).arrivingTerminalIds).toEqual([3]);
+    expect(nth(nth(spaces).departingSpaces).displayReservableSpace).toBe(true);
+    expect(nth(nth(spaces).departingSpaces).driveUpSpaceCount).toBe(50);
+    expect(nth(nth(spaces).departingSpaces, 1).itineraryLabel).toBe('Kingston');
+    expect(nth(nth(spaces).departingSpaces, 1).arrivingTerminalIds).toEqual([12]);
+    expect(nth(nth(spaces).departingSpaces, 1).displayReservableSpace).toBe(false);
   });
 
   it('derives destinations from ArrivalTerminalIDs on a multi-stop itinerary', async () => {
@@ -560,15 +562,15 @@ describe('FerryApiService.getTerminalSailingSpace', () => {
     const ctx = createMockContext();
     const spaces = await svc.getTerminalSailingSpace(ctx);
 
-    const rows = spaces[0].departingSpaces;
+    const rows = nth(spaces).departingSpaces;
     expect(rows).toHaveLength(2);
     // The departing terminal's ID never leaks into the destinations.
-    expect(rows[0].arrivingTerminalIds).toEqual([15, 18, 13]);
-    expect(rows[1].arrivingTerminalIds).toEqual([15, 18]);
+    expect(nth(rows).arrivingTerminalIds).toEqual([15, 18, 13]);
+    expect(nth(rows, 1).arrivingTerminalIds).toEqual([15, 18]);
     // The shared itinerary string is kept, but labelled as such rather than as a terminal name.
-    expect(rows[0].itineraryLabel).toBe('Anacortes -> Orcas Island -> Shaw Island -> Anacortes');
-    expect(rows[0].itineraryLabel).toBe(rows[1].itineraryLabel);
-    expect('arrivingTerminalName' in rows[0]).toBe(false);
+    expect(nth(rows).itineraryLabel).toBe('Anacortes -> Orcas Island -> Shaw Island -> Anacortes');
+    expect(nth(rows).itineraryLabel).toBe(nth(rows, 1).itineraryLabel);
+    expect('arrivingTerminalName' in nth(rows)).toBe(false);
   });
 
   it('omits arrivingTerminalIds when upstream sends no arrival terminal IDs', async () => {
@@ -591,10 +593,10 @@ describe('FerryApiService.getTerminalSailingSpace', () => {
     const ctx = createMockContext();
     const spaces = await svc.getTerminalSailingSpace(ctx);
 
-    const rows = spaces[0].departingSpaces;
+    const rows = nth(spaces).departingSpaces;
     expect(rows).toHaveLength(2);
-    expect('arrivingTerminalIds' in rows[0]).toBe(false);
-    expect('arrivingTerminalIds' in rows[1]).toBe(false);
+    expect('arrivingTerminalIds' in nth(rows)).toBe(false);
+    expect('arrivingTerminalIds' in nth(rows, 1)).toBe(false);
   });
 
   it('floors negative space counts to zero', async () => {
@@ -625,7 +627,7 @@ describe('FerryApiService.getTerminalSailingSpace', () => {
     const ctx = createMockContext();
     const spaces = await svc.getTerminalSailingSpace(ctx);
 
-    const row = spaces[0].departingSpaces[0];
+    const row = nth(nth(spaces).departingSpaces);
     expect(row.driveUpSpaceCount).toBe(0);
     expect(row.reservableSpaceCount).toBe(0);
     expect(row.maxSpaceCount).toBe(139);
@@ -655,7 +657,7 @@ describe('FerryApiService.getTerminalSailingSpace', () => {
     const ctx = createMockContext();
     const spaces = await svc.getTerminalSailingSpace(ctx);
 
-    const row = spaces[0].departingSpaces[0];
+    const row = nth(nth(spaces).departingSpaces);
     expect(row.driveUpSpaceCount).toBe(0);
     expect(row.reservableSpaceCount).toBe(42);
   });
@@ -683,10 +685,10 @@ describe('FerryApiService.getTerminalSailingSpace', () => {
     const ctx = createMockContext();
     const spaces = await svc.getTerminalSailingSpace(ctx);
 
-    const rows = spaces[0].departingSpaces;
+    const rows = nth(spaces).departingSpaces;
     expect(rows).toHaveLength(2);
-    expect(rows[0].isCancelled).toBe(true);
-    expect(rows[1].isCancelled).toBe(true);
+    expect(nth(rows).isCancelled).toBe(true);
+    expect(nth(rows, 1).isCancelled).toBe(true);
   });
 
   it('emits a single row with vessel info when SpaceForArrivalTerminals is empty', async () => {
@@ -707,10 +709,10 @@ describe('FerryApiService.getTerminalSailingSpace', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const spaces = await svc.getTerminalSailingSpace(ctx);
-    expect(spaces[0].departingSpaces).toHaveLength(1);
-    expect(spaces[0].departingSpaces[0].vesselName).toBe('Yakima');
-    expect('itineraryLabel' in spaces[0].departingSpaces[0]).toBe(false);
-    expect('arrivingTerminalIds' in spaces[0].departingSpaces[0]).toBe(false);
+    expect(nth(spaces).departingSpaces).toHaveLength(1);
+    expect(nth(nth(spaces).departingSpaces).vesselName).toBe('Yakima');
+    expect('itineraryLabel' in nth(nth(spaces).departingSpaces)).toBe(false);
+    expect('arrivingTerminalIds' in nth(nth(spaces).departingSpaces)).toBe(false);
   });
 
   it('decodes WCF dates in departure times', async () => {
@@ -729,7 +731,7 @@ describe('FerryApiService.getTerminalSailingSpace', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const spaces = await svc.getTerminalSailingSpace(ctx);
-    expect(spaces[0].departingSpaces[0].departure).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(nth(nth(spaces).departingSpaces).departure).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   it('returns empty departingSpaces array when DepartingSpaces is null', async () => {
@@ -737,7 +739,7 @@ describe('FerryApiService.getTerminalSailingSpace', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const spaces = await svc.getTerminalSailingSpace(ctx);
-    expect(spaces[0].departingSpaces).toHaveLength(0);
+    expect(nth(spaces).departingSpaces).toHaveLength(0);
   });
 });
 
@@ -768,10 +770,10 @@ describe('FerryApiService.getAlerts', () => {
     const ctx = createMockContext();
     const alerts = await svc.getAlerts(ctx);
 
-    expect(alerts[0].alertId).toBe(201);
-    expect(alerts[0].alertDescription).toBe('Vessel out of service.');
-    expect(alerts[0].impactedRouteIds).toEqual([1, 2]);
-    expect(alerts[0].publishDate).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(nth(alerts).alertId).toBe(201);
+    expect(nth(alerts).alertDescription).toBe('Vessel out of service.');
+    expect(nth(alerts).impactedRouteIds).toEqual([1, 2]);
+    expect(nth(alerts).publishDate).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   it('falls back to AlertFullTitle when RouteAlertText is absent', async () => {
@@ -786,7 +788,7 @@ describe('FerryApiService.getAlerts', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const alerts = await svc.getAlerts(ctx);
-    expect(alerts[0].alertDescription).toBe('Maintenance Notice');
+    expect(nth(alerts).alertDescription).toBe('Maintenance Notice');
   });
 
   it('impactedRouteIds defaults to [] when AffectedRouteIDs is null', async () => {
@@ -794,7 +796,7 @@ describe('FerryApiService.getAlerts', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const alerts = await svc.getAlerts(ctx);
-    expect(alerts[0].impactedRouteIds).toEqual([]);
+    expect(nth(alerts).impactedRouteIds).toEqual([]);
   });
 
   it('maps the title, type, and all-routes flag alongside the summary', async () => {
@@ -809,7 +811,7 @@ describe('FerryApiService.getAlerts', () => {
       },
     ];
     mockFetch.mockResolvedValue(makeResponse(raw));
-    const [a] = await svc.getAlerts(createMockContext());
+    const a = nth(await svc.getAlerts(createMockContext()));
 
     expect(a.alertTitle).toBe('Edm/King - First vessel #2 roundtrip cancelled on Sunday, July 26');
     expect(a.alertDescription).toBe('Edm/King - First #2 roundtrip cancelled on Sunday, 7/26.');
@@ -830,7 +832,7 @@ describe('FerryApiService.getAlerts', () => {
       },
     ];
     mockFetch.mockResolvedValue(makeResponse(raw));
-    const [a] = await svc.getAlerts(createMockContext());
+    const a = nth(await svc.getAlerts(createMockContext()));
 
     expect(a.bulletinText).toBe(
       'Due to crew hold overs, the 7:00 a.m. from Kingston is cancelled.\n' +
@@ -853,7 +855,7 @@ describe('FerryApiService.getAlerts', () => {
       },
     ];
     mockFetch.mockResolvedValue(makeResponse(raw));
-    const [a] = await svc.getAlerts(createMockContext());
+    const a = nth(await svc.getAlerts(createMockContext()));
     expect(a.bulletinText).toBe('Follow the signal.\nTake a pass.');
     expect(a.bulletinText).not.toContain('data-ccp-props');
     expect(a.bulletinText).not.toContain('&quot;');
@@ -878,7 +880,9 @@ describe('FerryApiService.getAlerts', () => {
       },
     ];
     mockFetch.mockResolvedValue(makeResponse(raw));
-    const [fleetWide, local] = await svc.getAlerts(createMockContext());
+    const alerts = await svc.getAlerts(createMockContext());
+    const fleetWide = nth(alerts);
+    const local = nth(alerts, 1);
 
     expect(fleetWide.affectsAllRoutes).toBe(true);
     expect(fleetWide.impactedRouteIds).toEqual([]);
@@ -898,7 +902,7 @@ describe('FerryApiService.getAlerts', () => {
       },
     ];
     mockFetch.mockResolvedValue(makeResponse(raw));
-    const [a] = await svc.getAlerts(createMockContext());
+    const a = nth(await svc.getAlerts(createMockContext()));
     expect('alertTitle' in a).toBe(false);
     expect('bulletinText' in a).toBe(false);
     expect('alertType' in a).toBe(false);
@@ -909,7 +913,7 @@ describe('FerryApiService.getAlerts', () => {
   it('omits bulletinText when the body carries only markup', async () => {
     const raw = [{ BulletinID: 205, RouteAlertText: 'Summary.', BulletinText: '<p></p><br />' }];
     mockFetch.mockResolvedValue(makeResponse(raw));
-    const [a] = await svc.getAlerts(createMockContext());
+    const a = nth(await svc.getAlerts(createMockContext()));
     expect('bulletinText' in a).toBe(false);
   });
 
@@ -950,7 +954,7 @@ describe('FerryApiService — HTTP error handling', () => {
 
   it('resolves the api_unavailable contract on a non-2xx (reason + recovery hint)', async () => {
     mockFetch.mockResolvedValue(makeResponse('Service Unavailable', 503, 'text/plain'));
-    const ctx = createMockContext({ errors: getFerryTerminals.errors });
+    const ctx = toolContext(getFerryTerminals);
     const err = await svc.getTerminals(ctx).catch((e) => e);
     expect(err).toBeInstanceOf(McpError);
     expect((err as McpError).code).toBe(JsonRpcErrorCode.ServiceUnavailable);
@@ -964,7 +968,7 @@ describe('FerryApiService — HTTP error handling', () => {
   it('reads the WSF explanation on a 400 from an unregistered access code', async () => {
     // Before the fix the status check threw first and this body was discarded unread.
     mockFetch.mockResolvedValue(makeResponse(UNREGISTERED_CODE_BODY, 400));
-    const ctx = createMockContext({ errors: getFerryTerminals.errors });
+    const ctx = toolContext(getFerryTerminals);
     const err = await svc.getTerminals(ctx).catch((e) => e);
     expect((err as McpError).code).toBe(JsonRpcErrorCode.ConfigurationError);
     expect((err as McpError).message).toContain('WSDOT_ACCESS_CODE');
@@ -1038,7 +1042,7 @@ describe('FerryApiService — HTTP error handling', () => {
     mockFetch.mockResolvedValue(makeResponse([]));
     const ctx = createMockContext();
     await svc.getTerminals(ctx);
-    const url: string = mockFetch.mock.calls[0][0] as string;
+    const url: string = nth(mockFetch.mock.calls)[0] as string;
     expect(url).toContain('apiaccesscode=test-access-code');
   });
 
@@ -1046,7 +1050,7 @@ describe('FerryApiService — HTTP error handling', () => {
     mockFetch.mockResolvedValue(makeResponse([]));
     const ctx = createMockContext();
     await svc.getTerminals(ctx);
-    const url: string = mockFetch.mock.calls[0][0] as string;
+    const url: string = nth(mockFetch.mock.calls)[0] as string;
     expect(url).toContain('https://www.wsdot.wa.gov/Ferries/API');
   });
 });

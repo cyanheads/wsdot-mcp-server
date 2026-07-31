@@ -111,16 +111,22 @@ export const getFerryAlerts = tool('wsdot_get_ferry_alerts', {
       if (a.alertType) lines.push(`**Type:** ${a.alertType}`);
       if (a.alertDescription) lines.push(a.alertDescription);
       if (a.bulletinText) lines.push(a.bulletinText);
-      if (a.impactedRouteIds.length > 0) {
-        lines.push(
-          `**Impacted Route IDs:** ${a.impactedRouteIds.join(', ')} (use wsdot_get_ferry_routes to look up names)`,
-        );
-      }
-      // An alert with no route IDs is ambiguous on its own — say which of the two it is.
-      if (a.affectsAllRoutes) {
+      lines.push(
+        a.impactedRouteIds.length > 0
+          ? `**Impacted Route IDs:** ${a.impactedRouteIds.join(', ')} (use wsdot_get_ferry_routes to look up names)`
+          : '**Impacted Route IDs:** none listed',
+      );
+      // An alert with no route IDs is ambiguous on its own — say which of the two it is. The
+      // flag is rendered whenever upstream states it, since "not fleet-wide" is as much a fact
+      // as "fleet-wide" and structuredContent carries both.
+      if (a.affectsAllRoutes === true) {
         lines.push('**Impacted Routes:** all routes — this alert affects the whole fleet.');
-      } else if (a.affectsAllRoutes === false && a.impactedRouteIds.length === 0) {
-        lines.push('**Impacted Routes:** none listed — this alert names no specific route.');
+      } else if (a.affectsAllRoutes === false) {
+        lines.push(
+          a.impactedRouteIds.length > 0
+            ? '**Impacted Routes:** not fleet-wide — only the route IDs above (affectsAllRoutes: false).'
+            : '**Impacted Routes:** none listed — this alert names no specific route.',
+        );
       }
       if (a.publishDate) lines.push(`**Published:** ${a.publishDate}`);
       lines.push('');

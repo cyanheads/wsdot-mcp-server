@@ -11,7 +11,7 @@ import {
   McpError,
   serviceUnavailable,
 } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // --- Mocks (hoisted so vi.mock factory runs before imports) ---
@@ -37,7 +37,9 @@ import { getTollRates } from '@/mcp-server/tools/definitions/get-toll-rates.tool
 import { getTravelTimes } from '@/mcp-server/tools/definitions/get-travel-times.tool.js';
 import { searchAlerts } from '@/mcp-server/tools/definitions/search-alerts.tool.js';
 import { searchCameras } from '@/mcp-server/tools/definitions/search-cameras.tool.js';
+import { formattedText, nth, rejection } from '../helpers/assertions.js';
 import { describePaginationContract } from '../helpers/pagination.js';
+import { toolContext } from '../helpers/tool-context.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -81,10 +83,10 @@ describe('traffic tools — upstream failure contract', () => {
         ...c.recoveryFor('api_unavailable'),
       });
     });
-    const ctx = createMockContext({ errors: getMountainPasses.errors });
-    const err = await getMountainPasses
-      .handler(getMountainPasses.input.parse({}), ctx)
-      .catch((e) => e);
+    const ctx = toolContext(getMountainPasses);
+    const err = await rejection(() =>
+      getMountainPasses.handler(getMountainPasses.input.parse({}), ctx),
+    );
     expect(err).toBeInstanceOf(McpError);
     expect((err as McpError).data).toMatchObject({
       reason: 'api_unavailable',
@@ -103,10 +105,10 @@ describe('traffic tools — upstream failure contract', () => {
         },
       );
     });
-    const ctx = createMockContext({ errors: getMountainPasses.errors });
-    const err = await getMountainPasses
-      .handler(getMountainPasses.input.parse({}), ctx)
-      .catch((e) => e);
+    const ctx = toolContext(getMountainPasses);
+    const err = await rejection(() =>
+      getMountainPasses.handler(getMountainPasses.input.parse({}), ctx),
+    );
     expect((err as McpError).code).toBe(JsonRpcErrorCode.ConfigurationError);
     expect((err as McpError).data).toMatchObject({
       reason: 'invalid_access_code',
@@ -136,17 +138,17 @@ describe('getMountainPasses', () => {
 
   it('returns passes from the service', async () => {
     mockService.getMountainPasses.mockResolvedValue([passFixture]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getMountainPasses);
     const input = getMountainPasses.input.parse({});
     const result = await getMountainPasses.handler(input, ctx);
     expect(result.passes).toHaveLength(1);
-    expect(result.passes[0].mountainPassId).toBe(1);
-    expect(result.passes[0].mountainPassName).toBe('Snoqualmie Pass');
+    expect(nth(result.passes).mountainPassId).toBe(1);
+    expect(nth(result.passes).mountainPassName).toBe('Snoqualmie Pass');
   });
 
   it('enriches with totalCount', async () => {
     mockService.getMountainPasses.mockResolvedValue([passFixture]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getMountainPasses);
     const input = getMountainPasses.input.parse({});
     await getMountainPasses.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -156,7 +158,7 @@ describe('getMountainPasses', () => {
 
   it('enriches notice when no passes returned', async () => {
     mockService.getMountainPasses.mockResolvedValue([]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getMountainPasses);
     const input = getMountainPasses.input.parse({});
     const result = await getMountainPasses.handler(input, ctx);
     expect(result.passes).toHaveLength(0);
@@ -170,7 +172,7 @@ describe('getMountainPasses', () => {
       passes: [passFixture],
     };
     const blocks = getMountainPasses.format!(output);
-    expect(blocks[0].type).toBe('text');
+    expect(nth(blocks).type).toBe('text');
     const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('Snoqualmie Pass');
     expect(text).toContain('3022');
@@ -222,16 +224,16 @@ describe('searchAlerts', () => {
 
   it('returns all alerts when no filters provided', async () => {
     mockService.searchAlerts.mockResolvedValue([alertFixture]);
-    const ctx = createMockContext();
+    const ctx = toolContext(searchAlerts);
     const input = searchAlerts.input.parse({});
     const result = await searchAlerts.handler(input, ctx);
     expect(result.alerts).toHaveLength(1);
-    expect(result.alerts[0].alertId).toBe(101);
+    expect(nth(result.alerts).alertId).toBe(101);
   });
 
   it('enriches with totalCount and empty appliedFilters', async () => {
     mockService.searchAlerts.mockResolvedValue([alertFixture]);
-    const ctx = createMockContext();
+    const ctx = toolContext(searchAlerts);
     const input = searchAlerts.input.parse({});
     await searchAlerts.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -244,16 +246,16 @@ describe('searchAlerts', () => {
 
   it('enriches appliedFilters with stateRoute', async () => {
     mockService.searchAlerts.mockResolvedValue([alertFixture]);
-    const ctx = createMockContext();
+    const ctx = toolContext(searchAlerts);
     const input = searchAlerts.input.parse({ stateRoute: '090' });
     await searchAlerts.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
-    expect(enrichment.appliedFilters.stateRoute).toBe('090');
+    expect(enrichment.appliedFilters).toEqual({ stateRoute: '090' });
   });
 
   it('enriches notice on empty results with filters', async () => {
     mockService.searchAlerts.mockResolvedValue([]);
-    const ctx = createMockContext();
+    const ctx = toolContext(searchAlerts);
     const input = searchAlerts.input.parse({ stateRoute: '090' });
     await searchAlerts.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -264,7 +266,7 @@ describe('searchAlerts', () => {
 
   it('enriches notice on empty results with no filters', async () => {
     mockService.searchAlerts.mockResolvedValue([]);
-    const ctx = createMockContext();
+    const ctx = toolContext(searchAlerts);
     const input = searchAlerts.input.parse({});
     await searchAlerts.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -274,7 +276,7 @@ describe('searchAlerts', () => {
 
   it('passes stateRoute filter to service', async () => {
     mockService.searchAlerts.mockResolvedValue([alertFixture]);
-    const ctx = createMockContext();
+    const ctx = toolContext(searchAlerts);
     const input = searchAlerts.input.parse({ stateRoute: '090' });
     await searchAlerts.handler(input, ctx);
     expect(mockService.searchAlerts).toHaveBeenCalledWith(
@@ -285,7 +287,7 @@ describe('searchAlerts', () => {
 
   it('passes region filter to service', async () => {
     mockService.searchAlerts.mockResolvedValue([]);
-    const ctx = createMockContext();
+    const ctx = toolContext(searchAlerts);
     const input = searchAlerts.input.parse({ region: 'Northwest' });
     await searchAlerts.handler(input, ctx);
     expect(mockService.searchAlerts).toHaveBeenCalledWith(
@@ -296,7 +298,7 @@ describe('searchAlerts', () => {
 
   it('strips whitespace-only stateRoute filter', async () => {
     mockService.searchAlerts.mockResolvedValue([]);
-    const ctx = createMockContext();
+    const ctx = toolContext(searchAlerts);
     const input = searchAlerts.input.parse({ stateRoute: '   ' });
     await searchAlerts.handler(input, ctx);
     // whitespace-only stateRoute is treated as absent — service receives no stateRoute key
@@ -365,7 +367,7 @@ describe('searchAlerts — page windows are reproducible across upstream row ord
       mockService.searchAlerts.mockResolvedValue(rows);
       const result = await searchAlerts.handler(
         searchAlerts.input.parse({ offset: 4, limit: 4 }),
-        createMockContext(),
+        toolContext(searchAlerts),
       );
       return result.alerts.map((a) => a.alertId);
     };
@@ -380,7 +382,10 @@ describe('searchAlerts — page windows are reproducible across upstream row ord
       { headlineDescription: 'No ID' },
       ...alerts.slice(0, 2),
     ]);
-    const result = await searchAlerts.handler(searchAlerts.input.parse({}), createMockContext());
+    const result = await searchAlerts.handler(
+      searchAlerts.input.parse({}),
+      toolContext(searchAlerts),
+    );
     expect(result.alerts.map((a) => a.alertId)).toEqual([700_100, 700_101, undefined]);
   });
 
@@ -411,7 +416,7 @@ describe('searchAlerts — page windows are reproducible across upstream row ord
       mockService.searchAlerts.mockResolvedValue(arrival);
       const result = await searchAlerts.handler(
         searchAlerts.input.parse({ offset, limit }),
-        createMockContext(),
+        toolContext(searchAlerts),
       );
       return result.alerts.map((a) => a.headlineDescription);
     };
@@ -437,7 +442,7 @@ describe('searchAlerts — page windows are reproducible across upstream row ord
 
 describePaginationContract({
   tool: searchAlerts,
-  createContext: () => createMockContext(),
+  createContext: () => toolContext(searchAlerts),
   stubRows: (rows) => mockService.searchAlerts.mockResolvedValue(rows),
   makeRows: (count) =>
     Array.from({ length: count }, (_, i) => ({
@@ -472,7 +477,7 @@ describe('getTravelTimes', () => {
 
   it('returns all corridors when no route filter provided', async () => {
     mockService.getTravelTimes.mockResolvedValue([corridorFixture]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTravelTimes);
     const input = getTravelTimes.input.parse({});
     const result = await getTravelTimes.handler(input, ctx);
     expect(result.corridors).toHaveLength(1);
@@ -480,7 +485,7 @@ describe('getTravelTimes', () => {
 
   it('enriches with totalCount and no routeFilter when no filter', async () => {
     mockService.getTravelTimes.mockResolvedValue([corridorFixture]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTravelTimes);
     const input = getTravelTimes.input.parse({});
     await getTravelTimes.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -490,7 +495,7 @@ describe('getTravelTimes', () => {
 
   it('enriches routeFilter when filter is provided', async () => {
     mockService.getTravelTimes.mockResolvedValue([corridorFixture]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTravelTimes);
     const input = getTravelTimes.input.parse({ route: 'I-5' });
     await getTravelTimes.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -499,7 +504,7 @@ describe('getTravelTimes', () => {
 
   it('enriches notice when no corridors matched', async () => {
     mockService.getTravelTimes.mockResolvedValue([corridorFixture]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTravelTimes);
     const input = getTravelTimes.input.parse({ route: 'SR 999' });
     await getTravelTimes.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -510,16 +515,16 @@ describe('getTravelTimes', () => {
   it('filters corridors by route name', async () => {
     const sr520 = { ...corridorFixture, name: 'SR 520 EB: 148th to I-5', travelTimeId: 2 };
     mockService.getTravelTimes.mockResolvedValue([corridorFixture, sr520]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTravelTimes);
     const input = getTravelTimes.input.parse({ route: 'SR 520' });
     const result = await getTravelTimes.handler(input, ctx);
     expect(result.corridors).toHaveLength(1);
-    expect(result.corridors[0].name).toContain('SR 520');
+    expect(nth(result.corridors).name).toContain('SR 520');
   });
 
   it('filter is case-insensitive', async () => {
     mockService.getTravelTimes.mockResolvedValue([corridorFixture]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTravelTimes);
     const input = getTravelTimes.input.parse({ route: 'i-5' });
     const result = await getTravelTimes.handler(input, ctx);
     expect(result.corridors).toHaveLength(1);
@@ -540,7 +545,7 @@ describe('getTravelTimes', () => {
       endPoint: { roadName: 'I-90', direction: 'E', milePost: 17 },
     };
     mockService.getTravelTimes.mockResolvedValue([endpointNamed, offRoute]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTravelTimes);
     const result = await getTravelTimes.handler(getTravelTimes.input.parse({ route: 'I-5' }), ctx);
     expect(result.corridors.map((c) => c.travelTimeId)).toEqual([10]);
   });
@@ -555,7 +560,7 @@ describe('getTravelTimes', () => {
     };
     const other = { travelTimeId: 22, name: 'Tacoma-Federal Way', startPoint: { roadName: '005' } };
     mockService.getTravelTimes.mockResolvedValue([bare, prefixed, other]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTravelTimes);
     const result = await getTravelTimes.handler(
       getTravelTimes.input.parse({ route: 'I-405' }),
       ctx,
@@ -567,7 +572,7 @@ describe('getTravelTimes', () => {
     const sr520 = { travelTimeId: 30, name: 'Redmond-Seattle', endPoint: { roadName: '520' } };
     const notOnRoute = { travelTimeId: 31, name: 'Everett-Seattle', endPoint: { roadName: '005' } };
     mockService.getTravelTimes.mockResolvedValue([sr520, notOnRoute]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTravelTimes);
     const result = await getTravelTimes.handler(
       getTravelTimes.input.parse({ route: 'SR 520' }),
       ctx,
@@ -579,7 +584,7 @@ describe('getTravelTimes', () => {
     const everett = { travelTimeId: 40, name: 'Seattle-Everett', startPoint: { roadName: '005' } };
     const tacoma = { travelTimeId: 41, name: 'Seattle-Tacoma', startPoint: { roadName: '005' } };
     mockService.getTravelTimes.mockResolvedValue([everett, tacoma]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTravelTimes);
     const result = await getTravelTimes.handler(
       getTravelTimes.input.parse({ route: 'Everett' }),
       ctx,
@@ -589,18 +594,18 @@ describe('getTravelTimes', () => {
 
   it('calculates delayInMinutes as current minus average', async () => {
     mockService.getTravelTimes.mockResolvedValue([corridorFixture]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTravelTimes);
     const input = getTravelTimes.input.parse({});
     const result = await getTravelTimes.handler(input, ctx);
-    expect(result.corridors[0].delayInMinutes).toBe(6); // 18 - 12
+    expect(nth(result.corridors).delayInMinutes).toBe(6); // 18 - 12
   });
 
   it('omits delayInMinutes when currentTime or averageTime is missing', async () => {
     mockService.getTravelTimes.mockResolvedValue([{ travelTimeId: 3, name: 'I-405 SB' }]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTravelTimes);
     const input = getTravelTimes.input.parse({});
     const result = await getTravelTimes.handler(input, ctx);
-    expect(result.corridors[0].delayInMinutes).toBeUndefined();
+    expect(nth(result.corridors).delayInMinutes).toBeUndefined();
   });
 
   it('reports no delay and no zero-minute trip for an unmeasured corridor', async () => {
@@ -612,9 +617,9 @@ describe('getTravelTimes', () => {
       startPoint: { roadName: '005', direction: 'S', milePost: 192 },
     };
     mockService.getTravelTimes.mockResolvedValue([unmeasured]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTravelTimes);
     const result = await getTravelTimes.handler(getTravelTimes.input.parse({}), ctx);
-    const corridor = result.corridors[0];
+    const corridor = nth(result.corridors);
     expect(corridor.currentTimeInMinutes).toBeUndefined();
     expect(corridor.delayInMinutes).toBeUndefined();
 
@@ -648,7 +653,7 @@ describe('getTravelTimes', () => {
 
 describePaginationContract({
   tool: getTravelTimes,
-  createContext: () => createMockContext(),
+  createContext: () => toolContext(getTravelTimes),
   stubRows: (rows) => mockService.getTravelTimes.mockResolvedValue(rows),
   makeRows: (count) =>
     Array.from({ length: count }, (_, i) => ({
@@ -680,7 +685,7 @@ describe('getTravelTimes — paging applies after the route filter', () => {
       startPoint: { roadName: 'I-90' },
     }));
     mockService.getTravelTimes.mockResolvedValue([...offRoute, ...onRoute]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTravelTimes);
     const result = await getTravelTimes.handler(
       getTravelTimes.input.parse({ route: 'I-5', offset: 10, limit: 5 }),
       ctx,
@@ -718,16 +723,16 @@ describe('getTollRates', () => {
 
   it('returns all toll rates', async () => {
     mockService.getTollRates.mockResolvedValue([rateFixture]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTollRates);
     const input = getTollRates.input.parse({});
     const result = await getTollRates.handler(input, ctx);
     expect(result.rates).toHaveLength(1);
-    expect(result.rates[0].tollRateInDollars).toBe(1.25);
+    expect(nth(result.rates).tollRateInDollars).toBe(1.25);
   });
 
   it('enriches with totalCount', async () => {
     mockService.getTollRates.mockResolvedValue([rateFixture]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTollRates);
     const input = getTollRates.input.parse({});
     await getTollRates.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -739,7 +744,7 @@ describe('getTollRates', () => {
 
   it('enriches notice when no rates returned', async () => {
     mockService.getTollRates.mockResolvedValue([]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTollRates);
     const input = getTollRates.input.parse({});
     await getTollRates.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -749,7 +754,7 @@ describe('getTollRates', () => {
 
   it('returns empty rates list', async () => {
     mockService.getTollRates.mockResolvedValue([]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getTollRates);
     const input = getTollRates.input.parse({});
     const result = await getTollRates.handler(input, ctx);
     expect(result.rates).toHaveLength(0);
@@ -760,7 +765,7 @@ describe('getTollRates', () => {
     const blocks = getTollRates.format!(output);
     const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('099tp03060');
-    expect(text).toContain('SR 099');
+    expect(text).toContain('SR 99');
     expect(text).toContain('$1.25');
     expect(text).toContain('SB S Portal');
     expect(text).toContain('NB S Portal');
@@ -777,7 +782,7 @@ describe('getTollRates', () => {
 
 describePaginationContract({
   tool: getTollRates,
-  createContext: () => createMockContext(),
+  createContext: () => toolContext(getTollRates),
   stubRows: (rows) => mockService.getTollRates.mockResolvedValue(rows),
   makeRows: (count) =>
     Array.from({ length: count }, (_, i) => ({
@@ -815,17 +820,17 @@ describe('getBorderWaits', () => {
 
   it('returns all border crossings', async () => {
     mockService.getBorderCrossings.mockResolvedValue([crossingFixture]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getBorderWaits);
     const input = getBorderWaits.input.parse({});
     const result = await getBorderWaits.handler(input, ctx);
     expect(result.crossings).toHaveLength(1);
-    expect(result.crossings[0].crossingName).toBe('I5');
-    expect(result.crossings[0].waitTimeInMinutes).toBe(25);
+    expect(nth(result.crossings).crossingName).toBe('I5');
+    expect(nth(result.crossings).waitTimeInMinutes).toBe(25);
   });
 
   it('enriches with totalCount', async () => {
     mockService.getBorderCrossings.mockResolvedValue([crossingFixture]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getBorderWaits);
     const input = getBorderWaits.input.parse({});
     await getBorderWaits.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -835,7 +840,7 @@ describe('getBorderWaits', () => {
 
   it('enriches notice when no crossings returned', async () => {
     mockService.getBorderCrossings.mockResolvedValue([]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getBorderWaits);
     const input = getBorderWaits.input.parse({});
     await getBorderWaits.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -845,7 +850,7 @@ describe('getBorderWaits', () => {
 
   it('returns empty crossings list', async () => {
     mockService.getBorderCrossings.mockResolvedValue([]);
-    const ctx = createMockContext();
+    const ctx = toolContext(getBorderWaits);
     const input = getBorderWaits.input.parse({});
     const result = await getBorderWaits.handler(input, ctx);
     expect(result.crossings).toHaveLength(0);
@@ -901,11 +906,11 @@ describe('searchCameras', () => {
 
   it('returns cameras matching filter', async () => {
     mockService.searchCameras.mockResolvedValue([cameraFixture]);
-    const ctx = createMockContext();
+    const ctx = toolContext(searchCameras);
     const input = searchCameras.input.parse({ stateRoute: '090' });
     const result = await searchCameras.handler(input, ctx);
     expect(result.cameras).toHaveLength(1);
-    expect(result.cameras[0].cameraId).toBe(1001);
+    expect(nth(result.cameras).cameraId).toBe(1001);
     expect(mockService.searchCameras).toHaveBeenCalledWith(
       expect.objectContaining({ stateRoute: '090' }),
       ctx,
@@ -914,17 +919,17 @@ describe('searchCameras', () => {
 
   it('enriches with totalCount and stateRoute filter', async () => {
     mockService.searchCameras.mockResolvedValue([cameraFixture]);
-    const ctx = createMockContext();
+    const ctx = toolContext(searchCameras);
     const input = searchCameras.input.parse({ stateRoute: '090' });
     await searchCameras.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
     expect(enrichment.totalCount).toBe(1);
-    expect(enrichment.appliedFilters.stateRoute).toBe('090');
+    expect(enrichment.appliedFilters).toEqual({ stateRoute: '090' });
   });
 
   it('enriches notice with copyright when results fit inline', async () => {
     mockService.searchCameras.mockResolvedValue([cameraFixture]);
-    const ctx = createMockContext();
+    const ctx = toolContext(searchCameras);
     const input = searchCameras.input.parse({});
     await searchCameras.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -934,7 +939,7 @@ describe('searchCameras', () => {
   it('pages results and reports continuation metadata when the total exceeds the page limit', async () => {
     const manyCameras = Array.from({ length: 25 }, (_, i) => ({ ...cameraFixture, cameraId: i }));
     mockService.searchCameras.mockResolvedValue(manyCameras);
-    const ctx = createMockContext();
+    const ctx = toolContext(searchCameras);
     const input = searchCameras.input.parse({ limit: 10 });
     const result = await searchCameras.handler(input, ctx);
     expect(result.cameras).toHaveLength(10);
@@ -947,7 +952,7 @@ describe('searchCameras', () => {
 
   it('returns all cameras when no filter provided', async () => {
     mockService.searchCameras.mockResolvedValue([cameraFixture]);
-    const ctx = createMockContext();
+    const ctx = toolContext(searchCameras);
     const input = searchCameras.input.parse({});
     const result = await searchCameras.handler(input, ctx);
     expect(result.cameras).toHaveLength(1);
@@ -979,7 +984,7 @@ describe('searchCameras', () => {
   it('applies the default page limit on a no-arg call', async () => {
     const manyCameras = Array.from({ length: 80 }, (_, i) => ({ ...cameraFixture, cameraId: i }));
     mockService.searchCameras.mockResolvedValue(manyCameras);
-    const ctx = createMockContext();
+    const ctx = toolContext(searchCameras);
     const input = searchCameras.input.parse({});
     const result = await searchCameras.handler(input, ctx);
     expect(result.cameras).toHaveLength(50); // DEFAULT_LIMIT
@@ -992,7 +997,7 @@ describe('searchCameras', () => {
   it('returns the requested page via offset/limit and keeps totalCount at the full count', async () => {
     const manyCameras = Array.from({ length: 25 }, (_, i) => ({ ...cameraFixture, cameraId: i }));
     mockService.searchCameras.mockResolvedValue(manyCameras);
-    const ctx = createMockContext();
+    const ctx = toolContext(searchCameras);
     const input = searchCameras.input.parse({ offset: 10, limit: 5 });
     const result = await searchCameras.handler(input, ctx);
     expect(result.cameras.map((c) => c.cameraId)).toEqual([10, 11, 12, 13, 14]);
@@ -1005,7 +1010,7 @@ describe('searchCameras', () => {
   it('reports hasMore false and null nextOffset on the final page', async () => {
     const manyCameras = Array.from({ length: 25 }, (_, i) => ({ ...cameraFixture, cameraId: i }));
     mockService.searchCameras.mockResolvedValue(manyCameras);
-    const ctx = createMockContext();
+    const ctx = toolContext(searchCameras);
     const input = searchCameras.input.parse({ offset: 20, limit: 10 });
     const result = await searchCameras.handler(input, ctx);
     expect(result.cameras).toHaveLength(5); // records 20..24
@@ -1021,7 +1026,7 @@ describe('searchCameras', () => {
       title: `Cam ${i}`,
     }));
     mockService.searchCameras.mockResolvedValue(manyCameras);
-    const ctx = createMockContext();
+    const ctx = toolContext(searchCameras);
     const input = searchCameras.input.parse({ offset: 5, limit: 3 });
     const result = await searchCameras.handler(input, ctx);
     const text = (searchCameras.format!(result)[0] as { text: string }).text;
@@ -1040,7 +1045,7 @@ describe('searchCameras', () => {
 
   it('strips whitespace-only stateRoute filter', async () => {
     mockService.searchCameras.mockResolvedValue([]);
-    const ctx = createMockContext();
+    const ctx = toolContext(searchCameras);
     const input = searchCameras.input.parse({ stateRoute: '  ' });
     await searchCameras.handler(input, ctx);
     expect(mockService.searchCameras).toHaveBeenCalledWith(
@@ -1064,7 +1069,7 @@ describe('searchCameras — page windows are reproducible across upstream row or
     mockService.searchCameras.mockResolvedValue(arrival);
     const result = await searchCameras.handler(
       searchCameras.input.parse({ offset, limit }),
-      createMockContext(),
+      toolContext(searchCameras),
     );
     return result.cameras.map((c) => c.cameraId);
   };
@@ -1087,7 +1092,10 @@ describe('searchCameras — page windows are reproducible across upstream row or
 
   it('sorts a camera carrying no cameraId to the end rather than dropping it', async () => {
     mockService.searchCameras.mockResolvedValue([{ title: 'No ID' }, ...cameras.slice(0, 2)]);
-    const result = await searchCameras.handler(searchCameras.input.parse({}), createMockContext());
+    const result = await searchCameras.handler(
+      searchCameras.input.parse({}),
+      toolContext(searchCameras),
+    );
     expect(result.cameras.map((c) => c.cameraId)).toEqual([5000, 5001, undefined]);
   });
 
@@ -1098,12 +1106,203 @@ describe('searchCameras — page windows are reproducible across upstream row or
       mockService.searchCameras.mockResolvedValue(arrival);
       const result = await searchCameras.handler(
         searchCameras.input.parse({ offset: 2, limit: 2 }),
-        createMockContext(),
+        toolContext(searchCameras),
       );
       return result.cameras.map((c) => c.title);
     };
     const forward = await titlesAt([...rows]);
     expect(forward).toHaveLength(2);
     expect(await titlesAt([...rows].reverse())).toEqual(forward);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// format() parity — sparse, false, and empty shapes
+//
+// A field carried by structuredContent needs a representation in content[] whatever its value.
+// Coordinates, image dimensions, and roadway detail are each independently optional upstream, so
+// a guard requiring the whole group drops the members that did arrive.
+// ---------------------------------------------------------------------------
+
+describe('traffic format() parity — one-sided and partial values', () => {
+  const render = formattedText;
+
+  describe('getBorderWaits', () => {
+    it('keeps a populated latitude when the longitude is absent', () => {
+      const text = render(
+        getBorderWaits.format!({
+          crossings: [{ crossingName: 'I5', location: { description: 'I-5', latitude: 49.002 } }],
+        }),
+      );
+      expect(text).toContain('**Coords:** 49.002, longitude not reported');
+    });
+
+    it('keeps a populated longitude when the latitude is absent', () => {
+      const text = render(
+        getBorderWaits.format!({
+          crossings: [
+            { crossingName: 'I5', location: { description: 'I-5', longitude: -122.755 } },
+          ],
+        }),
+      );
+      expect(text).toContain('**Coords:** latitude not reported, -122.755');
+    });
+
+    it('names the four routes and every lane class the feed returns', () => {
+      // The feed returns eleven lanes: I5 and I5Nexus; SR539, SR539Nexus, SR539Trucks; SR543,
+      // SR543Nexus, SR543Trucks, SR543TrucksFast; SR9 and SR9Nexus. Pacific Highway is SR 543,
+      // not I-5, and the truck lanes are not exclusive to it.
+      const description = getBorderWaits.description ?? '';
+      for (const route of ['I-5', 'SR 543', 'SR 539', 'SR 9', 'Pacific Highway']) {
+        expect(description).toContain(route);
+      }
+      expect(description).toMatch(/SR 539 adds a truck lane/);
+      expect(description).toMatch(/SR 543 adds truck and FAST truck lanes/);
+      expect(description).toContain('eleven entries in crossings[], one per lane');
+      expect(description).not.toMatch(/no current data is omitted/);
+    });
+  });
+
+  describe('getMountainPasses', () => {
+    it('keeps a populated latitude when the longitude is absent', () => {
+      const text = render(
+        getMountainPasses.format!({
+          passes: [{ mountainPassId: 1, mountainPassName: 'Snoqualmie Pass', latitude: 47.4273 }],
+        }),
+      );
+      expect(text).toContain('**Coords:** 47.4273, longitude not reported');
+    });
+  });
+
+  describe('getTollRates', () => {
+    it('renders an Interstate route as I-, not a blanket SR prefix', () => {
+      const text = render(getTollRates.format!({ rates: [{ tripName: 't', stateRoute: '405' }] }));
+      expect(text).toContain('**Route:** I-405');
+      expect(text).not.toContain('SR 405');
+    });
+
+    it('strips the upstream zero padding from a state route', () => {
+      const text = render(getTollRates.format!({ rates: [{ tripName: 't', stateRoute: '099' }] }));
+      expect(text).toContain('**Route:** SR 99');
+      expect(text).not.toContain('SR 099');
+    });
+
+    it('renders the other tolled facilities with their own designations', () => {
+      const text = render(
+        getTollRates.format!({
+          rates: [
+            { tripName: 'a', stateRoute: '167' },
+            { tripName: 'b', stateRoute: '509' },
+            { tripName: 'c', stateRoute: '520' },
+          ],
+        }),
+      );
+      expect(text).toContain('**Route:** SR 167');
+      expect(text).toContain('**Route:** SR 509');
+      expect(text).toContain('**Route:** SR 520');
+    });
+
+    it('leads with the readable segment and keeps the opaque trip key as a field', () => {
+      const text = render(
+        getTollRates.format!({
+          rates: [
+            {
+              tripName: '099tp03268',
+              startLocationName: 'SB S Portal',
+              endLocationName: 'NB S Portal',
+            },
+          ],
+        }),
+      );
+      expect(text).toContain('### SB S Portal → NB S Portal');
+      expect(text).not.toContain('### 099tp03268');
+      expect(text).toContain('**Trip:** 099tp03268');
+    });
+
+    it('collapses a segment whose two ends carry the same name', () => {
+      // The SR 509 rows report "SR 509 Toll" on both ends.
+      const text = render(
+        getTollRates.format!({
+          rates: [
+            {
+              tripName: '509tp02093',
+              startLocationName: 'SR 509 Toll',
+              endLocationName: 'SR 509 Toll',
+            },
+          ],
+        }),
+      );
+      expect(text).toContain('### SR 509 Toll\n');
+      expect(text).not.toContain('SR 509 Toll → SR 509 Toll');
+    });
+
+    it('falls back to the trip key when neither end is named', () => {
+      const text = render(getTollRates.format!({ rates: [{ tripName: '167tp02565' }] }));
+      expect(text).toContain('### 167tp02565');
+    });
+
+    it('keeps one-sided start and end coordinates', () => {
+      const text = render(
+        getTollRates.format!({
+          rates: [{ tripName: 't', startLatitude: 47.6266, endLongitude: -122.3387 }],
+        }),
+      );
+      expect(text).toContain('**Start Coords:** 47.6266, longitude not reported');
+      expect(text).toContain('**End Coords:** latitude not reported, -122.3387');
+    });
+
+    it('lists the facilities the feed returns and drops the ones it does not', () => {
+      expect(getTollRates.description).toContain('SR 509');
+      expect(getTollRates.description).not.toContain('I-90');
+    });
+  });
+
+  describe('searchAlerts', () => {
+    it('keeps one-sided start and end coordinates', () => {
+      const text = render(
+        searchAlerts.format!({
+          alerts: [
+            {
+              alertId: 1,
+              headlineDescription: 'Closure',
+              startRoadwayLocation: { roadName: 'I-90', latitude: 47.5 },
+              endRoadwayLocation: { roadName: 'I-90', longitude: -121.7 },
+            },
+          ],
+        }),
+      );
+      expect(text).toContain('**Coords:** 47.5, longitude not reported');
+      expect(text).toContain('**End Coords:** latitude not reported, -121.7');
+    });
+  });
+
+  describe('searchCameras', () => {
+    it('renders direction and milepost for a camera that reports no road name', () => {
+      const text = render(
+        searchCameras.format!({
+          cameras: [{ cameraId: 1, title: 'Cam', direction: 'EB', milePost: 52 }],
+        }),
+      );
+      expect(text).toContain('**Location:** EB MP 52');
+    });
+
+    it('renders a width reported without a height, and the reverse', () => {
+      const wide = render(
+        searchCameras.format!({ cameras: [{ cameraId: 1, title: 'Cam', imageWidth: 320 }] }),
+      );
+      expect(wide).toContain('**Size:** 320px wide (height not reported)');
+
+      const tall = render(
+        searchCameras.format!({ cameras: [{ cameraId: 2, title: 'Cam', imageHeight: 240 }] }),
+      );
+      expect(tall).toContain('**Size:** 240px tall (width not reported)');
+    });
+
+    it('keeps a populated latitude when the longitude is absent', () => {
+      const text = render(
+        searchCameras.format!({ cameras: [{ cameraId: 1, title: 'Cam', latitude: 47.4 }] }),
+      );
+      expect(text).toContain('**Coords:** 47.4, longitude not reported');
+    });
   });
 });

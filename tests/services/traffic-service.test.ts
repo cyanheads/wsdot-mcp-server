@@ -27,6 +27,8 @@ vi.mock('@cyanheads/mcp-ts-core/utils', () => ({
 
 import { getMountainPasses } from '@/mcp-server/tools/definitions/get-mountain-passes.tool.js';
 import { TrafficApiService } from '@/services/traffic/traffic-service.js';
+import { nth } from '../helpers/assertions.js';
+import { toolContext } from '../helpers/tool-context.js';
 
 /**
  * Obviously-fake stand-in for the credential. It matches the value returned by the mocked
@@ -83,7 +85,7 @@ describe('TrafficApiService — mountain pass normalization', () => {
     const passes = await svc.getMountainPasses(ctx);
 
     expect(passes).toHaveLength(1);
-    const p = passes[0];
+    const p = nth(passes);
     expect(p.mountainPassId).toBe(1);
     expect(p.mountainPassName).toBe('Snoqualmie Pass');
     expect(p.elevation).toBe(3022);
@@ -118,7 +120,7 @@ describe('TrafficApiService — mountain pass normalization', () => {
     const ctx = createMockContext();
     const passes = await svc.getMountainPasses(ctx);
 
-    const p = passes[0];
+    const p = nth(passes);
     expect(p.mountainPassId).toBe(2);
     expect(p.mountainPassName).toBe('Blewett Pass');
     expect('elevation' in p).toBe(false);
@@ -136,8 +138,8 @@ describe('TrafficApiService — mountain pass normalization', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const passes = await svc.getMountainPasses(ctx);
-    expect(passes[0].mountainPassId).toBe(0);
-    expect(passes[0].mountainPassName).toBe('Unknown');
+    expect(nth(passes).mountainPassId).toBe(0);
+    expect(nth(passes).mountainPassName).toBe('Unknown');
   });
 
   it('omits restrictionOne when both text and travelDirection are absent', async () => {
@@ -151,7 +153,7 @@ describe('TrafficApiService — mountain pass normalization', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const passes = await svc.getMountainPasses(ctx);
-    expect('restrictionOne' in passes[0]).toBe(false);
+    expect('restrictionOne' in nth(passes)).toBe(false);
   });
 
   it('omits dateUpdated when DateUpdated is the .NET MinValue sentinel', async () => {
@@ -165,7 +167,7 @@ describe('TrafficApiService — mountain pass normalization', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const passes = await svc.getMountainPasses(ctx);
-    expect('dateUpdated' in passes[0]).toBe(false);
+    expect('dateUpdated' in nth(passes)).toBe(false);
   });
 
   it('returns empty array when API returns []', async () => {
@@ -213,7 +215,7 @@ describe('TrafficApiService — alert normalization', () => {
     const alerts = await svc.searchAlerts({}, ctx);
 
     expect(alerts).toHaveLength(1);
-    const a = alerts[0];
+    const a = nth(alerts);
     expect(a.alertId).toBe(101);
     expect(a.headlineDescription).toBe('I-90 Closure');
     expect(a.eventCategory).toBe('Closure');
@@ -237,7 +239,7 @@ describe('TrafficApiService — alert normalization', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const alerts = await svc.searchAlerts({}, ctx);
-    const a = alerts[0];
+    const a = nth(alerts);
     expect(a.alertId).toBe(102);
     expect('headlineDescription' in a).toBe(false);
     expect('eventCategory' in a).toBe(false);
@@ -255,7 +257,7 @@ describe('TrafficApiService — alert normalization', () => {
       },
     ];
     mockFetch.mockResolvedValue(makeResponse(raw));
-    const [a] = await svc.searchAlerts({}, createMockContext());
+    const a = nth(await svc.searchAlerts({}, createMockContext()));
 
     expect(a.headlineDescription).toBe(
       'Ramp closed near Tacoma. Read the travel advisory (https://content.govdelivery.com/accounts/WADOT/bulletins/420b6e6).',
@@ -277,7 +279,7 @@ describe('TrafficApiService — alert normalization', () => {
       },
     ];
     mockFetch.mockResolvedValue(makeResponse(raw));
-    const [a] = await svc.searchAlerts({}, createMockContext());
+    const a = nth(await svc.searchAlerts({}, createMockContext()));
     expect(a.headlineDescription).toBe(
       'Kansas Street work continues. Project updates (https://www.cityoforting.org/government/project-updates/kansas-street-reconstruction).',
     );
@@ -287,7 +289,7 @@ describe('TrafficApiService — alert normalization', () => {
     const plain = 'All lanes blocked at MP 30.  Expect delays.';
     const raw = [{ AlertID: 705370, HeadlineDescription: plain, ExtendedDescription: plain }];
     mockFetch.mockResolvedValue(makeResponse(raw));
-    const [a] = await svc.searchAlerts({}, createMockContext());
+    const a = nth(await svc.searchAlerts({}, createMockContext()));
     expect(a.headlineDescription).toBe(plain);
     expect(a.extendedDescription).toBe(plain);
   });
@@ -299,7 +301,7 @@ describe('TrafficApiService — alert normalization', () => {
       { AlertID: 705371, HeadlineDescription: 'Real headline.', ExtendedDescription: '' },
     ];
     mockFetch.mockResolvedValue(makeResponse(raw));
-    const [a] = await svc.searchAlerts({}, createMockContext());
+    const a = nth(await svc.searchAlerts({}, createMockContext()));
     expect(a.headlineDescription).toBe('Real headline.');
     expect('extendedDescription' in a).toBe(false);
   });
@@ -308,7 +310,7 @@ describe('TrafficApiService — alert normalization', () => {
     mockFetch.mockResolvedValue(makeResponse([]));
     const ctx = createMockContext();
     await svc.searchAlerts({ stateRoute: '090' }, ctx);
-    const url: string = mockFetch.mock.calls[0][0] as string;
+    const url: string = nth(mockFetch.mock.calls)[0] as string;
     expect(url).toContain('GetAlertsAsJson');
     expect(url).not.toContain('SearchAlertsAsJson');
   });
@@ -330,7 +332,7 @@ describe('TrafficApiService — alert normalization', () => {
     const ctx = createMockContext();
     const alerts = await svc.searchAlerts({ stateRoute: '090' }, ctx);
     expect(alerts).toHaveLength(1);
-    expect(alerts[0].alertId).toBe(1);
+    expect(nth(alerts).alertId).toBe(1);
   });
 
   it('matches natural stateRoute forms and rejects substring false positives (I-90 vs SR 290)', async () => {
@@ -371,7 +373,7 @@ describe('TrafficApiService — alert normalization', () => {
     const ctx = createMockContext();
     const alerts = await svc.searchAlerts({ region: 'northwest' }, ctx);
     expect(alerts).toHaveLength(1);
-    expect(alerts[0].alertId).toBe(1);
+    expect(nth(alerts).alertId).toBe(1);
   });
 
   it("matches a prefixed stateRoute against the feed's bare road names", async () => {
@@ -408,7 +410,7 @@ describe('TrafficApiService — alert normalization', () => {
     const ctx = createMockContext();
     const alerts = await svc.searchAlerts({ startMilepost: 5, endMilepost: 50 }, ctx);
     expect(alerts).toHaveLength(1);
-    expect(alerts[0].alertId).toBe(1);
+    expect(nth(alerts).alertId).toBe(1);
   });
 
   it('keeps an alert whose extent spans the requested milepost range', async () => {
@@ -484,7 +486,7 @@ describe('TrafficApiService — alert normalization', () => {
     ];
 
     mockFetch.mockResolvedValue(makeResponse(raw));
-    const [alert] = await svc.searchAlerts({}, createMockContext());
+    const alert = nth(await svc.searchAlerts({}, createMockContext()));
     expect(alert.endRoadwayLocation).toEqual({ roadName: '101', direction: 'B' });
 
     mockFetch.mockResolvedValue(makeResponse(raw));
@@ -536,7 +538,7 @@ describe('TrafficApiService — travel time normalization', () => {
     const times = await svc.getTravelTimes(ctx);
 
     expect(times).toHaveLength(1);
-    const t = times[0];
+    const t = nth(times);
     expect(t.travelTimeId).toBe(1);
     expect(t.name).toBe('I-5 NB: Northgate to Downtown');
     expect(t.currentTimeInMinutes).toBe(18);
@@ -552,7 +554,7 @@ describe('TrafficApiService — travel time normalization', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const times = await svc.getTravelTimes(ctx);
-    const t = times[0];
+    const t = nth(times);
     expect('travelTimeId' in t).toBe(false);
     expect('name' in t).toBe(false);
     expect('currentTimeInMinutes' in t).toBe(false);
@@ -571,7 +573,7 @@ describe('TrafficApiService — travel time normalization', () => {
       },
     ];
     mockFetch.mockResolvedValue(makeResponse(raw));
-    const [t] = await svc.getTravelTimes(createMockContext());
+    const t = nth(await svc.getTravelTimes(createMockContext()));
     expect('currentTimeInMinutes' in t).toBe(false);
     expect('averageTimeInMinutes' in t).toBe(false);
     expect(t.distanceInMiles).toBe(26.72);
@@ -591,7 +593,7 @@ describe('TrafficApiService — travel time normalization', () => {
       },
     ];
     mockFetch.mockResolvedValue(makeResponse(raw));
-    const [t] = await svc.getTravelTimes(createMockContext());
+    const t = nth(await svc.getTravelTimes(createMockContext()));
     expect(t.currentTimeInMinutes).toBe(47);
     expect(t.averageTimeInMinutes).toBe(39);
   });
@@ -601,7 +603,7 @@ describe('TrafficApiService — travel time normalization', () => {
       { TravelTimeID: 12, Name: 'Zero-length corridor', CurrentTime: 0, AverageTime: 0 },
     ];
     mockFetch.mockResolvedValue(makeResponse(raw));
-    const [t] = await svc.getTravelTimes(createMockContext());
+    const t = nth(await svc.getTravelTimes(createMockContext()));
     expect(t.currentTimeInMinutes).toBe(0);
     expect(t.averageTimeInMinutes).toBe(0);
   });
@@ -641,7 +643,7 @@ describe('TrafficApiService — toll rate normalization', () => {
     const rates = await svc.getTollRates(ctx);
 
     expect(rates).toHaveLength(1);
-    const r = rates[0];
+    const r = nth(rates);
     expect(r.tripName).toBe('099tp03060');
     expect(r.stateRoute).toBe('099');
     expect(r.travelDirection).toBe('S');
@@ -661,7 +663,7 @@ describe('TrafficApiService — toll rate normalization', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const rates = await svc.getTollRates(ctx);
-    expect(rates[0].tollRateInDollars).toBeCloseTo(3.5);
+    expect(nth(rates).tollRateInDollars).toBeCloseTo(3.5);
   });
 
   it('omits tollRateInDollars when CurrentToll is null', async () => {
@@ -669,8 +671,8 @@ describe('TrafficApiService — toll rate normalization', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const rates = await svc.getTollRates(ctx);
-    expect('tripName' in rates[0]).toBe(false);
-    expect('tollRateInDollars' in rates[0]).toBe(false);
+    expect('tripName' in nth(rates)).toBe(false);
+    expect('tollRateInDollars' in nth(rates)).toBe(false);
   });
 
   it('maps CurrentMessage to message field', async () => {
@@ -678,7 +680,7 @@ describe('TrafficApiService — toll rate normalization', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const rates = await svc.getTollRates(ctx);
-    expect(rates[0].message).toBe('HOV 2+ free');
+    expect(nth(rates).message).toBe('HOV 2+ free');
   });
 });
 
@@ -713,7 +715,7 @@ describe('TrafficApiService — border crossing normalization', () => {
     const crossings = await svc.getBorderCrossings(ctx);
 
     expect(crossings).toHaveLength(1);
-    const c = crossings[0];
+    const c = nth(crossings);
     expect(c.crossingName).toBe('I5');
     expect(c.waitTimeInMinutes).toBe(25);
     expect(c.location?.description).toBe('I-5 General Purpose');
@@ -728,8 +730,8 @@ describe('TrafficApiService — border crossing normalization', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const crossings = await svc.getBorderCrossings(ctx);
-    expect('location' in crossings[0]).toBe(false);
-    expect('waitTimeInMinutes' in crossings[0]).toBe(false);
+    expect('location' in nth(crossings)).toBe(false);
+    expect('waitTimeInMinutes' in nth(crossings)).toBe(false);
   });
 
   it('omits waitTimeInMinutes when WaitTime is the -1 sentinel', async () => {
@@ -737,8 +739,8 @@ describe('TrafficApiService — border crossing normalization', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const crossings = await svc.getBorderCrossings(ctx);
-    expect(crossings[0].crossingName).toBe('SR9');
-    expect('waitTimeInMinutes' in crossings[0]).toBe(false);
+    expect(nth(crossings).crossingName).toBe('SR9');
+    expect('waitTimeInMinutes' in nth(crossings)).toBe(false);
   });
 });
 
@@ -777,7 +779,7 @@ describe('TrafficApiService — camera normalization', () => {
     const cameras = await svc.searchCameras({}, ctx);
 
     expect(cameras).toHaveLength(1);
-    const c = cameras[0];
+    const c = nth(cameras);
     expect(c.cameraId).toBe(1001);
     expect(c.title).toBe('I-90 at Snoqualmie Pass');
     expect(c.imageUrl).toBe('https://images.wsdot.wa.gov/nc/090vc12345.jpg');
@@ -796,18 +798,18 @@ describe('TrafficApiService — camera normalization', () => {
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const cameras = await svc.searchCameras({}, ctx);
-    expect('cameraId' in cameras[0]).toBe(false);
-    expect('title' in cameras[0]).toBe(false);
-    expect('imageUrl' in cameras[0]).toBe(false);
-    expect('roadName' in cameras[0]).toBe(false);
-    expect('latitude' in cameras[0]).toBe(false);
+    expect('cameraId' in nth(cameras)).toBe(false);
+    expect('title' in nth(cameras)).toBe(false);
+    expect('imageUrl' in nth(cameras)).toBe(false);
+    expect('roadName' in nth(cameras)).toBe(false);
+    expect('latitude' in nth(cameras)).toBe(false);
   });
 
   it('always uses GetCamerasAsJson endpoint (no SearchCamerasAsJson)', async () => {
     mockFetch.mockResolvedValue(makeResponse([]));
     const ctx = createMockContext();
     await svc.searchCameras({ stateRoute: '090' }, ctx);
-    const url: string = mockFetch.mock.calls[0][0] as string;
+    const url: string = nth(mockFetch.mock.calls)[0] as string;
     expect(url).toContain('GetCamerasAsJson');
     expect(url).not.toContain('SearchCamerasAsJson');
   });
@@ -841,7 +843,7 @@ describe('TrafficApiService — camera normalization', () => {
     const ctx = createMockContext();
     const cameras = await svc.searchCameras({ stateRoute: '090' }, ctx);
     expect(cameras).toHaveLength(1);
-    expect(cameras[0].cameraId).toBe(1);
+    expect(nth(cameras).cameraId).toBe(1);
   });
 
   it('filters cameras by natural stateRoute forms (I-90, SR 520)', async () => {
@@ -906,7 +908,7 @@ describe('TrafficApiService — camera normalization', () => {
     const ctx = createMockContext();
     const cameras = await svc.searchCameras({ region: 'nw' }, ctx);
     expect(cameras).toHaveLength(1);
-    expect(cameras[0].cameraId).toBe(1);
+    expect(nth(cameras).cameraId).toBe(1);
   });
 
   it('filters cameras by milepost range client-side', async () => {
@@ -938,7 +940,7 @@ describe('TrafficApiService — camera normalization', () => {
     const ctx = createMockContext();
     const cameras = await svc.searchCameras({ startMilepost: 5, endMilepost: 50 }, ctx);
     expect(cameras).toHaveLength(1);
-    expect(cameras[0].cameraId).toBe(1);
+    expect(nth(cameras).cameraId).toBe(1);
   });
 });
 
@@ -960,7 +962,7 @@ describe('TrafficApiService — HTTP error handling', () => {
 
   it('resolves the api_unavailable contract on a non-2xx (reason + recovery hint)', async () => {
     mockFetch.mockResolvedValue(makeResponse('Service Unavailable', 503, 'text/plain'));
-    const ctx = createMockContext({ errors: getMountainPasses.errors });
+    const ctx = toolContext(getMountainPasses);
     const err = await svc.getMountainPasses(ctx).catch((e) => e);
     expect(err).toBeInstanceOf(McpError);
     expect((err as McpError).code).toBe(JsonRpcErrorCode.ServiceUnavailable);
@@ -981,7 +983,7 @@ describe('TrafficApiService — HTTP error handling', () => {
 
   it('classifies HTTP 401 as invalid_access_code naming WSDOT_ACCESS_CODE', async () => {
     mockFetch.mockResolvedValue(makeResponse('Unauthorized', 401, 'text/plain'));
-    const ctx = createMockContext({ errors: getMountainPasses.errors });
+    const ctx = toolContext(getMountainPasses);
     const err = await svc.getMountainPasses(ctx).catch((e) => e);
     expect((err as McpError).code).toBe(JsonRpcErrorCode.ConfigurationError);
     expect((err as McpError).message).toMatch(/401/);
@@ -997,7 +999,7 @@ describe('TrafficApiService — HTTP error handling', () => {
     // WSDOT answers an unregistered code with HTTP 400 + Content-Type text/html + body "Bad Request".
     // Before the fix the status check threw first and the body was never read.
     mockFetch.mockResolvedValue(makeResponse('Bad Request', 400, 'text/html'));
-    const ctx = createMockContext({ errors: getMountainPasses.errors });
+    const ctx = toolContext(getMountainPasses);
     const err = await svc.getMountainPasses(ctx).catch((e) => e);
     expect((err as McpError).code).toBe(JsonRpcErrorCode.ConfigurationError);
     expect((err as McpError).message).toContain('WSDOT_ACCESS_CODE');
@@ -1051,7 +1053,7 @@ describe('TrafficApiService — HTTP error handling', () => {
     mockFetch.mockResolvedValue(
       makeResponse('<html><body>503 Service Unavailable</body></html>', 503, 'text/html'),
     );
-    const ctx = createMockContext({ errors: getMountainPasses.errors });
+    const ctx = toolContext(getMountainPasses);
     const err = await svc.getMountainPasses(ctx).catch((e) => e);
     expect((err as McpError).code).toBe(JsonRpcErrorCode.ServiceUnavailable);
     expect((err as McpError).message).not.toContain('WSDOT_ACCESS_CODE');
@@ -1063,7 +1065,7 @@ describe('TrafficApiService — HTTP error handling', () => {
     mockFetch.mockResolvedValue(makeResponse([]));
     const ctx = createMockContext();
     await svc.getMountainPasses(ctx);
-    const url: string = mockFetch.mock.calls[0][0] as string;
+    const url: string = nth(mockFetch.mock.calls)[0] as string;
     expect(url).toContain('AccessCode=test-access-code');
   });
 
@@ -1071,7 +1073,7 @@ describe('TrafficApiService — HTTP error handling', () => {
     mockFetch.mockResolvedValue(makeResponse([]));
     const ctx = createMockContext();
     await svc.getMountainPasses(ctx);
-    const url: string = mockFetch.mock.calls[0][0] as string;
+    const url: string = nth(mockFetch.mock.calls)[0] as string;
     expect(url).toContain('https://www.wsdot.wa.gov/Traffic/api');
   });
 });

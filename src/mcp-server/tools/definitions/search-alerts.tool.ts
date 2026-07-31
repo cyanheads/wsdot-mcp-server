@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { coordinatePair } from '@/mcp-server/tools/coordinate-pair.js';
 import { byIdThenContent } from '@/services/traffic/stable-order.js';
 import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
 
@@ -282,9 +283,8 @@ export const searchAlerts = tool('wsdot_search_alerts', {
           .filter(Boolean)
           .join(' ');
         if (parts) lines.push(`**Location:** ${parts}`);
-        if (loc.latitude != null && loc.longitude != null) {
-          lines.push(`**Coords:** ${loc.latitude}, ${loc.longitude}`);
-        }
+        const coords = coordinatePair(loc.latitude, loc.longitude);
+        if (coords) lines.push(`**Coords:** ${coords}`);
       }
       if (a.endRoadwayLocation) {
         const end = a.endRoadwayLocation;
@@ -296,9 +296,8 @@ export const searchAlerts = tool('wsdot_search_alerts', {
           .filter(Boolean)
           .join(' ');
         if (endParts) lines.push(`**End Location:** ${endParts}`);
-        if (end.latitude != null && end.longitude != null) {
-          lines.push(`**End Coords:** ${end.latitude}, ${end.longitude}`);
-        }
+        const endCoords = coordinatePair(end.latitude, end.longitude);
+        if (endCoords) lines.push(`**End Coords:** ${endCoords}`);
       }
       if (a.extendedDescription) lines.push(a.extendedDescription);
       if (a.startTime) lines.push(`**Start:** ${a.startTime}`);

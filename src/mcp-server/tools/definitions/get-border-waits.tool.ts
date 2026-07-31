@@ -5,15 +5,19 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { coordinatePair } from '@/mcp-server/tools/coordinate-pair.js';
 import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
 
 export const getBorderWaits = tool('wsdot_get_border_waits', {
   title: 'Get Border Wait Times',
   description:
-    'Returns current vehicle wait times at WA→Canada land border crossings on I-5 (Peace Arch and ' +
-    'Pacific Highway, Blaine), SR 539 (Lynden), and SR 9 (Sumas), including Nexus-lane variants. ' +
-    'crossingName is a route code (e.g. "I5", "I5Nexus", "SR539"); the readable name is in ' +
-    'location.description. Wait times are in minutes; a crossing reporting no current data is omitted. ' +
+    'Returns current vehicle wait times at WA→Canada land border crossings: I-5 (Peace Arch, Blaine), ' +
+    'SR 543 (Pacific Highway, Blaine), SR 539 (Lynden), and SR 9 (Sumas). Each crossing reports a ' +
+    'general-purpose lane and a Nexus lane; SR 539 adds a truck lane and SR 543 adds truck and ' +
+    'FAST truck lanes — eleven entries in crossings[], one per lane. ' +
+    'crossingName is a route code (e.g. "I5", "I5Nexus", "SR543Trucks"); the readable name is in ' +
+    'location.description. Wait times are in minutes. A crossing reporting no current data is still ' +
+    'returned — only waitTimeInMinutes is omitted. ' +
     'Use for "how long is the border wait?" questions.',
   annotations: { readOnlyHint: true },
   input: z.object({}),
@@ -125,9 +129,8 @@ export const getBorderWaits = tool('wsdot_get_border_waits', {
       if (c.location?.roadName) lines.push(`**Road:** ${c.location.roadName}`);
       if (c.location?.direction) lines.push(`**Direction:** ${c.location.direction}`);
       if (c.location?.milePost != null) lines.push(`**Milepost:** ${c.location.milePost}`);
-      if (c.location?.latitude != null && c.location.longitude != null) {
-        lines.push(`**Coords:** ${c.location.latitude}, ${c.location.longitude}`);
-      }
+      const coords = coordinatePair(c.location?.latitude, c.location?.longitude);
+      if (coords) lines.push(`**Coords:** ${coords}`);
       if (c.updateTime) lines.push(`**Updated:** ${c.updateTime}`);
       lines.push('');
     }
