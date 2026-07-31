@@ -7,14 +7,34 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
 
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 500;
+
 export const getTollRates = tool('wsdot_get_toll_rates', {
   title: 'Get Toll Rates',
   description:
     'Returns current dynamic toll rates for WA express lanes and tolled facilities: SR 99 (WSDOT Tunnel), ' +
     'SR 520 Bridge, I-405 Express Lanes, I-90 Two-Way Express Lanes, and SR 167 HOT Lanes. ' +
-    'Rates are time-banded and change dynamically based on traffic conditions.',
+    'Rates are time-banded and change dynamically based on traffic conditions. ' +
+    'Results are paged — pass offset/limit to page through the full set (the notice reports the next offset).',
   annotations: { readOnlyHint: true },
-  input: z.object({}),
+  input: z.object({
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe('Zero-based index of the first toll rate to return, for paging. Defaults to 0.'),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_LIMIT)
+      .optional()
+      .describe(
+        `Maximum toll rates to return in this page (1–${MAX_LIMIT}). Defaults to ${DEFAULT_LIMIT}.`,
+      ),
+  }),
   output: z.object({
     rates: z
       .array(
@@ -52,11 +72,20 @@ export const getTollRates = tool('wsdot_get_toll_rates', {
   }),
 
   enrichment: {
-    totalCount: z.number().describe('Total number of toll rate entries returned.'),
+    totalCount: z
+      .number()
+      .describe('Total toll rate entries across all pages (not just this page).'),
+    nextOffset: z
+      .number()
+      .nullable()
+      .describe('Offset to pass to retrieve the next page, or null when this is the last page.'),
+    hasMore: z.boolean().describe('True when more toll rates remain beyond the current page.'),
     notice: z
       .string()
       .optional()
-      .describe('Optional notice when no toll rate data is available. Absent on normal results.'),
+      .describe(
+        'Informational note about the page window, or guidance when no toll rate data is available or the offset ran past the end.',
+      ),
   },
 
   errors: [
@@ -78,14 +107,35 @@ export const getTollRates = tool('wsdot_get_toll_rates', {
     },
   ],
 
-  async handler(_input, ctx) {
-    const rates = await getTrafficApiService().getTollRates(ctx);
-    ctx.log.info('Toll rates fetched', { count: rates.length });
+  async handler(input, ctx) {
+    const allRates = await getTrafficApiService().getTollRates(ctx);
 
-    ctx.enrich({ totalCount: rates.length });
-    if (rates.length === 0) {
+    // Page the full set so structuredContent and content[] carry the identical page (the
+    // service stays filter-only; paging is a tool-handler concern). totalCount stays the
+    // full entry count so the agent knows how much lies beyond this page.
+    const totalCount = allRates.length;
+    const offset = input.offset ?? 0;
+    const limit = input.limit ?? DEFAULT_LIMIT;
+    const rates = allRates.slice(offset, offset + limit);
+    const hasMore = offset + rates.length < totalCount;
+    const nextOffset = hasMore ? offset + rates.length : null;
+
+    ctx.log.info('Toll rates fetched', { totalCount, offset, limit, returned: rates.length });
+
+    ctx.enrich({ totalCount, nextOffset, hasMore });
+
+    if (totalCount === 0) {
       ctx.enrich.notice(
         'No toll rate data available. The WSDOT API may be temporarily unavailable — retry in 30 seconds.',
+      );
+    } else if (rates.length === 0) {
+      ctx.enrich.notice(
+        `Offset ${offset} is past the end of ${totalCount} toll rate entries. Use an offset between 0 and ${totalCount - 1}.`,
+      );
+    } else {
+      const window = `Showing toll rates ${offset + 1}–${offset + rates.length} of ${totalCount}.`;
+      ctx.enrich.notice(
+        hasMore ? `${window} Pass offset=${nextOffset} for the next page.` : window,
       );
     }
 

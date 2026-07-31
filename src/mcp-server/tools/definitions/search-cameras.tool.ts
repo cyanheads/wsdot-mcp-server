@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { byIdThenContent } from '@/services/traffic/stable-order.js';
 import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
 
 const DEFAULT_LIMIT = 50;
@@ -16,7 +17,8 @@ export const searchCameras = tool('wsdot_search_cameras', {
     'Returns WSDOT highway camera locations, descriptions, and image URLs. ' +
     'Camera images are copyright WSDOT — only metadata and image URLs are returned, not image bytes. ' +
     'Filter by state route ("I-90", "90", "SR 520", or "520" all work), WSDOT region, or milepost range. ' +
-    'Results are paged — pass offset/limit to page through the full set (the notice reports the next offset).',
+    'Results are ordered by cameraId and paged — pass offset/limit to page through the full set ' +
+    '(the notice reports the next offset).',
   annotations: { readOnlyHint: true },
   input: z.object({
     stateRoute: z
@@ -142,7 +144,7 @@ export const searchCameras = tool('wsdot_search_cameras', {
   async handler(input, ctx) {
     const stateRoute = input.stateRoute?.trim() || undefined;
     const region = input.region?.trim() || undefined;
-    const allCameras = await getTrafficApiService().searchCameras(
+    const fetched = await getTrafficApiService().searchCameras(
       {
         ...(stateRoute && { stateRoute }),
         ...(region && { region }),
@@ -151,6 +153,10 @@ export const searchCameras = tool('wsdot_search_cameras', {
       },
       ctx,
     );
+
+    // The camera feed serves one camera set in more than one row order, so a given offset is only
+    // reproducible once the rows are ordered here. Cameras with no cameraId sort last.
+    const allCameras = fetched.toSorted(byIdThenContent((c) => c.cameraId));
 
     const appliedFilters = {
       ...(stateRoute && { stateRoute }),

@@ -8,6 +8,9 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { routeMatches } from '@/services/traffic/route-match.js';
 import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
 
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 500;
+
 export const getTravelTimes = tool('wsdot_get_travel_times', {
   title: 'Get Travel Times',
   description:
@@ -15,7 +18,8 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
     'I-405, SR 167, etc.). Use for "how congested is I-5?" or commute time estimates. ' +
     'The route filter matches two ways: a route designation ("I-5", "5", "SR 520") returns every ' +
     'corridor measured on that route, and any text also matches corridor names ("Everett"). ' +
-    'When current time exceeds average, the corridor is congested.',
+    'When current time exceeds average, the corridor is congested. ' +
+    'Results are paged — pass offset/limit to page through the full set (the notice reports the next offset).',
   annotations: { readOnlyHint: true },
   input: z.object({
     route: z
@@ -26,6 +30,21 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
           'corridor whose start or end point is on that route, whichever form the feed reports. ' +
           'Any text also matches the corridor name as a case-insensitive substring, so "Everett" ' +
           'finds the Seattle-Everett corridors. Omit to return all corridors.',
+      ),
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe('Zero-based index of the first corridor to return, for paging. Defaults to 0.'),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_LIMIT)
+      .optional()
+      .describe(
+        `Maximum corridors to return in this page (1–${MAX_LIMIT}). Defaults to ${DEFAULT_LIMIT}.`,
       ),
   }),
   output: z.object({
@@ -91,7 +110,14 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
   }),
 
   enrichment: {
-    totalCount: z.number().describe('Total number of corridors returned.'),
+    totalCount: z
+      .number()
+      .describe('Total corridors matching the filter across all pages (not just this page).'),
+    nextOffset: z
+      .number()
+      .nullable()
+      .describe('Offset to pass to retrieve the next page, or null when this is the last page.'),
+    hasMore: z.boolean().describe('True when more corridors remain beyond the current page.'),
     routeFilter: z
       .string()
       .optional()
@@ -100,7 +126,7 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
       .string()
       .optional()
       .describe(
-        'Optional guidance when no corridors matched the route filter. Absent when results are returned.',
+        'Informational note about the page window, or guidance when no corridors matched the route filter or the offset ran past the end.',
       ),
   },
 
@@ -139,22 +165,46 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
         )
       : all;
 
-    const corridors = filtered.map((t) => ({
+    // Page the full filtered set so structuredContent and content[] carry the identical
+    // page (the service stays filter-only; paging is a tool-handler concern). totalCount
+    // stays the full match count so the agent knows how much lies beyond this page.
+    const totalCount = filtered.length;
+    const offset = input.offset ?? 0;
+    const limit = input.limit ?? DEFAULT_LIMIT;
+    const corridors = filtered.slice(offset, offset + limit).map((t) => ({
       ...t,
       delayInMinutes:
         t.currentTimeInMinutes != null && t.averageTimeInMinutes != null
           ? t.currentTimeInMinutes - t.averageTimeInMinutes
           : undefined,
     }));
+    const hasMore = offset + corridors.length < totalCount;
+    const nextOffset = hasMore ? offset + corridors.length : null;
 
-    ctx.log.info('Travel times fetched', { total: all.length, returned: corridors.length });
+    ctx.log.info('Travel times fetched', {
+      total: all.length,
+      totalCount,
+      offset,
+      limit,
+      returned: corridors.length,
+    });
 
-    ctx.enrich({ totalCount: corridors.length, ...(routeFilter && { routeFilter }) });
-    if (corridors.length === 0) {
+    ctx.enrich({ totalCount, nextOffset, hasMore, ...(routeFilter && { routeFilter }) });
+
+    if (totalCount === 0) {
       ctx.enrich.notice(
         routeFilter
           ? `No corridors matched the route filter "${routeFilter}". Try a broader filter (e.g. "I-5" instead of "I-5 NB") or omit the filter to list all corridors.`
           : 'No travel time data available. The WSDOT API may be temporarily unavailable — retry in 30 seconds.',
+      );
+    } else if (corridors.length === 0) {
+      ctx.enrich.notice(
+        `Offset ${offset} is past the end of ${totalCount} matching corridors. Use an offset between 0 and ${totalCount - 1}.`,
+      );
+    } else {
+      const window = `Showing corridors ${offset + 1}–${offset + corridors.length} of ${totalCount}.`;
+      ctx.enrich.notice(
+        hasMore ? `${window} Pass offset=${nextOffset} for the next page.` : window,
       );
     }
 

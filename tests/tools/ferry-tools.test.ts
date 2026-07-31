@@ -43,6 +43,7 @@ import { getFerrySchedule } from '@/mcp-server/tools/definitions/get-ferry-sched
 import { getFerryTerminals } from '@/mcp-server/tools/definitions/get-ferry-terminals.tool.js';
 import { getTerminalSpace } from '@/mcp-server/tools/definitions/get-terminal-space.tool.js';
 import { getVesselLocations } from '@/mcp-server/tools/definitions/get-vessel-locations.tool.js';
+import { describePaginationContract } from '../helpers/pagination.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -646,6 +647,8 @@ describe('getTerminalSpace', () => {
     const enrichment = getEnrichment(ctx);
     expect(enrichment.totalCount).toBe(1);
     expect(enrichment.terminalFilter).toBeUndefined();
+    expect(enrichment.hasMore).toBe(false);
+    expect(enrichment.nextOffset).toBeNull();
   });
 
   it('enriches terminalFilter when filter provided', async () => {
@@ -807,6 +810,78 @@ describe('getTerminalSpace', () => {
     const blocks = getTerminalSpace.format!({ terminals: [] });
     const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('No terminal space data');
+  });
+});
+
+/**
+ * Terminal-space pages at the terminal level: a page is N whole terminals, each carrying every
+ * sailing it reports, so `totalCount` counts terminals rather than the rows the flat-list tools
+ * count. The fixture gives each terminal several sailings so a page split can never fall inside
+ * one terminal's departures unnoticed.
+ */
+describePaginationContract({
+  tool: getTerminalSpace,
+  createContext: () => createMockContext(),
+  stubRows: (rows) => mockService.getTerminalSailingSpace.mockResolvedValue(rows),
+  makeRows: (count) =>
+    Array.from({ length: count }, (_, i) => ({
+      terminalId: i,
+      terminalName: `Terminal ${String(i).padStart(3, '0')}`,
+      departingSpaces: Array.from({ length: 4 }, (_, s) => ({
+        departure: `2026-05-23T0${s}:00:00.000Z`,
+        vesselName: `Vessel ${i}-${s}`,
+        arrivingTerminalIds: [i + 100],
+        driveUpSpaceCount: 10 * s,
+        maxSpaceCount: 200,
+      })),
+    })),
+  pageMarkers: (result) => result.terminals.map((t) => t.terminalId as number),
+  markerText: (i) => `Terminal ${String(i).padStart(3, '0')}`,
+  fixtureSize: 13,
+  defaultLimit: 5,
+  maxLimit: 20,
+  unit: 'terminals',
+});
+
+describe('getTerminalSpace — a paged terminal keeps all of its sailings', () => {
+  it('returns every departure of each terminal on the page', async () => {
+    const terminals = Array.from({ length: 8 }, (_, i) => ({
+      terminalId: i,
+      terminalName: `Terminal ${i}`,
+      departingSpaces: Array.from({ length: 35 }, (_, s) => ({
+        departure: `sailing-${i}-${s}`,
+        driveUpSpaceCount: s,
+      })),
+    }));
+    mockService.getTerminalSailingSpace.mockResolvedValue(terminals);
+    const ctx = createMockContext();
+    const result = await getTerminalSpace.handler(
+      getTerminalSpace.input.parse({ offset: 2, limit: 2 }),
+      ctx,
+    );
+    expect(result.terminals.map((t) => t.terminalId)).toEqual([2, 3]);
+    for (const t of result.terminals) expect(t.departingSpaces).toHaveLength(35);
+    // The unit is terminals, not sailings — 8 matching terminals, not 280 departures.
+    expect(getEnrichment(ctx).totalCount).toBe(8);
+  });
+
+  it('pages the filtered set, so a terminal filter yields a single-page result', async () => {
+    const terminals = Array.from({ length: 8 }, (_, i) => ({
+      terminalId: i,
+      terminalName: `Terminal ${i}`,
+      departingSpaces: [],
+    }));
+    mockService.getTerminalSailingSpace.mockResolvedValue(terminals);
+    const ctx = createMockContext();
+    const result = await getTerminalSpace.handler(
+      getTerminalSpace.input.parse({ departingTerminalId: 6 }),
+      ctx,
+    );
+    expect(result.terminals.map((t) => t.terminalId)).toEqual([6]);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.totalCount).toBe(1);
+    expect(enrichment.hasMore).toBe(false);
+    expect(enrichment.nextOffset).toBeNull();
   });
 });
 

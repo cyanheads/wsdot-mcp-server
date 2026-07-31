@@ -150,6 +150,34 @@ describe('Input validation — type coercion', () => {
     expect(() => getTravelTimes.input.parse({})).not.toThrow();
   });
 
+  it('paged tools accept empty input — offset/limit are optional and additive', () => {
+    for (const t of [searchAlerts, getTravelTimes, getTollRates, getTerminalSpace, searchCameras]) {
+      expect(() => t.input.parse({})).not.toThrow();
+    }
+  });
+
+  it('paged tools reject a negative, non-integer, or non-numeric offset', () => {
+    for (const t of [searchAlerts, getTravelTimes, getTollRates, getTerminalSpace, searchCameras]) {
+      expect(() => t.input.parse({ offset: -1 })).toThrow();
+      expect(() => t.input.parse({ offset: 2.5 })).toThrow();
+      expect(() => t.input.parse({ offset: '10' })).toThrow();
+      expect(() => t.input.parse({ offset: Number.NaN })).toThrow();
+    }
+  });
+
+  it('paged tools reject a zero, negative, or over-maximum limit', () => {
+    // The traffic tools cap at 500; terminal-space caps at 20, its own MAX_LIMIT.
+    for (const t of [searchAlerts, getTravelTimes, getTollRates, searchCameras]) {
+      expect(() => t.input.parse({ limit: 0 })).toThrow();
+      expect(() => t.input.parse({ limit: -5 })).toThrow();
+      expect(() => t.input.parse({ limit: 501 })).toThrow();
+      expect(() => t.input.parse({ limit: 500 })).not.toThrow();
+    }
+    expect(() => getTerminalSpace.input.parse({ limit: 0 })).toThrow();
+    expect(() => getTerminalSpace.input.parse({ limit: 21 })).toThrow();
+    expect(() => getTerminalSpace.input.parse({ limit: 20 })).not.toThrow();
+  });
+
   it('getFerrySchedule rejects boolean departingTerminalId', () => {
     expect(() =>
       getFerrySchedule.input.parse({ departingTerminalId: true, arrivingTerminalId: 3 }),
@@ -638,31 +666,39 @@ describe('Sparse upstream payloads — no fabricated data', () => {
 // SSRF — server does not accept arbitrary URLs from tool input
 // ---------------------------------------------------------------------------
 
+/**
+ * The invariant is a property of the declared schema, so these read `input.shape` rather than
+ * the keys of a parsed value: every input here is optional, so `parse({})` yields `{}` and any
+ * assertion over its keys would hold no matter what fields the tool declares.
+ */
 describe('SSRF — no user-controlled URL parameters in tool inputs', () => {
-  it('getMountainPasses has no URL input parameter', () => {
-    const schema = getMountainPasses.input;
-    const parsed = schema.parse({});
-    // No URL field — can't inject an endpoint
-    expect(Object.keys(parsed)).toHaveLength(0);
-  });
+  const ENDPOINT_KEYS = ['url', 'uri', 'endpoint', 'host', 'origin', 'server'];
 
-  it('getFerrySchedule has no URL input parameter', () => {
-    const parsed = getFerrySchedule.input.parse({ departingTerminalId: 7, arrivingTerminalId: 3 });
-    const keys = Object.keys(parsed);
-    expect(keys.some((k) => k.toLowerCase().includes('url'))).toBe(false);
-    expect(keys.some((k) => k.toLowerCase().includes('endpoint'))).toBe(false);
-    expect(keys.some((k) => k.toLowerCase().includes('host'))).toBe(false);
-  });
+  const everyTool = [
+    getBorderWaits,
+    getFerryAlerts,
+    getFerryRoutes,
+    getFerrySchedule,
+    getFerryTerminals,
+    getMountainPasses,
+    getTerminalSpace,
+    getTollRates,
+    getTravelTimes,
+    getVesselLocations,
+    searchAlerts,
+    searchCameras,
+  ];
 
-  it('searchAlerts has no URL input parameter', () => {
-    const parsed = searchAlerts.input.parse({});
-    const keys = Object.keys(parsed);
-    expect(keys.some((k) => k.toLowerCase().includes('url'))).toBe(false);
-  });
+  for (const t of everyTool) {
+    it(`${t.name} declares no endpoint-shaped input field`, () => {
+      const keys = Object.keys(t.input.shape);
+      for (const forbidden of ENDPOINT_KEYS) {
+        expect(keys.filter((k) => k.toLowerCase().includes(forbidden))).toEqual([]);
+      }
+    });
+  }
 
-  it('searchCameras has no URL input parameter', () => {
-    const parsed = searchCameras.input.parse({});
-    const keys = Object.keys(parsed);
-    expect(keys.some((k) => k.toLowerCase().includes('url'))).toBe(false);
+  it('getMountainPasses takes no input at all', () => {
+    expect(Object.keys(getMountainPasses.input.shape)).toHaveLength(0);
   });
 });

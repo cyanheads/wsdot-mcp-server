@@ -7,6 +7,14 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getFerryApiService } from '@/services/ferry/ferry-service.js';
 
+/**
+ * Paging unit is the terminal, not the sailing: offset/limit select whole terminals and each
+ * one arrives with every upcoming sailing it reports. WSF operates roughly 20 terminals, so
+ * MAX_LIMIT reaches the entire set in one call while the default bounds a browse of all of them.
+ */
+const DEFAULT_LIMIT = 5;
+const MAX_LIMIT = 20;
+
 export const getTerminalSpace = tool('wsdot_get_terminal_space', {
   title: 'Get Terminal Space',
   description:
@@ -15,13 +23,31 @@ export const getTerminalSpace = tool('wsdot_get_terminal_space', {
     'Optionally filter to a specific terminal by ID (use wsdot_get_ferry_terminals for the ID). ' +
     'driveUpSpaceCount is the key field — zero means the drive-up lane is full. ' +
     'Destinations are arrivingTerminalIds, not the itineraryLabel string: a sailing can serve ' +
-    'several terminals, and those IDs are what wsdot_get_ferry_schedule accepts.',
+    'several terminals, and those IDs are what wsdot_get_ferry_schedule accepts. ' +
+    `Results are paged by terminal (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT}): offset/limit select whole terminals ` +
+    'and totalCount counts matching terminals, not sailings — every sailing of a returned terminal is included, ' +
+    'so page size varies with how many departures each terminal carries.',
   annotations: { readOnlyHint: true },
   input: z.object({
     departingTerminalId: z
       .number()
       .optional()
       .describe('Filter to a specific terminal by numeric ID. Omit to return all terminals.'),
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe('Zero-based index of the first terminal to return, for paging. Defaults to 0.'),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_LIMIT)
+      .optional()
+      .describe(
+        `Maximum terminals to return in this page (1–${MAX_LIMIT}). Defaults to ${DEFAULT_LIMIT}. Counts terminals, not sailings.`,
+      ),
   }),
   output: z.object({
     terminals: z
@@ -98,7 +124,16 @@ export const getTerminalSpace = tool('wsdot_get_terminal_space', {
   }),
 
   enrichment: {
-    totalCount: z.number().describe('Number of terminals returned.'),
+    totalCount: z
+      .number()
+      .describe(
+        'Total terminals matching the filter across all pages (not just this page). Counts terminals, not sailings.',
+      ),
+    nextOffset: z
+      .number()
+      .nullable()
+      .describe('Offset to pass to retrieve the next page, or null when this is the last page.'),
+    hasMore: z.boolean().describe('True when more terminals remain beyond the current page.'),
     terminalFilter: z
       .number()
       .optional()
@@ -107,7 +142,7 @@ export const getTerminalSpace = tool('wsdot_get_terminal_space', {
       .string()
       .optional()
       .describe(
-        'Optional guidance when no terminal space data is available or the filter matched nothing. Absent on normal results.',
+        'Informational note about the page window, or guidance when no terminal space data is available, the filter matched nothing, or the offset ran past the end.',
       ),
   },
 
@@ -137,22 +172,49 @@ export const getTerminalSpace = tool('wsdot_get_terminal_space', {
         ? all.filter((t) => t.terminalId === input.departingTerminalId)
         : all;
 
-    ctx.log.info('Terminal space fetched', { total: all.length, returned: filtered.length });
+    // Page the filtered set at the terminal level so structuredContent and content[] carry the
+    // identical page and no terminal's sailings are split across two calls (the service stays
+    // filter-only; paging is a tool-handler concern). totalCount stays the full match count.
+    const totalCount = filtered.length;
+    const offset = input.offset ?? 0;
+    const limit = input.limit ?? DEFAULT_LIMIT;
+    const terminals = filtered.slice(offset, offset + limit);
+    const hasMore = offset + terminals.length < totalCount;
+    const nextOffset = hasMore ? offset + terminals.length : null;
+
+    ctx.log.info('Terminal space fetched', {
+      total: all.length,
+      totalCount,
+      offset,
+      limit,
+      returned: terminals.length,
+    });
 
     ctx.enrich({
-      totalCount: filtered.length,
+      totalCount,
+      nextOffset,
+      hasMore,
       ...(input.departingTerminalId != null && { terminalFilter: input.departingTerminalId }),
     });
 
-    if (filtered.length === 0) {
+    if (totalCount === 0) {
       ctx.enrich.notice(
         input.departingTerminalId != null
           ? `No terminal space data found for terminal ID ${input.departingTerminalId}. Use wsdot_get_ferry_terminals to verify valid terminal IDs.`
           : 'No terminal space data available. The WSF API may be temporarily unavailable — retry in 30 seconds.',
       );
+    } else if (terminals.length === 0) {
+      ctx.enrich.notice(
+        `Offset ${offset} is past the end of ${totalCount} matching terminals. Use an offset between 0 and ${totalCount - 1}.`,
+      );
+    } else {
+      const window = `Showing terminals ${offset + 1}–${offset + terminals.length} of ${totalCount}, each with all of its upcoming sailings.`;
+      ctx.enrich.notice(
+        hasMore ? `${window} Pass offset=${nextOffset} for the next page.` : window,
+      );
     }
 
-    return { terminals: filtered };
+    return { terminals };
   },
 
   format: (result) => {

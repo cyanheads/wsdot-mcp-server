@@ -37,10 +37,14 @@ import { getTollRates } from '@/mcp-server/tools/definitions/get-toll-rates.tool
 import { getTravelTimes } from '@/mcp-server/tools/definitions/get-travel-times.tool.js';
 import { searchAlerts } from '@/mcp-server/tools/definitions/search-alerts.tool.js';
 import { searchCameras } from '@/mcp-server/tools/definitions/search-cameras.tool.js';
+import { describePaginationContract } from '../helpers/pagination.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
+
+/** Zero-padded so no row's marker is a substring of another's. */
+const pad = (index: number) => String(index).padStart(3, '0');
 
 // ---------------------------------------------------------------------------
 // Upstream failure contract — shared by every traffic tool
@@ -233,7 +237,9 @@ describe('searchAlerts', () => {
     const enrichment = getEnrichment(ctx);
     expect(enrichment.totalCount).toBe(1);
     expect(enrichment.appliedFilters).toEqual({});
-    expect(enrichment.notice).toBeUndefined();
+    expect(enrichment.hasMore).toBe(false);
+    expect(enrichment.nextOffset).toBeNull();
+    expect(enrichment.notice).toBe('Showing alerts 1–1 of 1.');
   });
 
   it('enriches appliedFilters with stateRoute', async () => {
@@ -342,6 +348,109 @@ describe('searchAlerts', () => {
     expect(text).toContain('### Overnight lane closures on I-5. #706220');
     expect(text).toContain('Speed limit reduced to 55 mph.');
   });
+});
+
+describe('searchAlerts — page windows are reproducible across upstream row orders', () => {
+  /**
+   * The alerts endpoint serves the same alert set in more than one row order, so two fetches of
+   * one page can differ unless the handler imposes an order. Same alerts, shuffled arrival order.
+   */
+  const alerts = Array.from({ length: 12 }, (_, i) => ({
+    alertId: 700_100 + i,
+    headlineDescription: `Alert ${pad(i)}`,
+  }));
+
+  it('orders by alertId so the same offset selects the same alerts', async () => {
+    const pageOf = async (rows: typeof alerts) => {
+      mockService.searchAlerts.mockResolvedValue(rows);
+      const result = await searchAlerts.handler(
+        searchAlerts.input.parse({ offset: 4, limit: 4 }),
+        createMockContext(),
+      );
+      return result.alerts.map((a) => a.alertId);
+    };
+    const inOrder = await pageOf([...alerts]);
+    const shuffled = await pageOf([...alerts].reverse());
+    expect(inOrder).toEqual([700_104, 700_105, 700_106, 700_107]);
+    expect(shuffled).toEqual(inOrder);
+  });
+
+  it('sorts an alert carrying no alertId to the end rather than dropping it', async () => {
+    mockService.searchAlerts.mockResolvedValue([
+      { headlineDescription: 'No ID' },
+      ...alerts.slice(0, 2),
+    ]);
+    const result = await searchAlerts.handler(searchAlerts.input.parse({}), createMockContext());
+    expect(result.alerts.map((a) => a.alertId)).toEqual([700_100, 700_101, undefined]);
+  });
+
+  /**
+   * A comparator that returns 0 leaves the tied rows in arrival order, so an order decisive on
+   * distinct ids but tied elsewhere still hands a page boundary inside a tie group the same
+   * skip-and-repeat the ordering exists to prevent. Both ways a tie arises — a repeated alertId
+   * and a missing one — resolve from the row's own content instead.
+   */
+  describe.each([
+    {
+      case: 'alerts sharing one alertId',
+      tied: (label: string) => ({ alertId: 700_500, headlineDescription: label }),
+    },
+    {
+      case: 'alerts carrying no alertId',
+      tied: (label: string) => ({ headlineDescription: label }),
+    },
+  ])('ties resolve from row content — $case', ({ tied }) => {
+    /** One tie group wide enough that whole pages land inside it. */
+    const labels = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'].map((l) => `Tied ${l}`);
+    const rows = [
+      { alertId: 700_001, headlineDescription: 'Before' },
+      ...labels.map((label) => tied(label)),
+    ];
+
+    const pageOf = async (arrival: typeof rows, offset: number, limit: number) => {
+      mockService.searchAlerts.mockResolvedValue(arrival);
+      const result = await searchAlerts.handler(
+        searchAlerts.input.parse({ offset, limit }),
+        createMockContext(),
+      );
+      return result.alerts.map((a) => a.headlineDescription);
+    };
+
+    it('selects the same page from either arrival order', async () => {
+      const forward = await pageOf([...rows], 2, 2);
+      const reversed = await pageOf([...rows].reverse(), 2, 2);
+      expect(forward).toHaveLength(2);
+      expect(reversed).toEqual(forward);
+    });
+
+    it('walks every alert exactly once when arrival order flips mid-walk', async () => {
+      const seen: (string | undefined)[] = [];
+      for (let offset = 0; offset < rows.length; offset += 3) {
+        // A fresh upstream fetch backs every page, and consecutive fetches disagree on order.
+        const arrival = offset % 6 === 0 ? [...rows] : [...rows].reverse();
+        seen.push(...(await pageOf(arrival, offset, 3)));
+      }
+      expect([...seen].sort()).toEqual(['Before', ...labels]);
+    });
+  });
+});
+
+describePaginationContract({
+  tool: searchAlerts,
+  createContext: () => createMockContext(),
+  stubRows: (rows) => mockService.searchAlerts.mockResolvedValue(rows),
+  makeRows: (count) =>
+    Array.from({ length: count }, (_, i) => ({
+      alertId: i,
+      headlineDescription: `Alert ${pad(i)}`,
+      eventCategory: 'Incident',
+    })),
+  pageMarkers: (result) => result.alerts.map((a) => a.alertId as number),
+  markerText: (i) => `Alert ${pad(i)}`,
+  fixtureSize: 120,
+  defaultLimit: 50,
+  maxLimit: 500,
+  unit: 'alerts',
 });
 
 // ---------------------------------------------------------------------------
@@ -537,6 +646,54 @@ describe('getTravelTimes', () => {
   });
 });
 
+describePaginationContract({
+  tool: getTravelTimes,
+  createContext: () => createMockContext(),
+  stubRows: (rows) => mockService.getTravelTimes.mockResolvedValue(rows),
+  makeRows: (count) =>
+    Array.from({ length: count }, (_, i) => ({
+      travelTimeId: i,
+      name: `Corridor ${pad(i)}`,
+      currentTimeInMinutes: 20,
+      averageTimeInMinutes: 15,
+      startPoint: { roadName: '005', direction: 'N', milePost: i },
+    })),
+  pageMarkers: (result) => result.corridors.map((c) => c.travelTimeId as number),
+  markerText: (i) => `Corridor ${pad(i)}`,
+  fixtureSize: 120,
+  defaultLimit: 50,
+  maxLimit: 500,
+  unit: 'corridors',
+});
+
+/** The route filter runs in the handler, so paging must slice what the filter produced. */
+describe('getTravelTimes — paging applies after the route filter', () => {
+  it('pages the filtered corridors, not the unfiltered feed', async () => {
+    const onRoute = Array.from({ length: 60 }, (_, i) => ({
+      travelTimeId: i,
+      name: `On-route ${pad(i)}`,
+      startPoint: { roadName: '005' },
+    }));
+    const offRoute = Array.from({ length: 40 }, (_, i) => ({
+      travelTimeId: 900 + i,
+      name: `Off-route ${pad(i)}`,
+      startPoint: { roadName: 'I-90' },
+    }));
+    mockService.getTravelTimes.mockResolvedValue([...offRoute, ...onRoute]);
+    const ctx = createMockContext();
+    const result = await getTravelTimes.handler(
+      getTravelTimes.input.parse({ route: 'I-5', offset: 10, limit: 5 }),
+      ctx,
+    );
+    expect(result.corridors.map((c) => c.travelTimeId)).toEqual([10, 11, 12, 13, 14]);
+    const enrichment = getEnrichment(ctx);
+    // 60 matches, not the 100 the feed carries — totalCount counts the filtered set.
+    expect(enrichment.totalCount).toBe(60);
+    expect(enrichment.nextOffset).toBe(15);
+    expect(enrichment.routeFilter).toBe('i-5');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // getTollRates
 // ---------------------------------------------------------------------------
@@ -575,7 +732,9 @@ describe('getTollRates', () => {
     await getTollRates.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
     expect(enrichment.totalCount).toBe(1);
-    expect(enrichment.notice).toBeUndefined();
+    expect(enrichment.hasMore).toBe(false);
+    expect(enrichment.nextOffset).toBeNull();
+    expect(enrichment.notice).toBe('Showing toll rates 1–1 of 1.');
   });
 
   it('enriches notice when no rates returned', async () => {
@@ -614,6 +773,25 @@ describe('getTollRates', () => {
     const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('No toll rate data');
   });
+});
+
+describePaginationContract({
+  tool: getTollRates,
+  createContext: () => createMockContext(),
+  stubRows: (rows) => mockService.getTollRates.mockResolvedValue(rows),
+  makeRows: (count) =>
+    Array.from({ length: count }, (_, i) => ({
+      tripName: `Trip ${pad(i)}`,
+      stateRoute: '520',
+      startMilepost: i,
+      tollRateInDollars: 1.25,
+    })),
+  pageMarkers: (result) => result.rates.map((r) => r.startMilepost as number),
+  markerText: (i) => `Trip ${pad(i)}`,
+  fixtureSize: 120,
+  defaultLimit: 50,
+  maxLimit: 500,
+  unit: 'toll rate',
 });
 
 // ---------------------------------------------------------------------------
@@ -869,5 +1047,63 @@ describe('searchCameras', () => {
       expect.not.objectContaining({ stateRoute: expect.anything() }),
       ctx,
     );
+  });
+});
+
+describe('searchCameras — page windows are reproducible across upstream row orders', () => {
+  /**
+   * The camera feed serves one 1,700-row set in more than one order, and a full walk needs four
+   * fetches even at the maximum page size, so an unordered page window straddles the reorder.
+   */
+  const cameras = Array.from({ length: 12 }, (_, i) => ({
+    cameraId: 5000 + i,
+    title: `Cam ${pad(i)}`,
+  }));
+
+  const pageOf = async (arrival: typeof cameras, offset: number, limit: number) => {
+    mockService.searchCameras.mockResolvedValue(arrival);
+    const result = await searchCameras.handler(
+      searchCameras.input.parse({ offset, limit }),
+      createMockContext(),
+    );
+    return result.cameras.map((c) => c.cameraId);
+  };
+
+  it('orders by cameraId so the same offset selects the same cameras', async () => {
+    const forward = await pageOf([...cameras], 4, 4);
+    const reversed = await pageOf([...cameras].reverse(), 4, 4);
+    expect(forward).toEqual([5004, 5005, 5006, 5007]);
+    expect(reversed).toEqual(forward);
+  });
+
+  it('walks every camera exactly once when arrival order flips mid-walk', async () => {
+    const seen: (number | undefined)[] = [];
+    for (let offset = 0; offset < cameras.length; offset += 4) {
+      const arrival = offset % 8 === 0 ? [...cameras] : [...cameras].reverse();
+      seen.push(...(await pageOf(arrival, offset, 4)));
+    }
+    expect(seen).toEqual(cameras.map((c) => c.cameraId));
+  });
+
+  it('sorts a camera carrying no cameraId to the end rather than dropping it', async () => {
+    mockService.searchCameras.mockResolvedValue([{ title: 'No ID' }, ...cameras.slice(0, 2)]);
+    const result = await searchCameras.handler(searchCameras.input.parse({}), createMockContext());
+    expect(result.cameras.map((c) => c.cameraId)).toEqual([5000, 5001, undefined]);
+  });
+
+  it('resolves cameras tied on cameraId from row content, not arrival position', async () => {
+    const tied = ['A', 'B', 'C', 'D'].map((t) => ({ cameraId: 5100, title: `Tied ${t}` }));
+    const rows = [{ cameraId: 5001, title: 'Before' }, ...tied];
+    const titlesAt = async (arrival: typeof rows) => {
+      mockService.searchCameras.mockResolvedValue(arrival);
+      const result = await searchCameras.handler(
+        searchCameras.input.parse({ offset: 2, limit: 2 }),
+        createMockContext(),
+      );
+      return result.cameras.map((c) => c.title);
+    };
+    const forward = await titlesAt([...rows]);
+    expect(forward).toHaveLength(2);
+    expect(await titlesAt([...rows].reverse())).toEqual(forward);
   });
 });

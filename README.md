@@ -61,6 +61,7 @@ Active WA highway alerts — incidents, construction, closures, restrictions.
 - Filter by milepost range to scope to a corridor — an alert matches when its extent overlaps the range, so a closure that spans the boundary is returned
 - Omit all filters to return all current statewide alerts
 - Descriptions are plain text — upstream authors them with markup, and a link is rendered inline as `link text (url)` so the destination survives
+- Results are ordered by `alertId` and paged (default 50, max 500) — pass `offset`/`limit` to page through the full statewide set; the notice reports the next offset. Upstream returns the same alert set in more than one row order, so the ordering is imposed here to keep a given offset reproducible
 
 ---
 
@@ -72,6 +73,7 @@ Current vs. average travel times for named WA highway corridors.
 - Filter by route (`"I-5"`, `"5"`, `"SR 520"`) to get every corridor measured on it, or by any text to match corridor names (`"Everett"`)
 - When current time exceeds average, the corridor is congested; the delta is the delay
 - Reversible express-lane corridors report no travel time while closed in the queried direction — those figures are omitted rather than reported as zero minutes
+- Results are paged (default 50, max 500) — pass `offset`/`limit` to page through the full statewide set; the notice reports the next offset
 
 ---
 
@@ -81,6 +83,7 @@ Current dynamic toll rates for WA tolled facilities.
 
 - SR 99 (WSDOT Tunnel), SR 520 Bridge, I-405 Express Lanes, I-90 Two-Way Express Lanes, SR 167 HOT Lanes
 - Rates are time-banded and change dynamically based on traffic conditions
+- Results are paged (default 50, max 500) — pass `offset`/`limit` to page through the full statewide set; the notice reports the next offset
 
 ---
 
@@ -101,7 +104,7 @@ WSDOT highway camera metadata and image URLs.
 - Filter by state route (`"I-90"`, `"90"`, `"SR 520"`, or `"520"` all work), WSDOT region, or milepost range
 - Camera road names carry a route-type prefix, so `"SR 26"` excludes US 26 and `"US 97"` excludes US 97A; a bare `"26"` returns both
 - Returns metadata and image URLs — camera images are copyright WSDOT, not fetched as bytes
-- Results are paged (default 50, max 500) — pass `offset`/`limit` to page through the full statewide set; the notice reports the next offset
+- Results are ordered by `cameraId` and paged (default 50, max 500) — pass `offset`/`limit` to page through the full statewide set; the notice reports the next offset. Upstream returns the same camera set in more than one row order, so the ordering is imposed here to keep a given offset reproducible
 
 ---
 
@@ -153,6 +156,7 @@ Real-time vehicle space availability at WSF terminals for upcoming sailings.
 - `arrivingTerminalIds` lists the terminals a sailing serves and chains straight into `wsdot_get_ferry_schedule`; `itineraryLabel` is a display string that may name several stops, not a single destination
 - Filter to a specific terminal by ID (from `wsdot_get_ferry_terminals`)
 - Use for "will I make the ferry?" or "how full is the next sailing?" queries
+- Results are paged by terminal (default 5, max 20) — `offset`/`limit` select whole terminals and `totalCount` counts matching terminals, not sailings; every sailing of a returned terminal is included, so page size varies with how many departures each terminal carries
 
 ---
 
