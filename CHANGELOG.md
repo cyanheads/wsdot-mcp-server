@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.2](changelog/0.2.x/0.2.2.md) — 2026-07-30
+
+`offset`/`limit` paging added to `wsdot_search_alerts`, `wsdot_get_travel_times`, `wsdot_get_toll_rates`, and `wsdot_get_terminal_space` (#24); `wsdot_search_alerts` and `wsdot_search_cameras` now impose a deterministic row order before paging, which changes their default result order.
+
 ## [0.2.1](changelog/0.2.x/0.2.1.md) — 2026-07-30
 
 `wsdot_search_alerts` normalizes upstream HTML in `headlineDescription`/`extendedDescription` to plain text, preserving link destinations (#22); `wsdot_get_ferry_alerts` surfaces `alertTitle`, `bulletinText`, `alertType`, and `affectsAllRoutes` (#34).
