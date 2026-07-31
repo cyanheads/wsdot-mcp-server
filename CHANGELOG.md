@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.0](changelog/0.2.x/0.2.0.md) — 2026-07-30 · ⚠️ Breaking
+
+`wsdot_get_terminal_space`: negative `DriveUpSpaceCount`/`ReservableSpaceCount` now floor to zero, and `arrivingTerminalName` is replaced by `arrivingTerminalIds` (destinations) and `itineraryLabel` (display string) (#25, #31); `wsdot_get_ferry_schedule` drops `isCancelled`, which no upstream endpoint ever populated (#32).
+
 ## [0.1.15](changelog/0.1.x/0.1.15.md) — 2026-07-30
 
 Route filters compare route-type prefix and lettered suffix, so `SR 26` no longer matches US 26 and `US 97` excludes US 97A (#30); travel-times route filtering matches corridor road names, not just names (#26); the CurrentTime=0 sentinel is dropped instead of a zero-minute trip (#29); milepost filtering tests an alert extent for overlap (#35).
