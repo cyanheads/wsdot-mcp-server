@@ -259,7 +259,6 @@ describe('FerryApiService.getSchedule', () => {
           {
             DepartingTime: '/Date(1700000000000-0800)/',
             ArrivingTime: '/Date(1700002100000-0800)/',
-            IsCancelled: false,
             VesselName: 'Yakima',
           },
         ],
@@ -339,6 +338,34 @@ describe('FerryApiService.getSchedule', () => {
     const ctx = createMockContext();
     const schedule = await svc.getSchedule(7, 3, '2026-05-23', false, ctx);
     expect(schedule.sailings).toHaveLength(0);
+  });
+
+  it('does not surface a cancellation flag — no schedule endpoint publishes one', async () => {
+    // WSF drops a cancelled sailing from the schedule rather than marking it, so an IsCancelled
+    // key would be a promise the upstream cannot keep. Even when one appears, it is not mapped.
+    mockFetch.mockResolvedValue(
+      makeResponse({
+        TerminalCombos: [
+          {
+            DepartingTerminalName: 'Seattle',
+            ArrivingTerminalName: 'Bainbridge Island',
+            Times: [
+              {
+                DepartingTime: '/Date(1700000000000-0800)/',
+                ArrivingTime: '/Date(1700002100000-0800)/',
+                IsCancelled: true,
+                VesselName: 'Yakima',
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const ctx = createMockContext();
+    const schedule = await svc.getSchedule(7, 3, '2026-05-23', false, ctx);
+    expect(schedule.sailings).toHaveLength(1);
+    expect('isCancelled' in schedule.sailings[0]).toBe(false);
+    expect(schedule.sailings[0].vesselName).toBe('Yakima');
   });
 });
 
@@ -458,13 +485,21 @@ describe('FerryApiService.getTerminalSailingSpace', () => {
             MaxSpaceCount: 202,
             SpaceForArrivalTerminals: [
               {
+                TerminalID: 3,
                 TerminalName: 'Bainbridge Island',
+                ArrivalTerminalIDs: [3],
+                DisplayDriveUpSpace: true,
+                DisplayReservableSpace: true,
                 DriveUpSpaceCount: 50,
                 ReservableSpaceCount: 100,
                 DriveUpSpaceHexColor: '#00FF00',
               },
               {
+                TerminalID: 12,
                 TerminalName: 'Kingston',
+                ArrivalTerminalIDs: [12],
+                DisplayDriveUpSpace: true,
+                DisplayReservableSpace: false,
                 DriveUpSpaceCount: 30,
                 ReservableSpaceCount: 80,
                 DriveUpSpaceHexColor: '#FFFF00',
@@ -482,9 +517,176 @@ describe('FerryApiService.getTerminalSailingSpace', () => {
     expect(spaces[0].terminalId).toBe(7);
     // One entry per arrival terminal
     expect(spaces[0].departingSpaces).toHaveLength(2);
-    expect(spaces[0].departingSpaces[0].arrivingTerminalName).toBe('Bainbridge Island');
+    expect(spaces[0].departingSpaces[0].itineraryLabel).toBe('Bainbridge Island');
+    expect(spaces[0].departingSpaces[0].arrivingTerminalIds).toEqual([3]);
+    expect(spaces[0].departingSpaces[0].displayReservableSpace).toBe(true);
     expect(spaces[0].departingSpaces[0].driveUpSpaceCount).toBe(50);
-    expect(spaces[0].departingSpaces[1].arrivingTerminalName).toBe('Kingston');
+    expect(spaces[0].departingSpaces[1].itineraryLabel).toBe('Kingston');
+    expect(spaces[0].departingSpaces[1].arrivingTerminalIds).toEqual([12]);
+    expect(spaces[0].departingSpaces[1].displayReservableSpace).toBe(false);
+  });
+
+  it('derives destinations from ArrivalTerminalIDs on a multi-stop itinerary', async () => {
+    // On San Juan sailings the nested TerminalID is the *departing* terminal and TerminalName is a
+    // full itinerary string. Two entries can share that string while serving different terminals.
+    const raw = [
+      {
+        TerminalID: 1,
+        TerminalName: 'Anacortes',
+        DepartingSpaces: [
+          {
+            Departure: '/Date(1700000000000-0800)/',
+            VesselName: 'Chelan',
+            MaxSpaceCount: 144,
+            SpaceForArrivalTerminals: [
+              {
+                TerminalID: 1,
+                TerminalName: 'Anacortes -> Orcas Island -> Shaw Island -> Anacortes',
+                ArrivalTerminalIDs: [15, 18, 13],
+                DriveUpSpaceCount: 20,
+              },
+              {
+                TerminalID: 1,
+                TerminalName: 'Anacortes -> Orcas Island -> Shaw Island -> Anacortes',
+                ArrivalTerminalIDs: [15, 18],
+                DriveUpSpaceCount: 12,
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const ctx = createMockContext();
+    const spaces = await svc.getTerminalSailingSpace(ctx);
+
+    const rows = spaces[0].departingSpaces;
+    expect(rows).toHaveLength(2);
+    // The departing terminal's ID never leaks into the destinations.
+    expect(rows[0].arrivingTerminalIds).toEqual([15, 18, 13]);
+    expect(rows[1].arrivingTerminalIds).toEqual([15, 18]);
+    // The shared itinerary string is kept, but labelled as such rather than as a terminal name.
+    expect(rows[0].itineraryLabel).toBe('Anacortes -> Orcas Island -> Shaw Island -> Anacortes');
+    expect(rows[0].itineraryLabel).toBe(rows[1].itineraryLabel);
+    expect('arrivingTerminalName' in rows[0]).toBe(false);
+  });
+
+  it('omits arrivingTerminalIds when upstream sends no arrival terminal IDs', async () => {
+    const raw = [
+      {
+        TerminalID: 7,
+        TerminalName: 'Seattle',
+        DepartingSpaces: [
+          {
+            Departure: '/Date(1700000000000-0800)/',
+            SpaceForArrivalTerminals: [
+              { TerminalName: 'Bainbridge Island', ArrivalTerminalIDs: null },
+              { TerminalName: 'Bremerton', ArrivalTerminalIDs: [] },
+            ],
+          },
+        ],
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const ctx = createMockContext();
+    const spaces = await svc.getTerminalSailingSpace(ctx);
+
+    const rows = spaces[0].departingSpaces;
+    expect(rows).toHaveLength(2);
+    expect('arrivingTerminalIds' in rows[0]).toBe(false);
+    expect('arrivingTerminalIds' in rows[1]).toBe(false);
+  });
+
+  it('floors negative space counts to zero', async () => {
+    // Oversubscribed sailings report a negative remaining count upstream; a caller must not read
+    // it as available capacity.
+    const raw = [
+      {
+        TerminalID: 1,
+        TerminalName: 'Anacortes',
+        DepartingSpaces: [
+          {
+            Departure: '/Date(1700000000000-0800)/',
+            MaxSpaceCount: 139,
+            SpaceForArrivalTerminals: [
+              {
+                TerminalName: 'Anacortes -> Friday Harbor',
+                ArrivalTerminalIDs: [10],
+                DriveUpSpaceCount: -14,
+                ReservableSpaceCount: -3,
+                DriveUpSpaceHexColor: '#FF0000',
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const ctx = createMockContext();
+    const spaces = await svc.getTerminalSailingSpace(ctx);
+
+    const row = spaces[0].departingSpaces[0];
+    expect(row.driveUpSpaceCount).toBe(0);
+    expect(row.reservableSpaceCount).toBe(0);
+    expect(row.maxSpaceCount).toBe(139);
+  });
+
+  it('leaves non-negative space counts untouched', async () => {
+    const raw = [
+      {
+        TerminalID: 7,
+        TerminalName: 'Seattle',
+        DepartingSpaces: [
+          {
+            Departure: '/Date(1700000000000-0800)/',
+            SpaceForArrivalTerminals: [
+              {
+                TerminalName: 'Bainbridge Island',
+                ArrivalTerminalIDs: [3],
+                DriveUpSpaceCount: 0,
+                ReservableSpaceCount: 42,
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const ctx = createMockContext();
+    const spaces = await svc.getTerminalSailingSpace(ctx);
+
+    const row = spaces[0].departingSpaces[0];
+    expect(row.driveUpSpaceCount).toBe(0);
+    expect(row.reservableSpaceCount).toBe(42);
+  });
+
+  it('maps the per-departure cancellation flag onto every arrival row', async () => {
+    // Unlike the schedule feed, this endpoint does publish IsCancelled per departure — it must
+    // survive changes to the surrounding space fields.
+    const raw = [
+      {
+        TerminalID: 7,
+        TerminalName: 'Seattle',
+        DepartingSpaces: [
+          {
+            Departure: '/Date(1700000000000-0800)/',
+            IsCancelled: true,
+            SpaceForArrivalTerminals: [
+              { TerminalName: 'Bainbridge Island', ArrivalTerminalIDs: [3] },
+              { TerminalName: 'Bremerton', ArrivalTerminalIDs: [4] },
+            ],
+          },
+        ],
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const ctx = createMockContext();
+    const spaces = await svc.getTerminalSailingSpace(ctx);
+
+    const rows = spaces[0].departingSpaces;
+    expect(rows).toHaveLength(2);
+    expect(rows[0].isCancelled).toBe(true);
+    expect(rows[1].isCancelled).toBe(true);
   });
 
   it('emits a single row with vessel info when SpaceForArrivalTerminals is empty', async () => {
@@ -507,7 +709,8 @@ describe('FerryApiService.getTerminalSailingSpace', () => {
     const spaces = await svc.getTerminalSailingSpace(ctx);
     expect(spaces[0].departingSpaces).toHaveLength(1);
     expect(spaces[0].departingSpaces[0].vesselName).toBe('Yakima');
-    expect('arrivingTerminalName' in spaces[0].departingSpaces[0]).toBe(false);
+    expect('itineraryLabel' in spaces[0].departingSpaces[0]).toBe(false);
+    expect('arrivingTerminalIds' in spaces[0].departingSpaces[0]).toBe(false);
   });
 
   it('decodes WCF dates in departure times', async () => {

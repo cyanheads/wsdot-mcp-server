@@ -167,7 +167,6 @@ export class FerryApiService {
       sailings: (combo?.Times ?? []).map((s) => ({
         ...wcfDateField('departureTime', s.DepartingTime),
         ...wcfDateField('arrivalTime', s.ArrivingTime),
-        ...(typeof s.IsCancelled === 'boolean' && { isCancelled: s.IsCancelled }),
         ...(s.VesselName != null && { vesselName: s.VesselName }),
       })),
     };
@@ -224,9 +223,25 @@ export class FerryApiService {
           ...wcfDateField('departure', s.Departure),
           ...(typeof s.IsCancelled === 'boolean' && { isCancelled: s.IsCancelled }),
           ...(s.VesselName != null && { vesselName: s.VesselName }),
-          ...(a.TerminalName != null && { arrivingTerminalName: a.TerminalName }),
-          ...(a.DriveUpSpaceCount != null && { driveUpSpaceCount: a.DriveUpSpaceCount }),
-          ...(a.ReservableSpaceCount != null && { reservableSpaceCount: a.ReservableSpaceCount }),
+          // TerminalName is an itinerary string and its sibling TerminalID is the *departing*
+          // terminal on multi-stop routes; ArrivalTerminalIDs is the only reliable destination.
+          ...(a.TerminalName != null && { itineraryLabel: a.TerminalName }),
+          ...(a.ArrivalTerminalIDs != null &&
+            a.ArrivalTerminalIDs.length > 0 && { arrivingTerminalIds: a.ArrivalTerminalIDs }),
+          ...(typeof a.DisplayDriveUpSpace === 'boolean' && {
+            displayDriveUpSpace: a.DisplayDriveUpSpace,
+          }),
+          ...(typeof a.DisplayReservableSpace === 'boolean' && {
+            displayReservableSpace: a.DisplayReservableSpace,
+          }),
+          // Oversubscribed sailings report a negative remaining count; floor it so the advertised
+          // value never reads as usable space.
+          ...(a.DriveUpSpaceCount != null && {
+            driveUpSpaceCount: Math.max(0, a.DriveUpSpaceCount),
+          }),
+          ...(a.ReservableSpaceCount != null && {
+            reservableSpaceCount: Math.max(0, a.ReservableSpaceCount),
+          }),
           ...(s.MaxSpaceCount != null && { maxSpaceCount: s.MaxSpaceCount }),
           ...(a.DriveUpSpaceHexColor != null && { driveUpSpaceHexColor: a.DriveUpSpaceHexColor }),
         }));

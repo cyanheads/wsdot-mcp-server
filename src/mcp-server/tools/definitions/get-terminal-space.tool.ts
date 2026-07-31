@@ -13,7 +13,9 @@ export const getTerminalSpace = tool('wsdot_get_terminal_space', {
     'Returns real-time drive-up and reservable vehicle space available at WSF terminals for upcoming sailings. ' +
     'Use for "will I make the ferry?" or "how full is the next sailing?" questions. ' +
     'Optionally filter to a specific terminal by ID (use wsdot_get_ferry_terminals for the ID). ' +
-    'DriveUpSpaceCount is the key field — zero means the drive-up lane is full.',
+    'driveUpSpaceCount is the key field — zero means the drive-up lane is full. ' +
+    'Destinations are arrivingTerminalIds, not the itineraryLabel string: a sailing can serve ' +
+    'several terminals, and those IDs are what wsdot_get_ferry_schedule accepts.',
   annotations: { readOnlyHint: true },
   input: z.object({
     departingTerminalId: z
@@ -41,18 +43,42 @@ export const getTerminalSpace = tool('wsdot_get_terminal_space', {
                       .optional()
                       .describe('Whether this sailing is cancelled.'),
                     vesselName: z.string().optional().describe('Vessel assigned to this sailing.'),
-                    arrivingTerminalName: z
+                    arrivingTerminalIds: z
+                      .array(z.number())
+                      .optional()
+                      .describe(
+                        'Numeric IDs of the terminals this sailing serves — the destinations. Pass one to wsdot_get_ferry_schedule as arrivingTerminalId, or resolve names with wsdot_get_ferry_terminals.',
+                      ),
+                    itineraryLabel: z
                       .string()
                       .optional()
-                      .describe('Destination terminal name.'),
+                      .describe(
+                        'Upstream itinerary string for the sailing, e.g. "Anacortes -> Friday Harbor". A display label only — it may name the departing terminal or several stops, so do not read it as the destination.',
+                      ),
+                    displayDriveUpSpace: z
+                      .boolean()
+                      .optional()
+                      .describe(
+                        'Whether WSF publishes a drive-up count for this sailing. False means driveUpSpaceCount is not reported, not that the lane is empty.',
+                      ),
+                    displayReservableSpace: z
+                      .boolean()
+                      .optional()
+                      .describe(
+                        'Whether this sailing takes vehicle reservations. False means reservableSpaceCount does not apply.',
+                      ),
                     driveUpSpaceCount: z
                       .number()
                       .optional()
-                      .describe('Available drive-up vehicle spaces. Zero means full.'),
+                      .describe(
+                        'Available drive-up vehicle spaces. Zero means full — oversubscribed sailings report a negative count upstream and are floored to zero here, so this value is never negative.',
+                      ),
                     reservableSpaceCount: z
                       .number()
                       .optional()
-                      .describe('Available reservable vehicle spaces.'),
+                      .describe(
+                        'Available reservable vehicle spaces, floored at zero like driveUpSpaceCount. Zero means no reservable space remains.',
+                      ),
                     maxSpaceCount: z
                       .number()
                       .optional()
@@ -142,17 +168,27 @@ export const getTerminalSpace = tool('wsdot_get_terminal_space', {
       } else {
         for (const s of t.departingSpaces) {
           const cancelled = s.isCancelled ? ' [CANCELLED]' : '';
-          const dest = s.arrivingTerminalName ? ` → ${s.arrivingTerminalName}` : '';
+          const itinerary = s.itineraryLabel ? ` → ${s.itineraryLabel}` : '';
           const vessel = s.vesselName ? ` | ${s.vesselName}` : '';
-          lines.push(`**${s.departure ?? 'Unknown'}**${dest}${vessel}${cancelled}`);
-          if (s.driveUpSpaceCount != null) {
-            const full = s.driveUpSpaceCount === 0 ? ' (FULL)' : '';
+          lines.push(`**${s.departure ?? 'Unknown'}**${itinerary}${vessel}${cancelled}`);
+          if (s.arrivingTerminalIds?.length) {
+            lines.push(`  arrivingTerminalIds: ${s.arrivingTerminalIds.join(', ')}`);
+          }
+          if (s.displayDriveUpSpace === false) {
+            lines.push('  Drive-up: not reported for this sailing (displayDriveUpSpace: false)');
+          } else if (s.driveUpSpaceCount != null) {
+            const full = s.driveUpSpaceCount <= 0 ? ' (FULL)' : '';
             lines.push(
               `  Drive-up: ${s.driveUpSpaceCount}${s.maxSpaceCount != null ? `/${s.maxSpaceCount}` : ''} spaces${full}`,
             );
           }
-          if (s.reservableSpaceCount != null) {
-            lines.push(`  Reservable: ${s.reservableSpaceCount} spaces`);
+          if (s.displayReservableSpace === false) {
+            lines.push(
+              '  Reservable: no reservations on this sailing (displayReservableSpace: false)',
+            );
+          } else if (s.reservableSpaceCount != null) {
+            const full = s.reservableSpaceCount <= 0 ? ' (FULL)' : '';
+            lines.push(`  Reservable: ${s.reservableSpaceCount} spaces${full}`);
           }
           if (s.driveUpSpaceHexColor) {
             lines.push(`  Space color indicator: ${s.driveUpSpaceHexColor}`);

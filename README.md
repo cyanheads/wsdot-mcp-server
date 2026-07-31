@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.1.15-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/wsdot-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/wsdot-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/wsdot-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.0+-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/wsdot-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/wsdot-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/wsdot-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.0+-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -130,6 +130,7 @@ Departure times for a specific WSF ferry route.
 - Requires numeric terminal IDs — use `wsdot_get_ferry_terminals` first
 - `remainingOnly: true` returns only future departures for today (useful for "next ferry" queries)
 - For future dates, all sailings for that day are returned
+- No cancellation status — WSF drops a cancelled sailing from the schedule rather than flagging it, so a listed sailing is not confirmation it will run; check `wsdot_get_ferry_alerts`, which reports disruptions at route level
 
 ---
 
@@ -147,7 +148,8 @@ Real-time AIS positions for all active WSF vessels.
 
 Real-time vehicle space availability at WSF terminals for upcoming sailings.
 
-- `DriveUpSpaceCount` is the key field — zero means the drive-up lane is full
+- `driveUpSpaceCount` is the key field — zero means the drive-up lane is full. Oversubscribed sailings report a negative count upstream; it is floored to zero so the value never reads as available space
+- `arrivingTerminalIds` lists the terminals a sailing serves and chains straight into `wsdot_get_ferry_schedule`; `itineraryLabel` is a display string that may name several stops, not a single destination
 - Filter to a specific terminal by ID (from `wsdot_get_ferry_terminals`)
 - Use for "will I make the ferry?" or "how full is the next sailing?" queries
 
@@ -181,7 +183,7 @@ WSDOT-specific:
 Agent-friendly output:
 
 - Cross-tool linking built into descriptions — ferry tools document which tool to call first for terminal and route ID resolution
-- `DriveUpSpaceCount: 0` and congestion delta fields give agents actionable signal without string parsing
+- `driveUpSpaceCount: 0` and congestion delta fields give agents actionable signal without string parsing
 - Partial data preserved — sparse upstream payloads surface `null`/`undefined` rather than synthetic defaults
 
 ## Getting started

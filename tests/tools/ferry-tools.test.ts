@@ -283,13 +283,11 @@ describe('getFerrySchedule', () => {
       {
         departureTime: '6:00 AM',
         arrivalTime: '6:35 AM',
-        isCancelled: false,
         vesselName: 'Yakima',
       },
       {
         departureTime: '7:00 AM',
         arrivalTime: '7:35 AM',
-        isCancelled: true,
         vesselName: 'Walla Walla',
       },
     ],
@@ -382,18 +380,35 @@ describe('getFerrySchedule', () => {
         {
           departureTime: '6:00 AM',
           arrivalTime: '6:35 AM',
-          isCancelled: false,
           vesselName: 'Yakima',
         },
-        { departureTime: '7:00 AM', isCancelled: true },
+        { departureTime: '7:00 AM' },
       ],
     };
     const blocks = getFerrySchedule.format!(output);
     const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('Seattle → Bainbridge Island');
     expect(text).toContain('6:00 AM');
+    expect(text).toContain('6:35 AM');
     expect(text).toContain('Yakima');
-    expect(text).toContain('CANCELLED');
+    expect(text).toContain('7:00 AM');
+  });
+
+  it('advertises no cancellation status — the schedule feed cannot populate one', () => {
+    // WSF removes a cancelled sailing from the schedule rather than flagging it, so neither the
+    // output schema nor the rendered text may imply a sailing is confirmed to run.
+    expect(Object.keys(getFerrySchedule.output.shape.sailings.element.shape)).not.toContain(
+      'isCancelled',
+    );
+    const blocks = getFerrySchedule.format!({
+      departingTerminalName: 'Seattle',
+      arrivingTerminalName: 'Bainbridge Island',
+      sailings: [{ departureTime: '6:00 AM', arrivalTime: '6:35 AM', vesselName: 'Yakima' }],
+    });
+    const text = (blocks[0] as { text: string }).text;
+    expect(text).not.toMatch(/cancell?ed/i);
+    // The description routes the caller to the tool that does carry disruptions.
+    expect(getFerrySchedule.description).toContain('wsdot_get_ferry_alerts');
   });
 
   it('formats empty sailings list', () => {
@@ -603,7 +618,10 @@ describe('getTerminalSpace', () => {
         departure: '10:00 AM',
         isCancelled: false,
         vesselName: 'Yakima',
-        arrivingTerminalName: 'Bainbridge Island',
+        arrivingTerminalIds: [3],
+        itineraryLabel: 'Bainbridge Island',
+        displayDriveUpSpace: true,
+        displayReservableSpace: true,
         driveUpSpaceCount: 50,
         reservableSpaceCount: 100,
         maxSpaceCount: 202,
@@ -673,9 +691,42 @@ describe('getTerminalSpace', () => {
     expect(text).toContain('7'); // terminalId
     expect(text).toContain('10:00 AM');
     expect(text).toContain('Yakima');
-    expect(text).toContain('Bainbridge Island');
-    expect(text).toContain('50');
-    expect(text).toContain('202');
+    expect(text).toContain('Bainbridge Island'); // itineraryLabel
+    expect(text).toContain('arrivingTerminalIds: 3');
+    expect(text).toContain('Drive-up: 50/202 spaces');
+    expect(text).toContain('Reservable: 100 spaces');
+  });
+
+  it('renders every destination of a multi-stop sailing', () => {
+    // Two sailings can share an itinerary label while serving different terminals — the IDs are
+    // what tells them apart, and what chains into wsdot_get_ferry_schedule.
+    const label = 'Anacortes -> Orcas Island -> Shaw Island -> Anacortes';
+    const output = {
+      terminals: [
+        {
+          terminalId: 1,
+          terminalName: 'Anacortes',
+          departingSpaces: [
+            {
+              departure: '11:00 AM',
+              itineraryLabel: label,
+              arrivingTerminalIds: [15, 18, 13],
+              driveUpSpaceCount: 20,
+            },
+            {
+              departure: '12:45 PM',
+              itineraryLabel: label,
+              arrivingTerminalIds: [15, 18],
+              driveUpSpaceCount: 12,
+            },
+          ],
+        },
+      ],
+    };
+    const blocks = getTerminalSpace.format!(output);
+    const text = (blocks[0] as { text: string }).text;
+    expect(text).toContain('arrivingTerminalIds: 15, 18, 13');
+    expect(text).toContain('arrivingTerminalIds: 15, 18\n');
   });
 
   it('shows FULL when driveUpSpaceCount is 0', () => {
@@ -686,7 +737,70 @@ describe('getTerminalSpace', () => {
     const output = { terminals: [fullTerminal] };
     const blocks = getTerminalSpace.format!(output);
     const text = (blocks[0] as { text: string }).text;
-    expect(text).toContain('FULL');
+    expect(text).toContain('Drive-up: 0/202 spaces (FULL)');
+  });
+
+  it('shows FULL, never a usable count, for a negative driveUpSpaceCount', () => {
+    // The service floors negatives, but format() is also reachable directly — a negative here
+    // must still read as full rather than as available space.
+    const oversubscribed = {
+      ...terminalSpaceFixture,
+      departingSpaces: [{ ...terminalSpaceFixture.departingSpaces[0], driveUpSpaceCount: -14 }],
+    };
+    const blocks = getTerminalSpace.format!({ terminals: [oversubscribed] });
+    const text = (blocks[0] as { text: string }).text;
+    expect(text).toContain('(FULL)');
+    expect(text).toContain('Drive-up: -14/202 spaces (FULL)');
+  });
+
+  it('shows FULL when reservableSpaceCount is 0', () => {
+    const noReservations = {
+      ...terminalSpaceFixture,
+      departingSpaces: [{ ...terminalSpaceFixture.departingSpaces[0], reservableSpaceCount: 0 }],
+    };
+    const blocks = getTerminalSpace.format!({ terminals: [noReservations] });
+    const text = (blocks[0] as { text: string }).text;
+    expect(text).toContain('Reservable: 0 spaces (FULL)');
+  });
+
+  it('distinguishes an unreported count from an empty one', () => {
+    const notOffered = {
+      ...terminalSpaceFixture,
+      departingSpaces: [
+        {
+          departure: '10:00 AM',
+          itineraryLabel: 'Bainbridge Island',
+          arrivingTerminalIds: [3],
+          displayDriveUpSpace: false,
+          displayReservableSpace: false,
+        },
+      ],
+    };
+    const blocks = getTerminalSpace.format!({ terminals: [notOffered] });
+    const text = (blocks[0] as { text: string }).text;
+    expect(text).toContain('Drive-up: not reported for this sailing (displayDriveUpSpace: false)');
+    expect(text).toContain(
+      'Reservable: no reservations on this sailing (displayReservableSpace: false)',
+    );
+    expect(text).not.toContain('FULL');
+    expect(text).not.toContain('spaces');
+  });
+
+  it('keeps the cancellation status this feed does populate', () => {
+    // The schedule feed publishes no cancellation flag, but this one does — it stays advertised
+    // and rendered.
+    expect(
+      Object.keys(
+        getTerminalSpace.output.shape.terminals.element.shape.departingSpaces.element.shape,
+      ),
+    ).toContain('isCancelled');
+    const cancelled = {
+      ...terminalSpaceFixture,
+      departingSpaces: [{ ...terminalSpaceFixture.departingSpaces[0], isCancelled: true }],
+    };
+    const blocks = getTerminalSpace.format!({ terminals: [cancelled] });
+    const text = (blocks[0] as { text: string }).text;
+    expect(text).toContain('[CANCELLED]');
   });
 
   it('formats empty terminals list', () => {

@@ -379,7 +379,17 @@ describe('API key non-leak — output does not expose access code or secrets', (
     const space = {
       terminalId: 7,
       terminalName: 'Seattle',
-      departingSpaces: [{ departure: '10:00 AM', driveUpSpaceCount: 50, maxSpaceCount: 202 }],
+      departingSpaces: [
+        {
+          departure: '10:00 AM',
+          itineraryLabel: 'Seattle -> Bainbridge Island',
+          arrivingTerminalIds: [3],
+          displayDriveUpSpace: true,
+          displayReservableSpace: false,
+          driveUpSpaceCount: 50,
+          maxSpaceCount: 202,
+        },
+      ],
     };
     mockFerryService.getTerminalSailingSpace.mockResolvedValue([space]);
     const ctx = createMockContext();
@@ -508,10 +518,12 @@ describe('Sparse upstream payloads — no fabricated data', () => {
   });
 
   it('getFerrySchedule format(): missing arrivalTime shows Unknown for departure', () => {
-    const output = { sailings: [{ departureTime: undefined, isCancelled: false }] };
+    const output = { sailings: [{ departureTime: undefined, arrivalTime: undefined }] };
     const blocks = getFerrySchedule.format!(output);
     const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('Unknown');
+    // A missing arrival time is left absent, not filled with a fabricated one.
+    expect(text).not.toContain('→');
   });
 
   it('getVesselLocations format(): vessel with no opRouteAbbrev renders without crash', () => {

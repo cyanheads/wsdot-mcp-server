@@ -14,7 +14,10 @@ export const getFerrySchedule = tool('wsdot_get_ferry_schedule', {
     'Returns departure times for a specific WSF ferry route on a given date. ' +
     'Requires numeric terminal IDs — use wsdot_get_ferry_terminals to resolve terminal names to IDs. ' +
     'Set remainingOnly to true to show only future departures for today (useful for "next ferry" queries). ' +
-    'For future dates, all sailings for that day are returned.',
+    'For future dates, all sailings for that day are returned. ' +
+    'Cancellations are not carried here — WSF drops a cancelled sailing from the schedule instead ' +
+    'of flagging it, so a listed sailing is not confirmation that it will run. Check ' +
+    'wsdot_get_ferry_alerts for disruptions; those are scoped to a route, not an individual sailing.',
   annotations: { readOnlyHint: true },
   input: z.object({
     departingTerminalId: z
@@ -43,7 +46,6 @@ export const getFerrySchedule = tool('wsdot_get_ferry_schedule', {
           .object({
             departureTime: z.string().optional().describe('Scheduled departure time.'),
             arrivalTime: z.string().optional().describe('Scheduled arrival time.'),
-            isCancelled: z.boolean().optional().describe('Whether this sailing is cancelled.'),
             vesselName: z.string().optional().describe('Vessel assigned to this sailing.'),
           })
           .describe('One scheduled sailing with departure time and vessel assignment.'),
@@ -177,11 +179,10 @@ export const getFerrySchedule = tool('wsdot_get_ferry_schedule', {
       lines.push('No sailings found for this route and date.');
     } else {
       for (const s of result.sailings) {
-        const cancelled = s.isCancelled ? ' ~~CANCELLED~~' : '';
         const dep = s.departureTime ?? 'Unknown';
         const arr = s.arrivalTime ? ` → ${s.arrivalTime}` : '';
         const vessel = s.vesselName ? ` | ${s.vesselName}` : '';
-        lines.push(`- ${dep}${arr}${vessel}${cancelled}`);
+        lines.push(`- ${dep}${arr}${vessel}`);
       }
     }
     return [{ type: 'text', text: lines.join('\n') }];

@@ -187,8 +187,8 @@ Excluded: `/allsailings` (full season dump — too large, not useful per-query),
 
 - **Input:** `departingTerminalId` (number), `arrivingTerminalId` (number), `tripDate?` (ISO 8601 string, defaults to today), `remainingOnly?` (boolean, default false — when true uses `scheduletoday` endpoint filtering to future sailings only)
 - **Routing:** When `tripDate` is today and `remainingOnly` is true, use `GET Schedule/rest/scheduletoday/{DepartingTerminalID}/{ArrivingTerminalID}/true`. When `tripDate` is today and `remainingOnly` is false, use `scheduletoday/.../false`. When `tripDate` is a future date, use `GET Schedule/rest/schedule/{TripDate}/{DepartingTerminalID}/{ArrivingTerminalID}`.
-- **Output:** `routeName`, `departingTerminalName`, `arrivingTerminalName`, `tripDate`, `sailings` array (each: `departureTime`, `arrivalTime?`, `isCancelled?`, `vesselName?`)
-- **Notes:** The `scheduletoday` endpoint directly returns remaining times — use it for today's queries. The standard `schedule` endpoint for date lookups. `arrivingTerminalId` 0 is sometimes valid for routes with single arrivals.
+- **Output:** `routeName`, `departingTerminalName`, `arrivingTerminalName`, `tripDate`, `sailings` array (each: `departureTime`, `arrivalTime?`, `vesselName?`)
+- **Notes:** The `scheduletoday` endpoint directly returns remaining times — use it for today's queries. The standard `schedule` endpoint for date lookups. `arrivingTerminalId` 0 is sometimes valid for routes with single arrivals. No cancellation status: neither schedule endpoint returns `IsCancelled` — WSF drops a cancelled sailing from the schedule instead of flagging it — so the field is not carried. Route-level disruptions come from `wsdot_get_ferry_alerts`.
 
 ### `wsdot_get_vessel_locations`
 
@@ -199,8 +199,8 @@ Excluded: `/allsailings` (full season dump — too large, not useful per-query),
 ### `wsdot_get_terminal_space`
 
 - **Input:** `departingTerminalId?` (filter to a specific terminal)
-- **Output:** per-terminal array, each with `terminalId`, `terminalName`, `departingSpaces` (array of upcoming sailings with `departure` (DateTime string — apply same timezone handling as other ferry DateTime fields), `isCancelled?`, `vesselName`, `arrivingTerminal`, `driveUpSpaceCount?`, `reservableSpaceCount?`, `maxSpaceCount`)
-- **Notes:** This is the "will I make the ferry?" tool. `DriveUpSpaceCount` is the key field. Color fields (`DriveUpSpaceHexColor`) are for rendering; include them but they're optional in `format()`. During field-test, verify `departure` DateTime format and whether it includes a timezone offset (see ferry timezone Known Limitation).
+- **Output:** per-terminal array, each with `terminalId`, `terminalName`, `departingSpaces` (array of upcoming sailings with `departure` (DateTime string — apply same timezone handling as other ferry DateTime fields), `isCancelled?`, `vesselName`, `arrivingTerminalIds?`, `itineraryLabel?`, `displayDriveUpSpace?`, `displayReservableSpace?`, `driveUpSpaceCount?`, `reservableSpaceCount?`, `maxSpaceCount`)
+- **Notes:** This is the "will I make the ferry?" tool. `driveUpSpaceCount` is the key field, floored at zero — an oversubscribed sailing reports a negative count upstream. Destinations come from the upstream `ArrivalTerminalIDs` (surfaced as `arrivingTerminalIds`), not from the sibling `TerminalName`/`TerminalID`, which on multi-stop San Juan itineraries are an itinerary string and the *departing* terminal. Color fields (`DriveUpSpaceHexColor`) are for rendering; include them but they're optional in `format()`. During field-test, verify `departure` DateTime format and whether it includes a timezone offset (see ferry timezone Known Limitation).
 
 ### `wsdot_get_ferry_alerts`
 
