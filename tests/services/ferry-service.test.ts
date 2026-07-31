@@ -797,6 +797,122 @@ describe('FerryApiService.getAlerts', () => {
     expect(alerts[0].impactedRouteIds).toEqual([]);
   });
 
+  it('maps the title, type, and all-routes flag alongside the summary', async () => {
+    const raw = [
+      {
+        BulletinID: 116850,
+        AlertFullTitle: 'Edm/King - First vessel #2 roundtrip cancelled on Sunday, July 26',
+        RouteAlertText: 'Edm/King - First #2 roundtrip cancelled on Sunday, 7/26.',
+        AlertType: 'All Alerts',
+        AllRoutesFlag: false,
+        AffectedRouteIDs: [6],
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const [a] = await svc.getAlerts(createMockContext());
+
+    expect(a.alertTitle).toBe('Edm/King - First vessel #2 roundtrip cancelled on Sunday, July 26');
+    expect(a.alertDescription).toBe('Edm/King - First #2 roundtrip cancelled on Sunday, 7/26.');
+    expect(a.alertType).toBe('All Alerts');
+    expect(a.affectsAllRoutes).toBe(false);
+    expect(a.impactedRouteIds).toEqual([6]);
+  });
+
+  it('normalizes the HTML bulletin body to plain text, keeping link destinations', async () => {
+    const raw = [
+      {
+        BulletinID: 116851,
+        RouteAlertText: 'Edm/King - First #2 roundtrip cancelled on Sunday, 7/26.',
+        BulletinText:
+          '<p><span data-contrast="none">Due to crew hold overs, the 7:00 a.m. from Kingston is cancelled.</span></p>\r\n' +
+          '<p><b>Vessel #2 Puyallup will begin service with the 8:40 a.m. from Kingston.</b></p>\r\n' +
+          '<p><span>Check the </span><a href="https://wsdot.wa.gov/ferries/sailing-schedules/schedule-route" target="_blank" rel="noopener">online schedule</a><span>.<br /></span></p>',
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const [a] = await svc.getAlerts(createMockContext());
+
+    expect(a.bulletinText).toBe(
+      'Due to crew hold overs, the 7:00 a.m. from Kingston is cancelled.\n' +
+        'Vessel #2 Puyallup will begin service with the 8:40 a.m. from Kingston.\n' +
+        'Check the online schedule (https://wsdot.wa.gov/ferries/sailing-schedules/schedule-route).',
+    );
+    // The replacement sailing exists only in the bulletin body, not in the marquee summary.
+    expect(a.alertDescription).not.toContain('Puyallup');
+    expect(a.bulletinText).not.toContain('<');
+  });
+
+  it('strips the Word-paste attribute cruft the bulletin editor emits', async () => {
+    const raw = [
+      {
+        BulletinID: 116798,
+        BulletinText:
+          '<ol><li><span data-contrast="none" xml:lang="EN-US" class="TextRun SCXW180249970 BCX8">Follow the signal.</span>' +
+          '<span data-ccp-props="{&quot;134233117&quot;:false,&quot;201341983&quot;:0}"> </span></li>' +
+          '<li><span data-contrast="none">Take a pass.</span></li></ol><o:p></o:p>',
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const [a] = await svc.getAlerts(createMockContext());
+    expect(a.bulletinText).toBe('Follow the signal.\nTake a pass.');
+    expect(a.bulletinText).not.toContain('data-ccp-props');
+    expect(a.bulletinText).not.toContain('&quot;');
+  });
+
+  it('marks a fleet-wide alert so an empty impactedRouteIds is not read as "no routes"', async () => {
+    // No alert in the live feed sets AllRoutesFlag, so the correctness case is built by hand:
+    // fleet-wide alerts enumerate no route IDs, and the flag is the only thing distinguishing
+    // that from an alert that genuinely names none.
+    const raw = [
+      {
+        BulletinID: 116999,
+        AlertFullTitle: 'System-wide service change',
+        AllRoutesFlag: true,
+        AffectedRouteIDs: [],
+      },
+      {
+        BulletinID: 117000,
+        AlertFullTitle: 'Local notice',
+        AllRoutesFlag: false,
+        AffectedRouteIDs: [],
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const [fleetWide, local] = await svc.getAlerts(createMockContext());
+
+    expect(fleetWide.affectsAllRoutes).toBe(true);
+    expect(fleetWide.impactedRouteIds).toEqual([]);
+    expect(local.affectsAllRoutes).toBe(false);
+    expect(local.impactedRouteIds).toEqual([]);
+  });
+
+  it('omits the new fields when upstream sends none of them', async () => {
+    const raw = [
+      {
+        BulletinID: 204,
+        RouteAlertText: 'Summary only.',
+        AlertFullTitle: null,
+        BulletinText: null,
+        AlertType: null,
+        AllRoutesFlag: null,
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const [a] = await svc.getAlerts(createMockContext());
+    expect('alertTitle' in a).toBe(false);
+    expect('bulletinText' in a).toBe(false);
+    expect('alertType' in a).toBe(false);
+    expect('affectsAllRoutes' in a).toBe(false);
+    expect(a.alertDescription).toBe('Summary only.');
+  });
+
+  it('omits bulletinText when the body carries only markup', async () => {
+    const raw = [{ BulletinID: 205, RouteAlertText: 'Summary.', BulletinText: '<p></p><br />' }];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const [a] = await svc.getAlerts(createMockContext());
+    expect('bulletinText' in a).toBe(false);
+  });
+
   it('returns empty array when API returns []', async () => {
     mockFetch.mockResolvedValue(makeResponse([]));
     const ctx = createMockContext();

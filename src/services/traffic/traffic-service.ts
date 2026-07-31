@@ -9,6 +9,7 @@ import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
+import { htmlToText } from '@/services/html-text.js';
 import { wcfDateField } from '@/services/wcf-date.js';
 import { assertUpstreamJson, fetchUpstream, redactUrl } from '@/services/wsdot-http.js';
 import { routeMatches } from './route-match.js';
@@ -323,11 +324,25 @@ function normalizeRoadwayLocation(loc: RawRoadwayLocation): RoadwayLocation {
   };
 }
 
+/**
+ * WSDOT authors alert descriptions in a rich-text editor and ships the markup through — a
+ * "read the advisory" link arrives as a raw `<a href=…>` anchor. Both descriptions are rendered
+ * to plain text here, before either response path reads them, so `structuredContent` and the
+ * `format()` markdown carry the same normalized string. A description that held nothing but
+ * markup normalizes to an empty string and is dropped rather than surfaced as a blank field.
+ */
+function alertDescription(raw: string | null | undefined): string | undefined {
+  if (raw == null) return;
+  return htmlToText(raw) || undefined;
+}
+
 function normalizeAlert(a: RawHighwayAlert): HighwayAlert {
+  const headline = alertDescription(a.HeadlineDescription);
+  const extended = alertDescription(a.ExtendedDescription);
   return {
     ...(a.AlertID != null && { alertId: a.AlertID }),
-    ...(a.HeadlineDescription != null && { headlineDescription: a.HeadlineDescription }),
-    ...(a.ExtendedDescription != null && { extendedDescription: a.ExtendedDescription }),
+    ...(headline != null && { headlineDescription: headline }),
+    ...(extended != null && { extendedDescription: extended }),
     ...(a.EventCategory != null && { eventCategory: a.EventCategory }),
     ...(a.EventStatus != null && { eventStatus: a.EventStatus }),
     ...(a.Priority != null && { priority: a.Priority }),

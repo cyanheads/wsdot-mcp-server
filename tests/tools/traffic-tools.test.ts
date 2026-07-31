@@ -316,6 +316,32 @@ describe('searchAlerts', () => {
     const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('No active alerts');
   });
+
+  it('renders a normalized description with its inlined link destination', () => {
+    // The service hands format() plain text, so the markdown surface carries the same string
+    // structuredContent does — including the URL the anchor used to hide.
+    const normalized = {
+      alertId: 705368,
+      headlineDescription: 'Ramp closed near Tacoma.',
+      extendedDescription: 'Read the travel advisory (https://content.govdelivery.com/x/420b6e6).',
+      impactedRouteIds: [],
+    };
+    const text = (searchAlerts.format!({ alerts: [normalized] })[0] as { text: string }).text;
+    expect(text).toContain('https://content.govdelivery.com/x/420b6e6');
+    expect(text).not.toContain('<a');
+  });
+
+  it('keeps the alert ID on the heading when a headline runs to several lines', () => {
+    // A normalized headline can carry paragraph breaks; putting the whole thing in the `###`
+    // heading buried the ID at the end of the last paragraph.
+    const multiline = {
+      alertId: 706220,
+      headlineDescription: 'Overnight lane closures on I-5.\nSpeed limit reduced to 55 mph.',
+    };
+    const text = (searchAlerts.format!({ alerts: [multiline] })[0] as { text: string }).text;
+    expect(text).toContain('### Overnight lane closures on I-5. #706220');
+    expect(text).toContain('Speed limit reduced to 55 mph.');
+  });
 });
 
 // ---------------------------------------------------------------------------

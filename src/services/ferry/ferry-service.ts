@@ -10,6 +10,7 @@ import { validationError } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
+import { htmlToText } from '@/services/html-text.js';
 import { wcfDateField } from '@/services/wcf-date.js';
 import { assertUpstreamJson, fetchUpstream, redactUrl } from '@/services/wsdot-http.js';
 import type {
@@ -252,17 +253,29 @@ export class FerryApiService {
   async getAlerts(ctx: Context): Promise<FerryAlert[]> {
     ctx.log.info('Fetching ferry alerts');
     const raw = await this.fetchJson<RawFerryAlert[]>('Schedule/rest/alerts', ctx);
-    return (raw ?? []).map((a) => ({
-      ...(a.BulletinID != null && { alertId: a.BulletinID }),
-      // Prefer plain-text RouteAlertText; fall back to AlertFullTitle when absent
-      ...(a.RouteAlertText != null
-        ? { alertDescription: a.RouteAlertText }
-        : a.AlertFullTitle != null
-          ? { alertDescription: a.AlertFullTitle }
-          : {}),
-      impactedRouteIds: a.AffectedRouteIDs ?? [],
-      ...wcfDateField('publishDate', a.PublishDate),
-    }));
+    return (raw ?? []).map((a) => {
+      // The bulletin body is authored in a rich-text editor and arrives as HTML — nested spans
+      // carrying Word-paste attributes, lists, anchors. It is rendered to plain text here, before
+      // either response path reads it, so structuredContent and format() carry the same string.
+      const bulletinText = a.BulletinText != null ? htmlToText(a.BulletinText) : '';
+      return {
+        ...(a.BulletinID != null && { alertId: a.BulletinID }),
+        ...(a.AlertFullTitle != null && { alertTitle: a.AlertFullTitle }),
+        // Prefer plain-text RouteAlertText; fall back to AlertFullTitle when absent
+        ...(a.RouteAlertText != null
+          ? { alertDescription: a.RouteAlertText }
+          : a.AlertFullTitle != null
+            ? { alertDescription: a.AlertFullTitle }
+            : {}),
+        ...(bulletinText && { bulletinText }),
+        ...(a.AlertType != null && { alertType: a.AlertType }),
+        // A fleet-wide alert carries no route IDs, so the flag is what separates "every route"
+        // from "no route" — it is mapped whenever upstream states it either way.
+        ...(typeof a.AllRoutesFlag === 'boolean' && { affectsAllRoutes: a.AllRoutesFlag }),
+        impactedRouteIds: a.AffectedRouteIDs ?? [],
+        ...wcfDateField('publishDate', a.PublishDate),
+      };
+    });
   }
 }
 

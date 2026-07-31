@@ -244,6 +244,66 @@ describe('TrafficApiService — alert normalization', () => {
     expect('startRoadwayLocation' in a).toBe(false);
   });
 
+  it('normalizes anchor markup in both descriptions to plain text with the destination inlined', async () => {
+    const raw = [
+      {
+        AlertID: 705368,
+        HeadlineDescription:
+          'Ramp closed near Tacoma. <a href="https://content.govdelivery.com/accounts/WADOT/bulletins/420b6e6">Read the travel advisory</a>.',
+        ExtendedDescription:
+          'Detour posted. <a href="https://wsdot.wa.gov/x">Project webpage</a> has schedules.',
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const [a] = await svc.searchAlerts({}, createMockContext());
+
+    expect(a.headlineDescription).toBe(
+      'Ramp closed near Tacoma. Read the travel advisory (https://content.govdelivery.com/accounts/WADOT/bulletins/420b6e6).',
+    );
+    expect(a.extendedDescription).toBe(
+      'Detour posted. Project webpage (https://wsdot.wa.gov/x) has schedules.',
+    );
+    expect(a.headlineDescription).not.toContain('<a');
+    expect(a.extendedDescription).not.toContain('<a');
+  });
+
+  it('normalizes an anchor whose href is unquoted', async () => {
+    // Two anchors in the live feed carry a bare href; a quoted-attribute-only fix misses them.
+    const raw = [
+      {
+        AlertID: 705369,
+        HeadlineDescription:
+          'Kansas Street work continues. <a href=https://www.cityoforting.org/government/project-updates/kansas-street-reconstruction>Project updates</a>.',
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const [a] = await svc.searchAlerts({}, createMockContext());
+    expect(a.headlineDescription).toBe(
+      'Kansas Street work continues. Project updates (https://www.cityoforting.org/government/project-updates/kansas-street-reconstruction).',
+    );
+  });
+
+  it('leaves a description carrying no markup byte-identical', async () => {
+    const plain = 'All lanes blocked at MP 30.  Expect delays.';
+    const raw = [{ AlertID: 705370, HeadlineDescription: plain, ExtendedDescription: plain }];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const [a] = await svc.searchAlerts({}, createMockContext());
+    expect(a.headlineDescription).toBe(plain);
+    expect(a.extendedDescription).toBe(plain);
+  });
+
+  it('omits a description that normalizes to nothing', async () => {
+    // The live feed ships an empty ExtendedDescription on most alerts; a description that is only
+    // markup reduces to the same thing, and neither is worth a blank field on the wire.
+    const raw = [
+      { AlertID: 705371, HeadlineDescription: 'Real headline.', ExtendedDescription: '' },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const [a] = await svc.searchAlerts({}, createMockContext());
+    expect(a.headlineDescription).toBe('Real headline.');
+    expect('extendedDescription' in a).toBe(false);
+  });
+
   it('always uses GetAlertsAsJson endpoint (no SearchAlertsAsJson)', async () => {
     mockFetch.mockResolvedValue(makeResponse([]));
     const ctx = createMockContext();

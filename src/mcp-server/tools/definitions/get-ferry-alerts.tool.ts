@@ -11,6 +11,8 @@ export const getFerryAlerts = tool('wsdot_get_ferry_alerts', {
   title: 'Get Ferry Alerts',
   description:
     'Returns active WSF ferry service disruptions, delays, and bulletins. ' +
+    'Each alert carries a one-line summary plus the bulletin title, kind, and full body — the body ' +
+    'is where detail such as a replacement sailing appears. ' +
     'Each alert includes impacted route IDs — cross-reference with wsdot_get_ferry_routes ' +
     'to resolve route IDs to human-readable route names. Some IDs (seasonal, San Juan interisland, ' +
     'or international Sidney B.C. routes) may not appear in wsdot_get_ferry_routes for a given date.',
@@ -22,15 +24,35 @@ export const getFerryAlerts = tool('wsdot_get_ferry_alerts', {
         z
           .object({
             alertId: z.number().optional().describe('Unique alert identifier.'),
+            alertTitle: z.string().optional().describe("The bulletin's own title."),
             alertDescription: z
               .string()
               .optional()
-              .describe('Description of the alert or disruption.'),
+              .describe(
+                'One-line summary of the alert or disruption, as shown on the route pages. Falls back to the title when upstream publishes no summary.',
+              ),
+            bulletinText: z
+              .string()
+              .optional()
+              .describe(
+                'Full bulletin body as plain text, normalized from the upstream HTML — links are rendered inline as "link text (url)". Detail that appears nowhere else, such as a replacement sailing, lives here.',
+              ),
+            alertType: z
+              .string()
+              .optional()
+              .describe('Alert kind as WSF categorizes it, e.g. "All Alerts".'),
+            affectsAllRoutes: z
+              .boolean()
+              .optional()
+              .describe(
+                'True when the alert applies fleet-wide. A fleet-wide alert need not enumerate routes, so while this is true an empty impactedRouteIds means every route rather than none.',
+              ),
             impactedRouteIds: z
               .array(z.number())
               .describe(
                 'Route IDs affected by this alert. Cross-reference with wsdot_get_ferry_routes to get route names; ' +
-                  'some seasonal or interisland route IDs may not be listed there for a given date.',
+                  'some seasonal or interisland route IDs may not be listed there for a given date. ' +
+                  'Empty means no specific routes unless affectsAllRoutes is true, which makes it fleet-wide.',
               ),
             publishDate: z.string().optional().describe('When the alert was published (ISO 8601).'),
           })
@@ -85,12 +107,20 @@ export const getFerryAlerts = tool('wsdot_get_ferry_alerts', {
     const lines: string[] = [];
     for (const a of result.alerts) {
       const id = a.alertId != null ? ` #${a.alertId}` : '';
-      lines.push(`### Alert${id}`);
+      lines.push(`### ${a.alertTitle ?? 'Alert'}${id}`);
+      if (a.alertType) lines.push(`**Type:** ${a.alertType}`);
       if (a.alertDescription) lines.push(a.alertDescription);
+      if (a.bulletinText) lines.push(a.bulletinText);
       if (a.impactedRouteIds.length > 0) {
         lines.push(
           `**Impacted Route IDs:** ${a.impactedRouteIds.join(', ')} (use wsdot_get_ferry_routes to look up names)`,
         );
+      }
+      // An alert with no route IDs is ambiguous on its own — say which of the two it is.
+      if (a.affectsAllRoutes) {
+        lines.push('**Impacted Routes:** all routes — this alert affects the whole fleet.');
+      } else if (a.affectsAllRoutes === false && a.impactedRouteIds.length === 0) {
+        lines.push('**Impacted Routes:** none listed — this alert names no specific route.');
       }
       if (a.publishDate) lines.push(`**Published:** ${a.publishDate}`);
       lines.push('');

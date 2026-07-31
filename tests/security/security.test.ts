@@ -61,6 +61,7 @@ import { getTravelTimes } from '@/mcp-server/tools/definitions/get-travel-times.
 import { getVesselLocations } from '@/mcp-server/tools/definitions/get-vessel-locations.tool.js';
 import { searchAlerts } from '@/mcp-server/tools/definitions/search-alerts.tool.js';
 import { searchCameras } from '@/mcp-server/tools/definitions/search-cameras.tool.js';
+import { htmlToText } from '@/services/html-text.js';
 import { assertUpstreamJson, redactUrl } from '@/services/wsdot-http.js';
 
 beforeEach(() => vi.clearAllMocks());
@@ -363,7 +364,11 @@ describe('API key non-leak — output does not expose access code or secrets', (
   it('getFerryAlerts output contains no secret patterns', async () => {
     const alert = {
       alertId: 201,
+      alertTitle: 'Sea/BI - Vessel out of service',
       alertDescription: 'Vessel out of service.',
+      bulletinText: 'The Tacoma will cover the route.',
+      alertType: 'All Alerts',
+      affectsAllRoutes: false,
       impactedRouteIds: [1],
     };
     mockFerryService.getAlerts.mockResolvedValue([alert]);
@@ -487,6 +492,101 @@ describe('Unicode and encoding edge cases', () => {
     expect(text).toContain('delayed');
     expect(text).toContain('日本語テスト');
     checkOutputForSecrets({ text });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Upstream HTML normalization — markup never reaches either response path
+// ---------------------------------------------------------------------------
+
+/**
+ * Both alert feeds embed author-written HTML in text fields, so upstream markup is untrusted input
+ * arriving at a system edge. The tool fixtures elsewhere in this file are hand-built and bypass
+ * normalization entirely; these push real markup through `htmlToText` — the same function both
+ * services call — and then through `format()`, so the whole path is exercised rather than mocked.
+ */
+describe('Upstream HTML — normalization strips markup before either response path', () => {
+  /** Shaped after a live ferry bulletin: Office-paste spans, entity-laden attributes, anchors. */
+  const BULLETIN_HTML =
+    '<p><span data-contrast="none" xml:lang="EN-US" class="TextRun SCXW180249970 BCX8">The 7:00 a.m. from Kingston is cancelled.</span></p>\r\n' +
+    '<p><b>Vessel #2 Puyallup begins service at 8:40 a.m.</b></p>\r\n' +
+    '<ul><li><span data-ccp-props="{&quot;134233117&quot;:false,&quot;201341983&quot;:0}">Check the ' +
+    '<a href="https://wsdot.wa.gov/ferries/sailing-schedules/schedule-route" target="_blank" rel="noopener">online schedule</a>.</span></li></ul>' +
+    '<o:p></o:p>';
+
+  it('renders a real bulletin body as prose in both surfaces', async () => {
+    const alert = {
+      alertId: 301,
+      alertTitle: 'Edm/King - First roundtrip cancelled',
+      bulletinText: htmlToText(BULLETIN_HTML),
+      impactedRouteIds: [6],
+    };
+    mockFerryService.getAlerts.mockResolvedValue([alert]);
+    const result = await getFerryAlerts.handler(
+      getFerryAlerts.input.parse({}),
+      createMockContext(),
+    );
+    const text = (getFerryAlerts.format!(result)[0] as { text: string }).text;
+
+    for (const surface of [JSON.stringify(result), text]) {
+      expect(surface).toContain('Vessel #2 Puyallup begins service at 8:40 a.m.');
+      expect(surface).toContain(
+        'online schedule (https://wsdot.wa.gov/ferries/sailing-schedules/schedule-route)',
+      );
+      expect(surface).not.toContain('data-ccp-props');
+      expect(surface).not.toContain('TextRun');
+      expect(surface).not.toContain('&quot;');
+      expect(surface).not.toMatch(/<\/?(p|span|b|ul|li|a|o:p)\b/);
+    }
+    checkOutputForSecrets(result);
+    checkOutputForSecrets(text);
+  });
+
+  it('strips a script payload rather than leaving it verbatim', () => {
+    // '<script>alert("xss")</script>' is one of INJECTION_STRINGS; here it arrives the way a real
+    // payload would — inside upstream bulletin markup, not as a tool argument.
+    const normalized = htmlToText(
+      `<p>Service notice.</p><script>alert("xss")</script><p>Ends Friday.</p>`,
+    );
+    expect(normalized).toBe('Service notice.\nEnds Friday.');
+    expect(normalized).not.toContain('script');
+    expect(normalized).not.toContain('alert("xss")');
+  });
+
+  it('drops a javascript: or data:text/html destination while keeping the link text', () => {
+    for (const href of ['javascript:void(0)', 'data:text/html,<script>']) {
+      const normalized = htmlToText(`Read <a href="${href}">the notice</a>.`);
+      expect(normalized).toBe('Read the notice.');
+      expect(normalized).not.toContain('javascript:');
+      expect(normalized).not.toContain('data:text/html');
+    }
+  });
+
+  it('leaves entity-encoded markup as inert text instead of re-reading it as a tag', () => {
+    // Decoding entities before stripping tags would hand the stripper a live <script> element.
+    expect(htmlToText('&lt;script&gt;alert(1)&lt;/script&gt;')).toBe('<script>alert(1)</script>');
+  });
+
+  it('normalizes a highway alert description before format() renders it', () => {
+    const alert = {
+      alertId: 302,
+      headlineDescription: htmlToText(
+        'Ramp closed. <a href="https://content.govdelivery.com/accounts/WADOT/bulletins/420b6e6">Read the travel advisory</a>.',
+      ),
+    };
+    const text = (searchAlerts.format!({ alerts: [alert] })[0] as { text: string }).text;
+    expect(text).toContain(
+      'Read the travel advisory (https://content.govdelivery.com/accounts/WADOT/bulletins/420b6e6)',
+    );
+    expect(text).not.toContain('<a href');
+    checkOutputForSecrets({ text });
+  });
+
+  it('does not stall on a pathological fragment', () => {
+    // A quadratic normalizer would block the event loop here; the scanner is linear.
+    const start = performance.now();
+    htmlToText('<'.repeat(200_000));
+    expect(performance.now() - start).toBeLessThan(1_000);
   });
 });
 

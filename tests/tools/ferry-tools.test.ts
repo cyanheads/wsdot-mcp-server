@@ -817,7 +817,12 @@ describe('getTerminalSpace', () => {
 describe('getFerryAlerts', () => {
   const alertFixture = {
     alertId: 201,
+    alertTitle: 'Sea/BI - Vessel Wenatchee out of service',
     alertDescription: 'Vessel Wenatchee out of service due to mechanical issues.',
+    bulletinText:
+      'The Wenatchee is out of service for repairs.\nThe Tacoma will cover the route. Check the online schedule (https://wsdot.wa.gov/ferries/sailing-schedules/schedule-route).',
+    alertType: 'All Alerts',
+    affectsAllRoutes: false,
     impactedRouteIds: [1, 2],
     publishDate: '2023-11-14T22:13:20.000Z',
   };
@@ -861,14 +866,38 @@ describe('getFerryAlerts', () => {
     expect(result.alerts).toHaveLength(0);
   });
 
+  it('returns the title, body, type, and all-routes flag from the service', async () => {
+    mockService.getAlerts.mockResolvedValue([alertFixture]);
+    const ctx = createMockContext();
+    const result = await getFerryAlerts.handler(getFerryAlerts.input.parse({}), ctx);
+    const a = result.alerts[0];
+    expect(a.alertTitle).toBe('Sea/BI - Vessel Wenatchee out of service');
+    expect(a.bulletinText).toContain('The Tacoma will cover the route');
+    expect(a.alertType).toBe('All Alerts');
+    expect(a.affectsAllRoutes).toBe(false);
+  });
+
   it('formats alerts with key fields', () => {
     const output = { alerts: [alertFixture] };
     const blocks = getFerryAlerts.format!(output);
     const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('201'); // alertId
-    expect(text).toContain('Wenatchee out of service');
+    expect(text).toContain('Sea/BI - Vessel Wenatchee out of service'); // alertTitle
+    expect(text).toContain('Wenatchee out of service due to mechanical issues'); // alertDescription
+    expect(text).toContain('The Tacoma will cover the route'); // bulletinText
+    expect(text).toContain('All Alerts'); // alertType
     expect(text).toContain('1, 2'); // impactedRouteIds
     expect(text).toContain('wsdot_get_ferry_routes');
+  });
+
+  it('renders the bulletin body so content[] carries the detail structuredContent has', () => {
+    // The replacement sailing appears only in the bulletin body — a client reading content[]
+    // must not see less than one reading structuredContent.
+    const output = { alerts: [alertFixture] };
+    const text = (getFerryAlerts.format!(output)[0] as { text: string }).text;
+    expect(text).toContain(
+      'Check the online schedule (https://wsdot.wa.gov/ferries/sailing-schedules/schedule-route)',
+    );
   });
 
   it('formats empty alerts list', () => {
@@ -889,5 +918,35 @@ describe('getFerryAlerts', () => {
     expect(text).toContain('Maintenance notice');
     // Should not render "Impacted Route IDs:" line when empty
     expect(text).not.toContain('Impacted Route IDs:');
+  });
+
+  it('distinguishes a fleet-wide alert from one that names no routes', () => {
+    const fleetWide = {
+      alertId: 203,
+      alertTitle: 'System-wide service change',
+      affectsAllRoutes: true,
+      impactedRouteIds: [],
+    };
+    const local = {
+      alertId: 204,
+      alertTitle: 'Local notice',
+      affectsAllRoutes: false,
+      impactedRouteIds: [],
+    };
+
+    const fleetText = (getFerryAlerts.format!({ alerts: [fleetWide] })[0] as { text: string }).text;
+    expect(fleetText).toContain('all routes');
+    expect(fleetText).not.toContain('names no specific route');
+
+    const localText = (getFerryAlerts.format!({ alerts: [local] })[0] as { text: string }).text;
+    expect(localText).toContain('names no specific route');
+    expect(localText).not.toContain('all routes');
+  });
+
+  it('says nothing about all-routes coverage when upstream does not state it', () => {
+    const unstated = { alertId: 205, alertDescription: 'Notice.', impactedRouteIds: [7] };
+    const text = (getFerryAlerts.format!({ alerts: [unstated] })[0] as { text: string }).text;
+    expect(text).toContain('**Impacted Route IDs:** 7');
+    expect(text).not.toContain('Impacted Routes:');
   });
 });

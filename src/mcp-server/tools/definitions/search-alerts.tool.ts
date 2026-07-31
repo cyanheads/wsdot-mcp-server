@@ -48,8 +48,18 @@ export const searchAlerts = tool('wsdot_search_alerts', {
         z
           .object({
             alertId: z.number().optional().describe('Unique alert identifier.'),
-            headlineDescription: z.string().optional().describe('Short summary of the alert.'),
-            extendedDescription: z.string().optional().describe('Full description of the alert.'),
+            headlineDescription: z
+              .string()
+              .optional()
+              .describe(
+                'Short summary of the alert, as plain text. Upstream authors these in a rich-text editor, so any markup is normalized away and a link is rendered inline as "link text (url)".',
+              ),
+            extendedDescription: z
+              .string()
+              .optional()
+              .describe(
+                'Full description of the alert, normalized to plain text on the same terms as headlineDescription. Often absent — most alerts carry only a headline.',
+              ),
             eventCategory: z
               .string()
               .optional()
@@ -199,7 +209,11 @@ export const searchAlerts = tool('wsdot_search_alerts', {
     const lines: string[] = [];
     for (const a of result.alerts) {
       const id = a.alertId != null ? ` #${a.alertId}` : '';
-      lines.push(`### ${a.headlineDescription ?? 'Alert'}${id}`);
+      // A headline can run to several paragraphs; only its first line belongs in the heading,
+      // otherwise the trailing alert ID lands at the end of the last paragraph.
+      const [heading, ...restOfHeadline] = (a.headlineDescription ?? '').split('\n');
+      lines.push(`### ${heading || 'Alert'}${id}`);
+      if (restOfHeadline.length > 0) lines.push(restOfHeadline.join('\n'));
       if (a.eventCategory) lines.push(`**Category:** ${a.eventCategory}`);
       if (a.eventStatus) lines.push(`**Status:** ${a.eventStatus}`);
       if (a.priority) lines.push(`**Priority:** ${a.priority}`);

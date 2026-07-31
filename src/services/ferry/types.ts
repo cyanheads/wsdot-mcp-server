@@ -197,21 +197,38 @@ export interface TerminalSailingSpace {
 export interface RawFerryAlert {
   /** Route IDs affected by this alert (was ImpactedRouteIds in older API). */
   AffectedRouteIDs?: number[] | null;
-  /** Fallback title when RouteAlertText is absent. */
+  /** The bulletin's own title. Also the fallback description when RouteAlertText is absent. */
   AlertFullTitle?: string | null;
   AlertType?: string | null;
+  /**
+   * True when the alert applies fleet-wide, in which case AffectedRouteIDs need not enumerate
+   * anything — an empty list then means "every route", not "no route".
+   */
+  AllRoutesFlag?: boolean | null;
   /** Unique alert ID (was AlertID in older API). */
   BulletinID?: number | null;
+  /**
+   * The bulletin body, and the only place the detail behind the marquee summary appears.
+   * Authored in a rich-text editor, so it arrives as HTML — normalized to plain text.
+   */
+  BulletinText?: string | null;
   /** WCF date string — decoded to ISO 8601 during normalization. */
   PublishDate?: string | null;
-  /** Plain-text description (preferred over BulletinText which contains HTML). */
+  /** One-line marquee summary, already plain text. */
   RouteAlertText?: string | null;
 }
 
 /** Normalized ferry alert. */
 export interface FerryAlert {
+  /** True when the alert applies to every route, making an empty impactedRouteIds fleet-wide. */
+  affectsAllRoutes?: boolean;
   alertDescription?: string;
   alertId?: number;
+  alertTitle?: string;
+  /** Alert kind as WSF categorizes it, e.g. "All Alerts". */
+  alertType?: string;
+  /** Full bulletin body, normalized from upstream HTML to plain text. */
+  bulletinText?: string;
   impactedRouteIds: number[];
   publishDate?: string;
 }
