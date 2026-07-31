@@ -1,6 +1,6 @@
 # wsdot-mcp-server - Directory Structure
 
-Generated on: 2026-07-31 01:53:10
+Generated on: 2026-07-31 03:24:12
 
 ```text
 wsdot-mcp-server/
@@ -138,20 +138,21 @@ wsdot-mcp-server/
 │   │   ├── resources/
 │   │   │   └── definitions/
 │   │   └── tools/
-│   │       └── definitions/
-│   │           ├── get-border-waits.tool.ts
-│   │           ├── get-ferry-alerts.tool.ts
-│   │           ├── get-ferry-routes.tool.ts
-│   │           ├── get-ferry-schedule.tool.ts
-│   │           ├── get-ferry-terminals.tool.ts
-│   │           ├── get-mountain-passes.tool.ts
-│   │           ├── get-terminal-space.tool.ts
-│   │           ├── get-toll-rates.tool.ts
-│   │           ├── get-travel-times.tool.ts
-│   │           ├── get-vessel-locations.tool.ts
-│   │           ├── index.ts
-│   │           ├── search-alerts.tool.ts
-│   │           └── search-cameras.tool.ts
+│   │       ├── definitions/
+│   │       │   ├── get-border-waits.tool.ts
+│   │       │   ├── get-ferry-alerts.tool.ts
+│   │       │   ├── get-ferry-routes.tool.ts
+│   │       │   ├── get-ferry-schedule.tool.ts
+│   │       │   ├── get-ferry-terminals.tool.ts
+│   │       │   ├── get-mountain-passes.tool.ts
+│   │       │   ├── get-terminal-space.tool.ts
+│   │       │   ├── get-toll-rates.tool.ts
+│   │       │   ├── get-travel-times.tool.ts
+│   │       │   ├── get-vessel-locations.tool.ts
+│   │       │   ├── index.ts
+│   │       │   ├── search-alerts.tool.ts
+│   │       │   └── search-cameras.tool.ts
+│   │       └── coordinate-pair.ts
 │   ├── services/
 │   │   ├── ferry/
 │   │   │   ├── ferry-service.ts
@@ -167,7 +168,9 @@ wsdot-mcp-server/
 │   └── index.ts
 ├── tests/
 │   ├── helpers/
-│   │   └── pagination.ts
+│   │   ├── assertions.ts
+│   │   ├── pagination.ts
+│   │   └── tool-context.ts
 │   ├── prompts/
 │   ├── resources/
 │   ├── security/
@@ -180,6 +183,7 @@ wsdot-mcp-server/
 │   │   ├── traffic-service.test.ts
 │   │   └── wcf-date.test.ts
 │   └── tools/
+│       ├── coordinate-pair.test.ts
 │       ├── ferry-tools.test.ts
 │       └── traffic-tools.test.ts
 ├── .dockerignore
