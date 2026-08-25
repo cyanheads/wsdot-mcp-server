@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.4](changelog/0.2.x/0.2.4.md) — 2026-08-25
+
+Adopts mcp-ts-core ^0.12.3 and MCP SDK v2 — tool inputs are strict, so an argument no tool declares is rejected by name instead of dropped; the HTTP endpoint serves protocol revision 2026-07-28, advertised schemas moved to JSON Schema 2020-12, and handler logs now reach the client.
+
 ## [0.2.3](changelog/0.2.x/0.2.3.md) — 2026-07-30
 
 `content[]` now renders every `false`, empty, and independently-sparse value `structuredContent` already carried (#23); border-wait, toll-rate, and ferry-schedule descriptions corrected to match the live feeds (#33); `tests/` is typechecked (#38) and its injection assertions can now fail (#37).

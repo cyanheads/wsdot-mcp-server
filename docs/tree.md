@@ -1,10 +1,9 @@
 # wsdot-mcp-server - Directory Structure
 
-Generated on: 2026-07-31 03:24:12
+Generated on: 2026-08-25 06:53:03
 
 ```text
 wsdot-mcp-server/
-├── .claude/
 ├── .claude-plugin/
 │   └── plugin.json
 ├── .codex-plugin/
@@ -15,6 +14,8 @@ wsdot-mcp-server/
 │   │   ├── bug_report.yml
 │   │   ├── config.yml
 │   │   └── feature_request.yml
+│   ├── CODE_OF_CONDUCT.md
+│   ├── CONTRIBUTING.md
 │   ├── FUNDING.yml
 │   └── SECURITY.md
 ├── .vscode/
@@ -169,8 +170,7 @@ wsdot-mcp-server/
 ├── tests/
 │   ├── helpers/
 │   │   ├── assertions.ts
-│   │   ├── pagination.ts
-│   │   └── tool-context.ts
+│   │   └── pagination.ts
 │   ├── prompts/
 │   ├── resources/
 │   ├── security/
@@ -185,6 +185,7 @@ wsdot-mcp-server/
 │   └── tools/
 │       ├── coordinate-pair.test.ts
 │       ├── ferry-tools.test.ts
+│       ├── input-strictness.test.ts
 │       └── traffic-tools.test.ts
 ├── .dockerignore
 ├── .env.example
