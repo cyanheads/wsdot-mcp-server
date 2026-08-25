@@ -11,7 +11,7 @@ import {
   McpError,
   serviceUnavailable,
 } from '@cyanheads/mcp-ts-core/errors';
-import { getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // --- Mocks (hoisted so vi.mock factory runs before imports) ---
@@ -39,7 +39,6 @@ import { searchAlerts } from '@/mcp-server/tools/definitions/search-alerts.tool.
 import { searchCameras } from '@/mcp-server/tools/definitions/search-cameras.tool.js';
 import { formattedText, nth, rejection } from '../helpers/assertions.js';
 import { describePaginationContract } from '../helpers/pagination.js';
-import { toolContext } from '../helpers/tool-context.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -83,7 +82,7 @@ describe('traffic tools — upstream failure contract', () => {
         ...c.recoveryFor('api_unavailable'),
       });
     });
-    const ctx = toolContext(getMountainPasses);
+    const ctx = createMockContext({ errors: getMountainPasses.errors });
     const err = await rejection(() =>
       getMountainPasses.handler(getMountainPasses.input.parse({}), ctx),
     );
@@ -105,7 +104,7 @@ describe('traffic tools — upstream failure contract', () => {
         },
       );
     });
-    const ctx = toolContext(getMountainPasses);
+    const ctx = createMockContext({ errors: getMountainPasses.errors });
     const err = await rejection(() =>
       getMountainPasses.handler(getMountainPasses.input.parse({}), ctx),
     );
@@ -138,7 +137,7 @@ describe('getMountainPasses', () => {
 
   it('returns passes from the service', async () => {
     mockService.getMountainPasses.mockResolvedValue([passFixture]);
-    const ctx = toolContext(getMountainPasses);
+    const ctx = createMockContext({ errors: getMountainPasses.errors });
     const input = getMountainPasses.input.parse({});
     const result = await getMountainPasses.handler(input, ctx);
     expect(result.passes).toHaveLength(1);
@@ -148,7 +147,7 @@ describe('getMountainPasses', () => {
 
   it('enriches with totalCount', async () => {
     mockService.getMountainPasses.mockResolvedValue([passFixture]);
-    const ctx = toolContext(getMountainPasses);
+    const ctx = createMockContext({ errors: getMountainPasses.errors });
     const input = getMountainPasses.input.parse({});
     await getMountainPasses.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -158,7 +157,7 @@ describe('getMountainPasses', () => {
 
   it('enriches notice when no passes returned', async () => {
     mockService.getMountainPasses.mockResolvedValue([]);
-    const ctx = toolContext(getMountainPasses);
+    const ctx = createMockContext({ errors: getMountainPasses.errors });
     const input = getMountainPasses.input.parse({});
     const result = await getMountainPasses.handler(input, ctx);
     expect(result.passes).toHaveLength(0);
@@ -224,7 +223,7 @@ describe('searchAlerts', () => {
 
   it('returns all alerts when no filters provided', async () => {
     mockService.searchAlerts.mockResolvedValue([alertFixture]);
-    const ctx = toolContext(searchAlerts);
+    const ctx = createMockContext({ errors: searchAlerts.errors });
     const input = searchAlerts.input.parse({});
     const result = await searchAlerts.handler(input, ctx);
     expect(result.alerts).toHaveLength(1);
@@ -233,7 +232,7 @@ describe('searchAlerts', () => {
 
   it('enriches with totalCount and empty appliedFilters', async () => {
     mockService.searchAlerts.mockResolvedValue([alertFixture]);
-    const ctx = toolContext(searchAlerts);
+    const ctx = createMockContext({ errors: searchAlerts.errors });
     const input = searchAlerts.input.parse({});
     await searchAlerts.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -246,7 +245,7 @@ describe('searchAlerts', () => {
 
   it('enriches appliedFilters with stateRoute', async () => {
     mockService.searchAlerts.mockResolvedValue([alertFixture]);
-    const ctx = toolContext(searchAlerts);
+    const ctx = createMockContext({ errors: searchAlerts.errors });
     const input = searchAlerts.input.parse({ stateRoute: '090' });
     await searchAlerts.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -255,7 +254,7 @@ describe('searchAlerts', () => {
 
   it('enriches notice on empty results with filters', async () => {
     mockService.searchAlerts.mockResolvedValue([]);
-    const ctx = toolContext(searchAlerts);
+    const ctx = createMockContext({ errors: searchAlerts.errors });
     const input = searchAlerts.input.parse({ stateRoute: '090' });
     await searchAlerts.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -266,7 +265,7 @@ describe('searchAlerts', () => {
 
   it('enriches notice on empty results with no filters', async () => {
     mockService.searchAlerts.mockResolvedValue([]);
-    const ctx = toolContext(searchAlerts);
+    const ctx = createMockContext({ errors: searchAlerts.errors });
     const input = searchAlerts.input.parse({});
     await searchAlerts.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -276,7 +275,7 @@ describe('searchAlerts', () => {
 
   it('passes stateRoute filter to service', async () => {
     mockService.searchAlerts.mockResolvedValue([alertFixture]);
-    const ctx = toolContext(searchAlerts);
+    const ctx = createMockContext({ errors: searchAlerts.errors });
     const input = searchAlerts.input.parse({ stateRoute: '090' });
     await searchAlerts.handler(input, ctx);
     expect(mockService.searchAlerts).toHaveBeenCalledWith(
@@ -287,7 +286,7 @@ describe('searchAlerts', () => {
 
   it('passes region filter to service', async () => {
     mockService.searchAlerts.mockResolvedValue([]);
-    const ctx = toolContext(searchAlerts);
+    const ctx = createMockContext({ errors: searchAlerts.errors });
     const input = searchAlerts.input.parse({ region: 'Northwest' });
     await searchAlerts.handler(input, ctx);
     expect(mockService.searchAlerts).toHaveBeenCalledWith(
@@ -298,7 +297,7 @@ describe('searchAlerts', () => {
 
   it('strips whitespace-only stateRoute filter', async () => {
     mockService.searchAlerts.mockResolvedValue([]);
-    const ctx = toolContext(searchAlerts);
+    const ctx = createMockContext({ errors: searchAlerts.errors });
     const input = searchAlerts.input.parse({ stateRoute: '   ' });
     await searchAlerts.handler(input, ctx);
     // whitespace-only stateRoute is treated as absent — service receives no stateRoute key
@@ -367,7 +366,7 @@ describe('searchAlerts — page windows are reproducible across upstream row ord
       mockService.searchAlerts.mockResolvedValue(rows);
       const result = await searchAlerts.handler(
         searchAlerts.input.parse({ offset: 4, limit: 4 }),
-        toolContext(searchAlerts),
+        createMockContext({ errors: searchAlerts.errors }),
       );
       return result.alerts.map((a) => a.alertId);
     };
@@ -384,7 +383,7 @@ describe('searchAlerts — page windows are reproducible across upstream row ord
     ]);
     const result = await searchAlerts.handler(
       searchAlerts.input.parse({}),
-      toolContext(searchAlerts),
+      createMockContext({ errors: searchAlerts.errors }),
     );
     expect(result.alerts.map((a) => a.alertId)).toEqual([700_100, 700_101, undefined]);
   });
@@ -416,7 +415,7 @@ describe('searchAlerts — page windows are reproducible across upstream row ord
       mockService.searchAlerts.mockResolvedValue(arrival);
       const result = await searchAlerts.handler(
         searchAlerts.input.parse({ offset, limit }),
-        toolContext(searchAlerts),
+        createMockContext({ errors: searchAlerts.errors }),
       );
       return result.alerts.map((a) => a.headlineDescription);
     };
@@ -442,7 +441,7 @@ describe('searchAlerts — page windows are reproducible across upstream row ord
 
 describePaginationContract({
   tool: searchAlerts,
-  createContext: () => toolContext(searchAlerts),
+  createContext: () => createMockContext({ errors: searchAlerts.errors }),
   stubRows: (rows) => mockService.searchAlerts.mockResolvedValue(rows),
   makeRows: (count) =>
     Array.from({ length: count }, (_, i) => ({
@@ -477,7 +476,7 @@ describe('getTravelTimes', () => {
 
   it('returns all corridors when no route filter provided', async () => {
     mockService.getTravelTimes.mockResolvedValue([corridorFixture]);
-    const ctx = toolContext(getTravelTimes);
+    const ctx = createMockContext({ errors: getTravelTimes.errors });
     const input = getTravelTimes.input.parse({});
     const result = await getTravelTimes.handler(input, ctx);
     expect(result.corridors).toHaveLength(1);
@@ -485,7 +484,7 @@ describe('getTravelTimes', () => {
 
   it('enriches with totalCount and no routeFilter when no filter', async () => {
     mockService.getTravelTimes.mockResolvedValue([corridorFixture]);
-    const ctx = toolContext(getTravelTimes);
+    const ctx = createMockContext({ errors: getTravelTimes.errors });
     const input = getTravelTimes.input.parse({});
     await getTravelTimes.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -495,7 +494,7 @@ describe('getTravelTimes', () => {
 
   it('enriches routeFilter when filter is provided', async () => {
     mockService.getTravelTimes.mockResolvedValue([corridorFixture]);
-    const ctx = toolContext(getTravelTimes);
+    const ctx = createMockContext({ errors: getTravelTimes.errors });
     const input = getTravelTimes.input.parse({ route: 'I-5' });
     await getTravelTimes.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -504,7 +503,7 @@ describe('getTravelTimes', () => {
 
   it('enriches notice when no corridors matched', async () => {
     mockService.getTravelTimes.mockResolvedValue([corridorFixture]);
-    const ctx = toolContext(getTravelTimes);
+    const ctx = createMockContext({ errors: getTravelTimes.errors });
     const input = getTravelTimes.input.parse({ route: 'SR 999' });
     await getTravelTimes.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -515,7 +514,7 @@ describe('getTravelTimes', () => {
   it('filters corridors by route name', async () => {
     const sr520 = { ...corridorFixture, name: 'SR 520 EB: 148th to I-5', travelTimeId: 2 };
     mockService.getTravelTimes.mockResolvedValue([corridorFixture, sr520]);
-    const ctx = toolContext(getTravelTimes);
+    const ctx = createMockContext({ errors: getTravelTimes.errors });
     const input = getTravelTimes.input.parse({ route: 'SR 520' });
     const result = await getTravelTimes.handler(input, ctx);
     expect(result.corridors).toHaveLength(1);
@@ -524,7 +523,7 @@ describe('getTravelTimes', () => {
 
   it('filter is case-insensitive', async () => {
     mockService.getTravelTimes.mockResolvedValue([corridorFixture]);
-    const ctx = toolContext(getTravelTimes);
+    const ctx = createMockContext({ errors: getTravelTimes.errors });
     const input = getTravelTimes.input.parse({ route: 'i-5' });
     const result = await getTravelTimes.handler(input, ctx);
     expect(result.corridors).toHaveLength(1);
@@ -545,7 +544,7 @@ describe('getTravelTimes', () => {
       endPoint: { roadName: 'I-90', direction: 'E', milePost: 17 },
     };
     mockService.getTravelTimes.mockResolvedValue([endpointNamed, offRoute]);
-    const ctx = toolContext(getTravelTimes);
+    const ctx = createMockContext({ errors: getTravelTimes.errors });
     const result = await getTravelTimes.handler(getTravelTimes.input.parse({ route: 'I-5' }), ctx);
     expect(result.corridors.map((c) => c.travelTimeId)).toEqual([10]);
   });
@@ -560,7 +559,7 @@ describe('getTravelTimes', () => {
     };
     const other = { travelTimeId: 22, name: 'Tacoma-Federal Way', startPoint: { roadName: '005' } };
     mockService.getTravelTimes.mockResolvedValue([bare, prefixed, other]);
-    const ctx = toolContext(getTravelTimes);
+    const ctx = createMockContext({ errors: getTravelTimes.errors });
     const result = await getTravelTimes.handler(
       getTravelTimes.input.parse({ route: 'I-405' }),
       ctx,
@@ -572,7 +571,7 @@ describe('getTravelTimes', () => {
     const sr520 = { travelTimeId: 30, name: 'Redmond-Seattle', endPoint: { roadName: '520' } };
     const notOnRoute = { travelTimeId: 31, name: 'Everett-Seattle', endPoint: { roadName: '005' } };
     mockService.getTravelTimes.mockResolvedValue([sr520, notOnRoute]);
-    const ctx = toolContext(getTravelTimes);
+    const ctx = createMockContext({ errors: getTravelTimes.errors });
     const result = await getTravelTimes.handler(
       getTravelTimes.input.parse({ route: 'SR 520' }),
       ctx,
@@ -584,7 +583,7 @@ describe('getTravelTimes', () => {
     const everett = { travelTimeId: 40, name: 'Seattle-Everett', startPoint: { roadName: '005' } };
     const tacoma = { travelTimeId: 41, name: 'Seattle-Tacoma', startPoint: { roadName: '005' } };
     mockService.getTravelTimes.mockResolvedValue([everett, tacoma]);
-    const ctx = toolContext(getTravelTimes);
+    const ctx = createMockContext({ errors: getTravelTimes.errors });
     const result = await getTravelTimes.handler(
       getTravelTimes.input.parse({ route: 'Everett' }),
       ctx,
@@ -594,7 +593,7 @@ describe('getTravelTimes', () => {
 
   it('calculates delayInMinutes as current minus average', async () => {
     mockService.getTravelTimes.mockResolvedValue([corridorFixture]);
-    const ctx = toolContext(getTravelTimes);
+    const ctx = createMockContext({ errors: getTravelTimes.errors });
     const input = getTravelTimes.input.parse({});
     const result = await getTravelTimes.handler(input, ctx);
     expect(nth(result.corridors).delayInMinutes).toBe(6); // 18 - 12
@@ -602,7 +601,7 @@ describe('getTravelTimes', () => {
 
   it('omits delayInMinutes when currentTime or averageTime is missing', async () => {
     mockService.getTravelTimes.mockResolvedValue([{ travelTimeId: 3, name: 'I-405 SB' }]);
-    const ctx = toolContext(getTravelTimes);
+    const ctx = createMockContext({ errors: getTravelTimes.errors });
     const input = getTravelTimes.input.parse({});
     const result = await getTravelTimes.handler(input, ctx);
     expect(nth(result.corridors).delayInMinutes).toBeUndefined();
@@ -617,7 +616,7 @@ describe('getTravelTimes', () => {
       startPoint: { roadName: '005', direction: 'S', milePost: 192 },
     };
     mockService.getTravelTimes.mockResolvedValue([unmeasured]);
-    const ctx = toolContext(getTravelTimes);
+    const ctx = createMockContext({ errors: getTravelTimes.errors });
     const result = await getTravelTimes.handler(getTravelTimes.input.parse({}), ctx);
     const corridor = nth(result.corridors);
     expect(corridor.currentTimeInMinutes).toBeUndefined();
@@ -653,7 +652,7 @@ describe('getTravelTimes', () => {
 
 describePaginationContract({
   tool: getTravelTimes,
-  createContext: () => toolContext(getTravelTimes),
+  createContext: () => createMockContext({ errors: getTravelTimes.errors }),
   stubRows: (rows) => mockService.getTravelTimes.mockResolvedValue(rows),
   makeRows: (count) =>
     Array.from({ length: count }, (_, i) => ({
@@ -685,7 +684,7 @@ describe('getTravelTimes — paging applies after the route filter', () => {
       startPoint: { roadName: 'I-90' },
     }));
     mockService.getTravelTimes.mockResolvedValue([...offRoute, ...onRoute]);
-    const ctx = toolContext(getTravelTimes);
+    const ctx = createMockContext({ errors: getTravelTimes.errors });
     const result = await getTravelTimes.handler(
       getTravelTimes.input.parse({ route: 'I-5', offset: 10, limit: 5 }),
       ctx,
@@ -723,7 +722,7 @@ describe('getTollRates', () => {
 
   it('returns all toll rates', async () => {
     mockService.getTollRates.mockResolvedValue([rateFixture]);
-    const ctx = toolContext(getTollRates);
+    const ctx = createMockContext({ errors: getTollRates.errors });
     const input = getTollRates.input.parse({});
     const result = await getTollRates.handler(input, ctx);
     expect(result.rates).toHaveLength(1);
@@ -732,7 +731,7 @@ describe('getTollRates', () => {
 
   it('enriches with totalCount', async () => {
     mockService.getTollRates.mockResolvedValue([rateFixture]);
-    const ctx = toolContext(getTollRates);
+    const ctx = createMockContext({ errors: getTollRates.errors });
     const input = getTollRates.input.parse({});
     await getTollRates.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -744,7 +743,7 @@ describe('getTollRates', () => {
 
   it('enriches notice when no rates returned', async () => {
     mockService.getTollRates.mockResolvedValue([]);
-    const ctx = toolContext(getTollRates);
+    const ctx = createMockContext({ errors: getTollRates.errors });
     const input = getTollRates.input.parse({});
     await getTollRates.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -754,7 +753,7 @@ describe('getTollRates', () => {
 
   it('returns empty rates list', async () => {
     mockService.getTollRates.mockResolvedValue([]);
-    const ctx = toolContext(getTollRates);
+    const ctx = createMockContext({ errors: getTollRates.errors });
     const input = getTollRates.input.parse({});
     const result = await getTollRates.handler(input, ctx);
     expect(result.rates).toHaveLength(0);
@@ -782,7 +781,7 @@ describe('getTollRates', () => {
 
 describePaginationContract({
   tool: getTollRates,
-  createContext: () => toolContext(getTollRates),
+  createContext: () => createMockContext({ errors: getTollRates.errors }),
   stubRows: (rows) => mockService.getTollRates.mockResolvedValue(rows),
   makeRows: (count) =>
     Array.from({ length: count }, (_, i) => ({
@@ -820,7 +819,7 @@ describe('getBorderWaits', () => {
 
   it('returns all border crossings', async () => {
     mockService.getBorderCrossings.mockResolvedValue([crossingFixture]);
-    const ctx = toolContext(getBorderWaits);
+    const ctx = createMockContext({ errors: getBorderWaits.errors });
     const input = getBorderWaits.input.parse({});
     const result = await getBorderWaits.handler(input, ctx);
     expect(result.crossings).toHaveLength(1);
@@ -830,7 +829,7 @@ describe('getBorderWaits', () => {
 
   it('enriches with totalCount', async () => {
     mockService.getBorderCrossings.mockResolvedValue([crossingFixture]);
-    const ctx = toolContext(getBorderWaits);
+    const ctx = createMockContext({ errors: getBorderWaits.errors });
     const input = getBorderWaits.input.parse({});
     await getBorderWaits.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -840,7 +839,7 @@ describe('getBorderWaits', () => {
 
   it('enriches notice when no crossings returned', async () => {
     mockService.getBorderCrossings.mockResolvedValue([]);
-    const ctx = toolContext(getBorderWaits);
+    const ctx = createMockContext({ errors: getBorderWaits.errors });
     const input = getBorderWaits.input.parse({});
     await getBorderWaits.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -850,7 +849,7 @@ describe('getBorderWaits', () => {
 
   it('returns empty crossings list', async () => {
     mockService.getBorderCrossings.mockResolvedValue([]);
-    const ctx = toolContext(getBorderWaits);
+    const ctx = createMockContext({ errors: getBorderWaits.errors });
     const input = getBorderWaits.input.parse({});
     const result = await getBorderWaits.handler(input, ctx);
     expect(result.crossings).toHaveLength(0);
@@ -906,7 +905,7 @@ describe('searchCameras', () => {
 
   it('returns cameras matching filter', async () => {
     mockService.searchCameras.mockResolvedValue([cameraFixture]);
-    const ctx = toolContext(searchCameras);
+    const ctx = createMockContext({ errors: searchCameras.errors });
     const input = searchCameras.input.parse({ stateRoute: '090' });
     const result = await searchCameras.handler(input, ctx);
     expect(result.cameras).toHaveLength(1);
@@ -919,7 +918,7 @@ describe('searchCameras', () => {
 
   it('enriches with totalCount and stateRoute filter', async () => {
     mockService.searchCameras.mockResolvedValue([cameraFixture]);
-    const ctx = toolContext(searchCameras);
+    const ctx = createMockContext({ errors: searchCameras.errors });
     const input = searchCameras.input.parse({ stateRoute: '090' });
     await searchCameras.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -929,7 +928,7 @@ describe('searchCameras', () => {
 
   it('enriches notice with copyright when results fit inline', async () => {
     mockService.searchCameras.mockResolvedValue([cameraFixture]);
-    const ctx = toolContext(searchCameras);
+    const ctx = createMockContext({ errors: searchCameras.errors });
     const input = searchCameras.input.parse({});
     await searchCameras.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -939,7 +938,7 @@ describe('searchCameras', () => {
   it('pages results and reports continuation metadata when the total exceeds the page limit', async () => {
     const manyCameras = Array.from({ length: 25 }, (_, i) => ({ ...cameraFixture, cameraId: i }));
     mockService.searchCameras.mockResolvedValue(manyCameras);
-    const ctx = toolContext(searchCameras);
+    const ctx = createMockContext({ errors: searchCameras.errors });
     const input = searchCameras.input.parse({ limit: 10 });
     const result = await searchCameras.handler(input, ctx);
     expect(result.cameras).toHaveLength(10);
@@ -952,7 +951,7 @@ describe('searchCameras', () => {
 
   it('returns all cameras when no filter provided', async () => {
     mockService.searchCameras.mockResolvedValue([cameraFixture]);
-    const ctx = toolContext(searchCameras);
+    const ctx = createMockContext({ errors: searchCameras.errors });
     const input = searchCameras.input.parse({});
     const result = await searchCameras.handler(input, ctx);
     expect(result.cameras).toHaveLength(1);
@@ -984,7 +983,7 @@ describe('searchCameras', () => {
   it('applies the default page limit on a no-arg call', async () => {
     const manyCameras = Array.from({ length: 80 }, (_, i) => ({ ...cameraFixture, cameraId: i }));
     mockService.searchCameras.mockResolvedValue(manyCameras);
-    const ctx = toolContext(searchCameras);
+    const ctx = createMockContext({ errors: searchCameras.errors });
     const input = searchCameras.input.parse({});
     const result = await searchCameras.handler(input, ctx);
     expect(result.cameras).toHaveLength(50); // DEFAULT_LIMIT
@@ -997,7 +996,7 @@ describe('searchCameras', () => {
   it('returns the requested page via offset/limit and keeps totalCount at the full count', async () => {
     const manyCameras = Array.from({ length: 25 }, (_, i) => ({ ...cameraFixture, cameraId: i }));
     mockService.searchCameras.mockResolvedValue(manyCameras);
-    const ctx = toolContext(searchCameras);
+    const ctx = createMockContext({ errors: searchCameras.errors });
     const input = searchCameras.input.parse({ offset: 10, limit: 5 });
     const result = await searchCameras.handler(input, ctx);
     expect(result.cameras.map((c) => c.cameraId)).toEqual([10, 11, 12, 13, 14]);
@@ -1010,7 +1009,7 @@ describe('searchCameras', () => {
   it('reports hasMore false and null nextOffset on the final page', async () => {
     const manyCameras = Array.from({ length: 25 }, (_, i) => ({ ...cameraFixture, cameraId: i }));
     mockService.searchCameras.mockResolvedValue(manyCameras);
-    const ctx = toolContext(searchCameras);
+    const ctx = createMockContext({ errors: searchCameras.errors });
     const input = searchCameras.input.parse({ offset: 20, limit: 10 });
     const result = await searchCameras.handler(input, ctx);
     expect(result.cameras).toHaveLength(5); // records 20..24
@@ -1026,7 +1025,7 @@ describe('searchCameras', () => {
       title: `Cam ${i}`,
     }));
     mockService.searchCameras.mockResolvedValue(manyCameras);
-    const ctx = toolContext(searchCameras);
+    const ctx = createMockContext({ errors: searchCameras.errors });
     const input = searchCameras.input.parse({ offset: 5, limit: 3 });
     const result = await searchCameras.handler(input, ctx);
     const text = (searchCameras.format!(result)[0] as { text: string }).text;
@@ -1038,6 +1037,22 @@ describe('searchCameras', () => {
     expect(text.match(/^### /gm)?.length).toBe(3);
   });
 
+  it('returns an empty page with actionable guidance when the offset is past the end', async () => {
+    const manyCameras = Array.from({ length: 25 }, (_, i) => ({ ...cameraFixture, cameraId: i }));
+    mockService.searchCameras.mockResolvedValue(manyCameras);
+    const ctx = createMockContext({ errors: searchCameras.errors });
+    const result = await searchCameras.handler(searchCameras.input.parse({ offset: 40 }), ctx);
+    expect(result.cameras).toEqual([]);
+    const enrichment = getEnrichment(ctx);
+    // totalCount stays the full match count so the agent can compute a reachable offset.
+    expect(enrichment.totalCount).toBe(25);
+    expect(enrichment.hasMore).toBe(false);
+    expect(enrichment.nextOffset).toBeNull();
+    expect(enrichment.notice).toContain('Offset 40 is past the end of 25 matching cameras');
+    expect(enrichment.notice).toContain('between 0 and 24');
+    expect(formattedText(searchCameras.format!(result))).toContain('No cameras found');
+  });
+
   it('rejects a limit above the maximum and a negative offset', () => {
     expect(() => searchCameras.input.parse({ limit: 501 })).toThrow();
     expect(() => searchCameras.input.parse({ offset: -1 })).toThrow();
@@ -1045,7 +1060,7 @@ describe('searchCameras', () => {
 
   it('strips whitespace-only stateRoute filter', async () => {
     mockService.searchCameras.mockResolvedValue([]);
-    const ctx = toolContext(searchCameras);
+    const ctx = createMockContext({ errors: searchCameras.errors });
     const input = searchCameras.input.parse({ stateRoute: '  ' });
     await searchCameras.handler(input, ctx);
     expect(mockService.searchCameras).toHaveBeenCalledWith(
@@ -1069,7 +1084,7 @@ describe('searchCameras — page windows are reproducible across upstream row or
     mockService.searchCameras.mockResolvedValue(arrival);
     const result = await searchCameras.handler(
       searchCameras.input.parse({ offset, limit }),
-      toolContext(searchCameras),
+      createMockContext({ errors: searchCameras.errors }),
     );
     return result.cameras.map((c) => c.cameraId);
   };
@@ -1094,7 +1109,7 @@ describe('searchCameras — page windows are reproducible across upstream row or
     mockService.searchCameras.mockResolvedValue([{ title: 'No ID' }, ...cameras.slice(0, 2)]);
     const result = await searchCameras.handler(
       searchCameras.input.parse({}),
-      toolContext(searchCameras),
+      createMockContext({ errors: searchCameras.errors }),
     );
     expect(result.cameras.map((c) => c.cameraId)).toEqual([5000, 5001, undefined]);
   });
@@ -1106,7 +1121,7 @@ describe('searchCameras — page windows are reproducible across upstream row or
       mockService.searchCameras.mockResolvedValue(arrival);
       const result = await searchCameras.handler(
         searchCameras.input.parse({ offset: 2, limit: 2 }),
-        toolContext(searchCameras),
+        createMockContext({ errors: searchCameras.errors }),
       );
       return result.cameras.map((c) => c.title);
     };

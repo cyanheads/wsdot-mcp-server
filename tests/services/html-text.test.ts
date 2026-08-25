@@ -283,7 +283,10 @@ describe('htmlToText — linear time', () => {
       const smallMs = Math.max(timeOf(small), 1);
       const largeMs = timeOf(large);
 
-      expect(largeMs / smallMs).toBeLessThan(25);
+      // The bound discriminates growth class, not a constant factor: a 10x input costs ~10x
+      // linear and ~100x quadratic, so anything under 50 rules out the quadratic backtracking
+      // this guards. A tighter bound only measures how much CPU the rest of the suite left.
+      expect(largeMs / smallMs).toBeLessThan(50);
       expect(largeMs).toBeLessThan(2_000);
     });
   }

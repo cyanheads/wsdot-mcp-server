@@ -21,7 +21,6 @@ vi.mock('@cyanheads/mcp-ts-core/utils', () => ({
 import { getFerryTerminals } from '@/mcp-server/tools/definitions/get-ferry-terminals.tool.js';
 import { FerryApiService } from '@/services/ferry/ferry-service.js';
 import { nth } from '../helpers/assertions.js';
-import { toolContext } from '../helpers/tool-context.js';
 
 /**
  * Obviously-fake stand-in for the credential. It matches the value returned by the mocked
@@ -954,7 +953,7 @@ describe('FerryApiService — HTTP error handling', () => {
 
   it('resolves the api_unavailable contract on a non-2xx (reason + recovery hint)', async () => {
     mockFetch.mockResolvedValue(makeResponse('Service Unavailable', 503, 'text/plain'));
-    const ctx = toolContext(getFerryTerminals);
+    const ctx = createMockContext({ errors: getFerryTerminals.errors });
     const err = await svc.getTerminals(ctx).catch((e) => e);
     expect(err).toBeInstanceOf(McpError);
     expect((err as McpError).code).toBe(JsonRpcErrorCode.ServiceUnavailable);
@@ -968,7 +967,7 @@ describe('FerryApiService — HTTP error handling', () => {
   it('reads the WSF explanation on a 400 from an unregistered access code', async () => {
     // Before the fix the status check threw first and this body was discarded unread.
     mockFetch.mockResolvedValue(makeResponse(UNREGISTERED_CODE_BODY, 400));
-    const ctx = toolContext(getFerryTerminals);
+    const ctx = createMockContext({ errors: getFerryTerminals.errors });
     const err = await svc.getTerminals(ctx).catch((e) => e);
     expect((err as McpError).code).toBe(JsonRpcErrorCode.ConfigurationError);
     expect((err as McpError).message).toContain('WSDOT_ACCESS_CODE');

@@ -12,7 +12,7 @@ import {
   McpError,
   serviceUnavailable,
 } from '@cyanheads/mcp-ts-core/errors';
-import { getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // --- Mocks (hoisted so vi.mock factory runs before imports) ---
@@ -46,7 +46,6 @@ import { getTerminalSpace } from '@/mcp-server/tools/definitions/get-terminal-sp
 import { getVesselLocations } from '@/mcp-server/tools/definitions/get-vessel-locations.tool.js';
 import { formattedText, nth, rejection } from '../helpers/assertions.js';
 import { describePaginationContract } from '../helpers/pagination.js';
-import { toolContext } from '../helpers/tool-context.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -89,7 +88,7 @@ describe('ferry tools — upstream failure contract', () => {
         ...c.recoveryFor('api_unavailable'),
       });
     });
-    const ctx = toolContext(getFerryTerminals);
+    const ctx = createMockContext({ errors: getFerryTerminals.errors });
     const err = await rejection(() =>
       getFerryTerminals.handler(getFerryTerminals.input.parse({}), ctx),
     );
@@ -111,7 +110,7 @@ describe('ferry tools — upstream failure contract', () => {
         },
       );
     });
-    const ctx = toolContext(getFerryTerminals);
+    const ctx = createMockContext({ errors: getFerryTerminals.errors });
     const err = await rejection(() =>
       getFerryTerminals.handler(getFerryTerminals.input.parse({}), ctx),
     );
@@ -138,7 +137,7 @@ describe('getFerryTerminals', () => {
 
   it('returns terminals from the service', async () => {
     mockService.getTerminals.mockResolvedValue([terminalFixture]);
-    const ctx = toolContext(getFerryTerminals);
+    const ctx = createMockContext({ errors: getFerryTerminals.errors });
     const input = getFerryTerminals.input.parse({});
     const result = await getFerryTerminals.handler(input, ctx);
     expect(result.terminals).toHaveLength(1);
@@ -148,7 +147,7 @@ describe('getFerryTerminals', () => {
 
   it('enriches with totalCount', async () => {
     mockService.getTerminals.mockResolvedValue([terminalFixture]);
-    const ctx = toolContext(getFerryTerminals);
+    const ctx = createMockContext({ errors: getFerryTerminals.errors });
     const input = getFerryTerminals.input.parse({});
     await getFerryTerminals.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -158,7 +157,7 @@ describe('getFerryTerminals', () => {
 
   it('enriches notice when no terminals returned', async () => {
     mockService.getTerminals.mockResolvedValue([]);
-    const ctx = toolContext(getFerryTerminals);
+    const ctx = createMockContext({ errors: getFerryTerminals.errors });
     const input = getFerryTerminals.input.parse({});
     await getFerryTerminals.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -168,7 +167,7 @@ describe('getFerryTerminals', () => {
 
   it('returns empty terminals list', async () => {
     mockService.getTerminals.mockResolvedValue([]);
-    const ctx = toolContext(getFerryTerminals);
+    const ctx = createMockContext({ errors: getFerryTerminals.errors });
     const input = getFerryTerminals.input.parse({});
     const result = await getFerryTerminals.handler(input, ctx);
     expect(result.terminals).toHaveLength(0);
@@ -208,7 +207,7 @@ describe('getFerryRoutes', () => {
 
   it('returns routes for today when no date provided', async () => {
     mockService.getRoutes.mockResolvedValue([routeFixture]);
-    const ctx = toolContext(getFerryRoutes);
+    const ctx = createMockContext({ errors: getFerryRoutes.errors });
     const input = getFerryRoutes.input.parse({});
     const result = await getFerryRoutes.handler(input, ctx);
     expect(result.routes).toHaveLength(1);
@@ -217,7 +216,7 @@ describe('getFerryRoutes', () => {
 
   it('enriches with totalCount and tripDate', async () => {
     mockService.getRoutes.mockResolvedValue([routeFixture]);
-    const ctx = toolContext(getFerryRoutes);
+    const ctx = createMockContext({ errors: getFerryRoutes.errors });
     const input = getFerryRoutes.input.parse({ tripDate: '2026-05-23' });
     await getFerryRoutes.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -228,7 +227,7 @@ describe('getFerryRoutes', () => {
 
   it('enriches notice when no routes returned', async () => {
     mockService.getRoutes.mockResolvedValue([]);
-    const ctx = toolContext(getFerryRoutes);
+    const ctx = createMockContext({ errors: getFerryRoutes.errors });
     const input = getFerryRoutes.input.parse({ tripDate: '2026-05-23' });
     await getFerryRoutes.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -238,7 +237,7 @@ describe('getFerryRoutes', () => {
 
   it('returns routes for a specific date', async () => {
     mockService.getRoutes.mockResolvedValue([routeFixture]);
-    const ctx = toolContext(getFerryRoutes);
+    const ctx = createMockContext({ errors: getFerryRoutes.errors });
     const input = getFerryRoutes.input.parse({ tripDate: '2026-05-23' });
     const result = await getFerryRoutes.handler(input, ctx);
     expect(result.routes).toHaveLength(1);
@@ -247,7 +246,7 @@ describe('getFerryRoutes', () => {
 
   it('returns empty routes list', async () => {
     mockService.getRoutes.mockResolvedValue([]);
-    const ctx = toolContext(getFerryRoutes);
+    const ctx = createMockContext({ errors: getFerryRoutes.errors });
     const input = getFerryRoutes.input.parse({});
     const result = await getFerryRoutes.handler(input, ctx);
     expect(result.routes).toHaveLength(0);
@@ -266,7 +265,7 @@ describe('getFerryRoutes', () => {
     mockToFerryDate.mockImplementation(() => {
       throw new Error('Invalid date');
     });
-    const ctx = toolContext(getFerryRoutes);
+    const ctx = createMockContext({ errors: getFerryRoutes.errors });
     const input = getFerryRoutes.input.parse({ tripDate: 'not-a-date' });
     const err = await rejection(() => getFerryRoutes.handler(input, ctx));
     expect(err).toBeInstanceOf(McpError);
@@ -299,7 +298,7 @@ describe('getFerrySchedule', () => {
 
   it('returns schedule for given terminal pair', async () => {
     mockService.getSchedule.mockResolvedValue(scheduleFixture);
-    const ctx = toolContext(getFerrySchedule);
+    const ctx = createMockContext({ errors: getFerrySchedule.errors });
     const input = getFerrySchedule.input.parse({
       departingTerminalId: 7,
       arrivingTerminalId: 3,
@@ -312,7 +311,7 @@ describe('getFerrySchedule', () => {
 
   it('enriches with tripDate, remainingOnly, and totalSailings', async () => {
     mockService.getSchedule.mockResolvedValue(scheduleFixture);
-    const ctx = toolContext(getFerrySchedule);
+    const ctx = createMockContext({ errors: getFerrySchedule.errors });
     const input = getFerrySchedule.input.parse({
       departingTerminalId: 7,
       arrivingTerminalId: 3,
@@ -330,7 +329,7 @@ describe('getFerrySchedule', () => {
       ...scheduleFixture,
       sailings: [],
     });
-    const ctx = toolContext(getFerrySchedule);
+    const ctx = createMockContext({ errors: getFerrySchedule.errors });
     const input = getFerrySchedule.input.parse({
       departingTerminalId: 7,
       arrivingTerminalId: 3,
@@ -343,7 +342,7 @@ describe('getFerrySchedule', () => {
 
   it('defaults remainingOnly to false', async () => {
     mockService.getSchedule.mockResolvedValue(scheduleFixture);
-    const ctx = toolContext(getFerrySchedule);
+    const ctx = createMockContext({ errors: getFerrySchedule.errors });
     const input = getFerrySchedule.input.parse({
       departingTerminalId: 7,
       arrivingTerminalId: 3,
@@ -354,7 +353,7 @@ describe('getFerrySchedule', () => {
 
   it('passes remainingOnly when set to true', async () => {
     mockService.getSchedule.mockResolvedValue(scheduleFixture);
-    const ctx = toolContext(getFerrySchedule);
+    const ctx = createMockContext({ errors: getFerrySchedule.errors });
     const input = getFerrySchedule.input.parse({
       departingTerminalId: 7,
       arrivingTerminalId: 3,
@@ -366,7 +365,7 @@ describe('getFerrySchedule', () => {
 
   it('uses provided tripDate', async () => {
     mockService.getSchedule.mockResolvedValue(scheduleFixture);
-    const ctx = toolContext(getFerrySchedule);
+    const ctx = createMockContext({ errors: getFerrySchedule.errors });
     const input = getFerrySchedule.input.parse({
       departingTerminalId: 7,
       arrivingTerminalId: 3,
@@ -428,7 +427,7 @@ describe('getFerrySchedule', () => {
     mockToFerryDate.mockImplementation(() => {
       throw new Error('Invalid date');
     });
-    const ctx = toolContext(getFerrySchedule);
+    const ctx = createMockContext({ errors: getFerrySchedule.errors });
     const input = getFerrySchedule.input.parse({
       departingTerminalId: 7,
       arrivingTerminalId: 3,
@@ -443,7 +442,7 @@ describe('getFerrySchedule', () => {
     mockService.getSchedule.mockRejectedValue(
       new McpError(JsonRpcErrorCode.ValidationError, 'WSF Ferry API error: Invalid terminal pair'),
     );
-    const ctx = toolContext(getFerrySchedule);
+    const ctx = createMockContext({ errors: getFerrySchedule.errors });
     const input = getFerrySchedule.input.parse({
       departingTerminalId: 9999,
       arrivingTerminalId: 9998,
@@ -461,7 +460,7 @@ describe('getFerrySchedule', () => {
         retryable: false,
       }),
     );
-    const ctx = toolContext(getFerrySchedule);
+    const ctx = createMockContext({ errors: getFerrySchedule.errors });
     const input = getFerrySchedule.input.parse({
       departingTerminalId: 999,
       arrivingTerminalId: 3,
@@ -481,7 +480,7 @@ describe('getFerrySchedule', () => {
         { reason: 'invalid_access_code', status: 400 },
       ),
     );
-    const ctx = toolContext(getFerrySchedule);
+    const ctx = createMockContext({ errors: getFerrySchedule.errors });
     const input = getFerrySchedule.input.parse({
       departingTerminalId: 7,
       arrivingTerminalId: 3,
@@ -493,7 +492,7 @@ describe('getFerrySchedule', () => {
 
   it('re-throws non-WSF errors from getSchedule without wrapping', async () => {
     mockService.getSchedule.mockRejectedValue(new Error('Network timeout'));
-    const ctx = toolContext(getFerrySchedule);
+    const ctx = createMockContext({ errors: getFerrySchedule.errors });
     const input = getFerrySchedule.input.parse({
       departingTerminalId: 7,
       arrivingTerminalId: 3,
@@ -531,7 +530,7 @@ describe('getVesselLocations', () => {
 
   it('returns vessel locations from the service', async () => {
     mockService.getVesselLocations.mockResolvedValue([vesselFixture]);
-    const ctx = toolContext(getVesselLocations);
+    const ctx = createMockContext({ errors: getVesselLocations.errors });
     const input = getVesselLocations.input.parse({});
     const result = await getVesselLocations.handler(input, ctx);
     expect(result.vessels).toHaveLength(1);
@@ -542,7 +541,7 @@ describe('getVesselLocations', () => {
 
   it('enriches with totalCount', async () => {
     mockService.getVesselLocations.mockResolvedValue([vesselFixture]);
-    const ctx = toolContext(getVesselLocations);
+    const ctx = createMockContext({ errors: getVesselLocations.errors });
     const input = getVesselLocations.input.parse({});
     await getVesselLocations.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -552,7 +551,7 @@ describe('getVesselLocations', () => {
 
   it('enriches notice when no vessels returned', async () => {
     mockService.getVesselLocations.mockResolvedValue([]);
-    const ctx = toolContext(getVesselLocations);
+    const ctx = createMockContext({ errors: getVesselLocations.errors });
     const input = getVesselLocations.input.parse({});
     await getVesselLocations.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -562,7 +561,7 @@ describe('getVesselLocations', () => {
 
   it('returns empty vessels list', async () => {
     mockService.getVesselLocations.mockResolvedValue([]);
-    const ctx = toolContext(getVesselLocations);
+    const ctx = createMockContext({ errors: getVesselLocations.errors });
     const input = getVesselLocations.input.parse({});
     const result = await getVesselLocations.handler(input, ctx);
     expect(result.vessels).toHaveLength(0);
@@ -640,7 +639,7 @@ describe('getTerminalSpace', () => {
 
   it('returns all terminals when no filter provided', async () => {
     mockService.getTerminalSailingSpace.mockResolvedValue([terminalSpaceFixture]);
-    const ctx = toolContext(getTerminalSpace);
+    const ctx = createMockContext({ errors: getTerminalSpace.errors });
     const input = getTerminalSpace.input.parse({});
     const result = await getTerminalSpace.handler(input, ctx);
     expect(result.terminals).toHaveLength(1);
@@ -648,7 +647,7 @@ describe('getTerminalSpace', () => {
 
   it('enriches with totalCount and no terminalFilter when no filter', async () => {
     mockService.getTerminalSailingSpace.mockResolvedValue([terminalSpaceFixture]);
-    const ctx = toolContext(getTerminalSpace);
+    const ctx = createMockContext({ errors: getTerminalSpace.errors });
     const input = getTerminalSpace.input.parse({});
     await getTerminalSpace.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -660,7 +659,7 @@ describe('getTerminalSpace', () => {
 
   it('enriches terminalFilter when filter provided', async () => {
     mockService.getTerminalSailingSpace.mockResolvedValue([terminalSpaceFixture]);
-    const ctx = toolContext(getTerminalSpace);
+    const ctx = createMockContext({ errors: getTerminalSpace.errors });
     const input = getTerminalSpace.input.parse({ departingTerminalId: 7 });
     await getTerminalSpace.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -669,7 +668,7 @@ describe('getTerminalSpace', () => {
 
   it('enriches notice when filter matches no terminal', async () => {
     mockService.getTerminalSailingSpace.mockResolvedValue([terminalSpaceFixture]);
-    const ctx = toolContext(getTerminalSpace);
+    const ctx = createMockContext({ errors: getTerminalSpace.errors });
     const input = getTerminalSpace.input.parse({ departingTerminalId: 999 });
     await getTerminalSpace.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -686,7 +685,7 @@ describe('getTerminalSpace', () => {
       departingSpaces: [],
     };
     mockService.getTerminalSailingSpace.mockResolvedValue([terminalSpaceFixture, otherTerminal]);
-    const ctx = toolContext(getTerminalSpace);
+    const ctx = createMockContext({ errors: getTerminalSpace.errors });
     const input = getTerminalSpace.input.parse({ departingTerminalId: 7 });
     const result = await getTerminalSpace.handler(input, ctx);
     expect(result.terminals).toHaveLength(1);
@@ -828,7 +827,7 @@ describe('getTerminalSpace', () => {
  */
 describePaginationContract({
   tool: getTerminalSpace,
-  createContext: () => toolContext(getTerminalSpace),
+  createContext: () => createMockContext({ errors: getTerminalSpace.errors }),
   stubRows: (rows) => mockService.getTerminalSailingSpace.mockResolvedValue(rows),
   makeRows: (count) =>
     Array.from({ length: count }, (_, i) => ({
@@ -861,7 +860,7 @@ describe('getTerminalSpace — a paged terminal keeps all of its sailings', () =
       })),
     }));
     mockService.getTerminalSailingSpace.mockResolvedValue(terminals);
-    const ctx = toolContext(getTerminalSpace);
+    const ctx = createMockContext({ errors: getTerminalSpace.errors });
     const result = await getTerminalSpace.handler(
       getTerminalSpace.input.parse({ offset: 2, limit: 2 }),
       ctx,
@@ -879,7 +878,7 @@ describe('getTerminalSpace — a paged terminal keeps all of its sailings', () =
       departingSpaces: [],
     }));
     mockService.getTerminalSailingSpace.mockResolvedValue(terminals);
-    const ctx = toolContext(getTerminalSpace);
+    const ctx = createMockContext({ errors: getTerminalSpace.errors });
     const result = await getTerminalSpace.handler(
       getTerminalSpace.input.parse({ departingTerminalId: 6 }),
       ctx,
@@ -911,7 +910,7 @@ describe('getFerryAlerts', () => {
 
   it('returns alerts from the service', async () => {
     mockService.getAlerts.mockResolvedValue([alertFixture]);
-    const ctx = toolContext(getFerryAlerts);
+    const ctx = createMockContext({ errors: getFerryAlerts.errors });
     const input = getFerryAlerts.input.parse({});
     const result = await getFerryAlerts.handler(input, ctx);
     expect(result.alerts).toHaveLength(1);
@@ -921,7 +920,7 @@ describe('getFerryAlerts', () => {
 
   it('enriches with totalCount', async () => {
     mockService.getAlerts.mockResolvedValue([alertFixture]);
-    const ctx = toolContext(getFerryAlerts);
+    const ctx = createMockContext({ errors: getFerryAlerts.errors });
     const input = getFerryAlerts.input.parse({});
     await getFerryAlerts.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -931,7 +930,7 @@ describe('getFerryAlerts', () => {
 
   it('enriches notice when no alerts', async () => {
     mockService.getAlerts.mockResolvedValue([]);
-    const ctx = toolContext(getFerryAlerts);
+    const ctx = createMockContext({ errors: getFerryAlerts.errors });
     const input = getFerryAlerts.input.parse({});
     await getFerryAlerts.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
@@ -942,7 +941,7 @@ describe('getFerryAlerts', () => {
 
   it('returns empty alerts list', async () => {
     mockService.getAlerts.mockResolvedValue([]);
-    const ctx = toolContext(getFerryAlerts);
+    const ctx = createMockContext({ errors: getFerryAlerts.errors });
     const input = getFerryAlerts.input.parse({});
     const result = await getFerryAlerts.handler(input, ctx);
     expect(result.alerts).toHaveLength(0);
@@ -950,7 +949,7 @@ describe('getFerryAlerts', () => {
 
   it('returns the title, body, type, and all-routes flag from the service', async () => {
     mockService.getAlerts.mockResolvedValue([alertFixture]);
-    const ctx = toolContext(getFerryAlerts);
+    const ctx = createMockContext({ errors: getFerryAlerts.errors });
     const result = await getFerryAlerts.handler(getFerryAlerts.input.parse({}), ctx);
     const a = nth(result.alerts);
     expect(a.alertTitle).toBe('Sea/BI - Vessel Wenatchee out of service');
