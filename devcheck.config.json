@@ -12,7 +12,7 @@
     "ignorePatterns": []
   },
   "outdated": {
-    "allowlist": ["typescript", "@cyanheads/mcp-ts-core"]
+    "allowlist": ["@cyanheads/mcp-ts-core"]
   },
   "packaging": {
     "pluginManifests": true

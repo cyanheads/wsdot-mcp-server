@@ -25,6 +25,12 @@ import { initTrafficApiService } from './services/traffic/traffic-service.js';
 await createApp({
   name: 'wsdot-mcp-server',
   title: 'wsdot-mcp-server',
+  // The tool surface is fixed at build time, so a 2026-07-28 client may hold discovery
+  // results for a day. Nothing here is tenant- or caller-specific — hence `public`.
+  cacheHints: {
+    'tools/list': { ttlMs: 86_400_000, cacheScope: 'public' },
+    'server/discover': { ttlMs: 86_400_000, cacheScope: 'public' },
+  },
   tools: [
     getMountainPasses,
     searchAlerts,
