@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.2.5-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/wsdot-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/wsdot-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/wsdot-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.0+-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.5-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/wsdot-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/wsdot-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/wsdot-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.0%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -23,9 +23,11 @@
 
 ---
 
-## Tools
+## Overview
 
-12 tools split across two domains — traffic (WSDOT Traveler API) and ferries (WSF Ferry API):
+Washington State transportation data from the WSDOT Traveler API and the WSF Ferry API. Query mountain pass and highway conditions, search alerts and cameras, and track ferry schedules, vessel locations, and terminal space from any MCP client. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
+
+### Tools
 
 | Tool | Description |
 |:---|:---|
@@ -42,112 +44,96 @@
 | `wsdot_get_terminal_space` | Drive-up and reservable vehicle space available at WSF terminals for upcoming sailings. |
 | `wsdot_get_ferry_alerts` | Active WSF service disruptions and bulletins with impacted route IDs. |
 
-### `wsdot_get_mountain_passes`
+## Capability reference
 
-Current road conditions for all WA mountain passes.
+### `wsdot_get_mountain_passes` <sub>tool</sub>
 
-- Covers all 16 passes: Snoqualmie, Stevens, White, Blewett, Cayuse, and others
-- Fields include status (Open/Closed/Caution), road surface, active traction law, temperature, and elevation
-- Use for "is the pass open?", traction law checks, or winter driving planning
+- No input parameters — returns current conditions for all 16 WA mountain passes (Snoqualmie, Stevens, White, Blewett, Cayuse, and others) in one call
+- Fields include road condition, weather, temperature, elevation, and up to two directional traction/travel restrictions
+- Use for "is the pass open?", traction-law checks, or winter driving planning
 
 ---
 
-### `wsdot_search_alerts`
-
-Active WA highway alerts — incidents, construction, closures, restrictions.
+### `wsdot_search_alerts` <sub>tool</sub>
 
 - Filter by state route — natural forms all work: `"I-90"`, `"90"`, `"090"`, or `"SR 520"` / `"520"`
 - Filter by WSDOT region: Northwest, Olympic, Southwest, South Central, North Central, Eastern
 - Filter by milepost range to scope to a corridor — an alert matches when its extent overlaps the range, so a closure that spans the boundary is returned
 - Omit all filters to return all current statewide alerts
-- Descriptions are plain text — upstream authors them with markup, and a link is rendered inline as `link text (url)` so the destination survives
-- Results are ordered by `alertId` and paged (default 50, max 500) — pass `offset`/`limit` to page through the full statewide set; the notice reports the next offset. Upstream returns the same alert set in more than one row order, so the ordering is imposed here to keep a given offset reproducible
+- Descriptions are normalized to plain text; a link renders inline as `link text (url)`
+- Results ordered by `alertId` and paged (default 50, max 500) — pass `offset`/`limit`; the notice reports the next offset
 
 ---
 
-### `wsdot_get_travel_times`
-
-Current vs. average travel times for named WA highway corridors.
+### `wsdot_get_travel_times` <sub>tool</sub>
 
 - Covers I-5, I-90, SR 520, SR 99, I-405, SR 167, and others
 - Filter by route (`"I-5"`, `"5"`, `"SR 520"`) to get every corridor measured on it, or by any text to match corridor names (`"Everett"`)
 - When current time exceeds average, the corridor is congested; the delta is the delay
 - Reversible express-lane corridors report no travel time while closed in the queried direction — those figures are omitted rather than reported as zero minutes
-- Results are paged (default 50, max 500) — pass `offset`/`limit` to page through the full statewide set; the notice reports the next offset
+- Results are paged (default 50, max 500) — pass `offset`/`limit`; the notice reports the next offset
 
 ---
 
-### `wsdot_get_toll_rates`
+### `wsdot_get_toll_rates` <sub>tool</sub>
 
-Current dynamic toll rates for WA tolled facilities.
-
-- SR 99 (WSDOT Tunnel), SR 167 HOT Lanes, I-405 Express Lanes, the SR 509 tolled segment, and the SR 520 Bridge
+- Covers SR 99 (WSDOT Tunnel), SR 167 HOT Lanes, I-405 Express Lanes, the SR 509 tolled segment, and the SR 520 Bridge
 - Rates are time-banded and change dynamically based on traffic conditions
 - `stateRoute` is a bare, zero-padded route number (`"099"`, `"405"`) with no route type; the rendered text resolves the posted designation, so I-405 reads as `I-405` rather than `SR 405`
 - Each entry leads with its readable `startLocationName → endLocationName` segment; the opaque upstream trip key stays available as `tripName`
-- Results are paged (default 50, max 500) — pass `offset`/`limit` to page through the full statewide set; the notice reports the next offset
+- Results are paged (default 50, max 500) — pass `offset`/`limit`; the notice reports the next offset
 
 ---
 
-### `wsdot_get_border_waits`
+### `wsdot_get_border_waits` <sub>tool</sub>
 
-Current vehicle wait times at WA/Canada land border crossings.
-
-- Covers I-5 (Peace Arch, Blaine), SR 543 (Pacific Highway, Blaine), SR 539 (Lynden), and SR 9 (Sumas)
+- No input parameters — covers I-5 (Peace Arch, Blaine), SR 543 (Pacific Highway, Blaine), SR 539 (Lynden), and SR 9 (Sumas)
 - Each crossing reports a general-purpose lane and a Nexus lane; SR 539 adds a truck lane and SR 543 adds truck and FAST truck lanes — eleven entries in `crossings[]`, one per lane
 - `crossingName` is a route code (e.g. `I5`, `SR543Trucks`); `location.description` holds the readable name
 - Wait times in minutes; `updateTime` is ISO 8601. A crossing reporting no current data is still returned — only `waitTimeInMinutes` is omitted, and the rendered text reads `Not available`
 
 ---
 
-### `wsdot_search_cameras`
-
-WSDOT highway camera metadata and image URLs.
+### `wsdot_search_cameras` <sub>tool</sub>
 
 - Filter by state route (`"I-90"`, `"90"`, `"SR 520"`, or `"520"` all work), WSDOT region, or milepost range
 - Camera road names carry a route-type prefix, so `"SR 26"` excludes US 26 and `"US 97"` excludes US 97A; a bare `"26"` returns both
 - Returns metadata and image URLs — camera images are copyright WSDOT, not fetched as bytes
-- Results are ordered by `cameraId` and paged (default 50, max 500) — pass `offset`/`limit` to page through the full statewide set; the notice reports the next offset. Upstream returns the same camera set in more than one row order, so the ordering is imposed here to keep a given offset reproducible
+- Results are ordered by `cameraId` and paged (default 50, max 500) — pass `offset`/`limit`; the notice reports the next offset
 
 ---
 
-### `wsdot_get_ferry_terminals`
+### `wsdot_get_ferry_terminals` <sub>tool</sub>
 
-All WSF ferry terminals with numeric IDs.
-
-- 20 terminals; the list rarely changes
+- No input parameters — returns all 20 WSF ferry terminals; the list rarely changes
 - Call this first to resolve human-readable names (e.g. "Bainbridge Island", "Seattle", "Kingston") to the numeric IDs required by `wsdot_get_ferry_schedule` and `wsdot_get_terminal_space`
+- Each terminal also carries an abbreviation and coordinates when reported
 
 ---
 
-### `wsdot_get_ferry_routes`
+### `wsdot_get_ferry_routes` <sub>tool</sub>
 
-WSF ferry routes operating on a given date.
-
+- Optional `tripDate` (ISO 8601 `YYYY-MM-DD`); defaults to today
 - Returns each route's ID, abbreviation, and description
 - Route IDs correspond to `impactedRouteIds` in `wsdot_get_ferry_alerts` — use this tool to resolve alert route IDs to route names
 - Use to discover which routes are running; for the numeric terminal IDs that schedule and space lookups need, call `wsdot_get_ferry_terminals`
 
 ---
 
-### `wsdot_get_ferry_schedule`
+### `wsdot_get_ferry_schedule` <sub>tool</sub>
 
-Departure times for a specific WSF ferry route.
-
-- Requires numeric terminal IDs — use `wsdot_get_ferry_terminals` first
-- `remainingOnly: true` returns only future departures for today (useful for "next ferry" queries)
-- For future dates, all sailings for that day are returned
+- Requires numeric `departingTerminalId` and `arrivingTerminalId` — use `wsdot_get_ferry_terminals` first
+- Optional `tripDate` (defaults to today) and `remainingOnly: true` (only future departures for today; ignored for future dates)
 - `departureTime` and `arrivalTime` are ISO 8601 **UTC**, while `tripDate` is the Pacific service day — an evening sailing therefore carries the following UTC calendar date and will not match `tripDate`. Convert to `America/Los_Angeles` before quoting a clock time
 - `arrivalTime` is populated on some routes and absent on others
 - No cancellation status — WSF drops a cancelled sailing from the schedule rather than flagging it, so a listed sailing is not confirmation it will run; check `wsdot_get_ferry_alerts`, which reports disruptions at route level
+- An invalid or non-through terminal pair returns a typed `invalid_terminal_pair` error rather than an empty schedule
 
 ---
 
-### `wsdot_get_vessel_locations`
+### `wsdot_get_vessel_locations` <sub>tool</sub>
 
-Real-time AIS positions for all active WSF vessels.
-
-- Fields include position, speed, heading, ETA, and dock status
+- No input parameters — fields include position, speed, heading, ETA, and dock status for every active WSF vessel
 - Use for "where is the ferry now?" or checking if a specific vessel is in service
 - Position data may lag 30–60 seconds; many fields are null for vessels not currently operating
 - Coordinates render at full upstream AIS precision — no rounding, so both response surfaces report the same position
@@ -155,54 +141,59 @@ Real-time AIS positions for all active WSF vessels.
 
 ---
 
-### `wsdot_get_terminal_space`
+### `wsdot_get_terminal_space` <sub>tool</sub>
 
-Real-time vehicle space availability at WSF terminals for upcoming sailings.
-
+- Filter to a specific terminal by ID (from `wsdot_get_ferry_terminals`); omit for all terminals
 - `driveUpSpaceCount` is the key field — zero means the drive-up lane is full. Oversubscribed sailings report a negative count upstream; it is floored to zero so the value never reads as available space
 - `arrivingTerminalIds` lists the terminals a sailing serves and chains straight into `wsdot_get_ferry_schedule`; `itineraryLabel` is a display string that may name several stops, not a single destination
-- Filter to a specific terminal by ID (from `wsdot_get_ferry_terminals`)
-- Use for "will I make the ferry?" or "how full is the next sailing?" queries
 - Results are paged by terminal (default 5, max 20) — `offset`/`limit` select whole terminals and `totalCount` counts matching terminals, not sailings; every sailing of a returned terminal is included, so page size varies with how many departures each terminal carries
 
 ---
 
-### `wsdot_get_ferry_alerts`
+### `wsdot_get_ferry_alerts` <sub>tool</sub>
 
-Active WSF ferry service disruptions, delays, and bulletins.
-
+- No input parameters — active WSF ferry service disruptions, delays, and bulletins
 - Each alert carries the bulletin's `alertTitle`, its one-line `alertDescription`, and the full `bulletinText` — detail such as a replacement sailing appears only in the body
 - `bulletinText` is plain text: upstream authors it as HTML, and a link is rendered inline as `link text (url)`
 - Each alert includes `impactedRouteIds` — cross-reference with `wsdot_get_ferry_routes` to map route IDs to names
 - `affectsAllRoutes: true` marks a fleet-wide alert, which need not enumerate routes — an empty `impactedRouteIds` then means every route rather than none
 
----
-
 ## Features
 
-Built on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@cyanheads/mcp-ts-core):
-
-- Declarative tool definitions — single file per tool, framework handles registration and validation
-- Unified error handling across all tools
-- Pluggable auth (`none`, `jwt`, `oauth`)
-- Swappable storage backends: `in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2/D1`
-- Structured logging with optional OpenTelemetry tracing
-- STDIO and Streamable HTTP transports
+Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): stdio and Streamable HTTP transports, pluggable auth (`none` / `jwt` / `oauth`), swappable storage (`in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2/D1`), structured logging with optional OpenTelemetry tracing.
 
 WSDOT-specific:
 
-- Dual API integration — WSDOT Traffic API and WSF Ferry API from a single access code
-- Retry, timeout, and HTML-detection guards on all upstream requests
-- Normalized response shapes across both APIs — sparse upstream fields surfaced as optional rather than omitted
+- Dual API integration — WSDOT Traffic API and WSF Ferry API share a single `WSDOT_ACCESS_CODE`
+- Cross-tool linking built into tool descriptions — ferry tools point to `wsdot_get_ferry_terminals` / `wsdot_get_ferry_routes` for ID resolution before a lookup
+- Normalized response shapes across both APIs — sparse upstream fields surface as optional rather than omitted or defaulted
+- Stable pagination — the alert and camera feeds return the same set in more than one row order upstream, so results are sorted by ID to keep a given offset reproducible
 
 Agent-friendly output:
 
-- Cross-tool linking built into descriptions — ferry tools document which tool to call first for terminal and route ID resolution
-- `driveUpSpaceCount: 0` and congestion delta fields give agents actionable signal without string parsing
-- Partial data preserved — sparse upstream payloads surface `null`/`undefined` rather than synthetic defaults
+- Typed failure — `invalid_access_code` and `api_unavailable` errors carry an explicit recovery hint distinguishing configuration faults from transient upstream ones
+- `driveUpSpaceCount: 0` and congestion delta fields (`delayInMinutes`) give agents actionable signal without string parsing
+- Partial data preserved — sparse upstream payloads surface `null`/`undefined` rather than synthetic defaults (e.g. an omitted `waitTimeInMinutes`, an absent `arrivalTime`)
 - `content[]` and `structuredContent` carry the same values, not just the same fields — a `false` flag, an empty list, and one populated half of a coordinate pair all render rather than dropping out of the markdown surface that some clients read
 
 ## Getting started
+
+### Public Hosted Instance
+
+A public instance is available at `https://wsdot.caseyjhand.com/mcp` — no installation required. Point any MCP client at it via Streamable HTTP:
+
+```json
+{
+  "mcpServers": {
+    "wsdot-mcp-server": {
+      "type": "streamable-http",
+      "url": "https://wsdot.caseyjhand.com/mcp"
+    }
+  }
+}
+```
+
+### Self-Hosted / Local
 
 Add the following to your MCP client configuration file. You'll need a WSDOT Traveler API access code — register at [wsdot.wa.gov/Traffic/api/](https://wsdot.wa.gov/Traffic/api/).
 
@@ -270,7 +261,7 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 WSDOT_ACCESS_CODE=your-access-code bu
 
 ### Prerequisites
 
-- [Bun v1.3.0](https://bun.sh/) or higher (or Node.js v24+).
+- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
 - A WSDOT Traveler API access code. Register at [wsdot.wa.gov/Traffic/api/](https://wsdot.wa.gov/Traffic/api/) — registration is free.
 
 ### Installation
@@ -376,7 +367,7 @@ See [`CLAUDE.md`](./CLAUDE.md) for development guidelines and architectural rule
 
 ## Contributing
 
-Issues and pull requests are welcome. Run checks and tests before submitting:
+Issues are welcome. Run checks and tests before submitting:
 
 ```sh
 bun run devcheck

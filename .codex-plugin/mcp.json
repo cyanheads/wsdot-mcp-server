@@ -3,8 +3,8 @@
     "command": "npx",
     "args": ["-y", "@cyanheads/wsdot-mcp-server"],
     "env": {
-      "MCP_TRANSPORT_TYPE": "stdio",
-      "WSDOT_ACCESS_CODE": ""
-    }
+      "MCP_TRANSPORT_TYPE": "stdio"
+    },
+    "env_vars": ["WSDOT_ACCESS_CODE"]
   }
 }
