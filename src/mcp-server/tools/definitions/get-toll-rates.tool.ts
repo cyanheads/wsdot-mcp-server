@@ -112,6 +112,7 @@ export const getTollRates = tool('wsdot_get_toll_rates', {
       retryable: true,
       recovery:
         'Retry in 30 seconds. If the issue persists, check wsdot.wa.gov for service status.',
+      thrownBy: 'service',
     },
     {
       reason: 'invalid_access_code',
@@ -120,6 +121,7 @@ export const getTollRates = tool('wsdot_get_toll_rates', {
       retryable: false,
       recovery:
         'Register an access code at https://wsdot.wa.gov/traffic/api/, set WSDOT_ACCESS_CODE on the server, and restart it.',
+      thrownBy: 'service',
     },
   ],
 

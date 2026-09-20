@@ -269,7 +269,10 @@ describe('getFerryRoutes', () => {
     const input = getFerryRoutes.input.parse({ tripDate: 'not-a-date' });
     const err = await rejection(() => getFerryRoutes.handler(input, ctx));
     expect(err).toBeInstanceOf(McpError);
-    expect((err as McpError).data).toMatchObject({ reason: 'invalid_date' });
+    expect((err as McpError).data).toMatchObject({
+      reason: 'invalid_date',
+      recovery: { hint: expect.stringContaining('YYYY-MM-DD') },
+    });
   });
 });
 
@@ -435,7 +438,10 @@ describe('getFerrySchedule', () => {
     });
     const err = await rejection(() => getFerrySchedule.handler(input, ctx));
     expect(err).toBeInstanceOf(McpError);
-    expect((err as McpError).data).toMatchObject({ reason: 'invalid_date' });
+    expect((err as McpError).data).toMatchObject({
+      reason: 'invalid_date',
+      recovery: { hint: expect.stringContaining('YYYY-MM-DD') },
+    });
   });
 
   it('surfaces invalid_terminal_pair reason via ctx.fail when API returns WSF error', async () => {
@@ -449,7 +455,10 @@ describe('getFerrySchedule', () => {
     });
     const err = await rejection(() => getFerrySchedule.handler(input, ctx));
     expect(err).toBeInstanceOf(McpError);
-    expect((err as McpError).data).toMatchObject({ reason: 'invalid_terminal_pair' });
+    expect((err as McpError).data).toMatchObject({
+      reason: 'invalid_terminal_pair',
+      recovery: { hint: expect.stringContaining('wsdot_get_ferry_terminals') },
+    });
   });
 
   it('maps an HTTP 4xx from getSchedule to invalid_terminal_pair', async () => {
@@ -467,7 +476,10 @@ describe('getFerrySchedule', () => {
     });
     const err = await rejection(() => getFerrySchedule.handler(input, ctx));
     expect(err).toBeInstanceOf(McpError);
-    expect((err as McpError).data).toMatchObject({ reason: 'invalid_terminal_pair' });
+    expect((err as McpError).data).toMatchObject({
+      reason: 'invalid_terminal_pair',
+      recovery: { hint: expect.stringContaining('wsdot_get_ferry_terminals') },
+    });
   });
 
   it('keeps an access-code rejection as invalid_access_code, not invalid_terminal_pair', async () => {

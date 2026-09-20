@@ -154,6 +154,7 @@ export const getTerminalSpace = tool('wsdot_get_terminal_space', {
       retryable: true,
       recovery:
         'Retry in 30 seconds. If the issue persists, check wsdot.wa.gov/ferries for service status.',
+      thrownBy: 'service',
     },
     {
       reason: 'invalid_access_code',
@@ -162,6 +163,7 @@ export const getTerminalSpace = tool('wsdot_get_terminal_space', {
       retryable: false,
       recovery:
         'Register an access code at https://wsdot.wa.gov/traffic/api/, set WSDOT_ACCESS_CODE on the server, and restart it.',
+      thrownBy: 'service',
     },
   ],
 

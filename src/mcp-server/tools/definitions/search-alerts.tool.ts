@@ -186,6 +186,7 @@ export const searchAlerts = tool('wsdot_search_alerts', {
       retryable: true,
       recovery:
         'Retry in 30 seconds. If the issue persists, check wsdot.wa.gov for service status.',
+      thrownBy: 'service',
     },
     {
       reason: 'invalid_access_code',
@@ -194,6 +195,7 @@ export const searchAlerts = tool('wsdot_search_alerts', {
       retryable: false,
       recovery:
         'Register an access code at https://wsdot.wa.gov/traffic/api/, set WSDOT_ACCESS_CODE on the server, and restart it.',
+      thrownBy: 'service',
     },
   ],
 

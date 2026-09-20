@@ -88,6 +88,7 @@ export const getFerrySchedule = tool('wsdot_get_ferry_schedule', {
       retryable: true,
       recovery:
         'Retry in 30 seconds. If the issue persists, check wsdot.wa.gov/ferries for service status.',
+      thrownBy: 'service',
     },
     {
       reason: 'invalid_access_code',
@@ -96,6 +97,7 @@ export const getFerrySchedule = tool('wsdot_get_ferry_schedule', {
       retryable: false,
       recovery:
         'Register an access code at https://wsdot.wa.gov/traffic/api/, set WSDOT_ACCESS_CODE on the server, and restart it.',
+      thrownBy: 'service',
     },
     {
       reason: 'invalid_terminal_pair',
@@ -122,6 +124,7 @@ export const getFerrySchedule = tool('wsdot_get_ferry_schedule', {
       throw ctx.fail(
         'invalid_date',
         `Invalid date: "${input.tripDate}". Expected YYYY-MM-DD format (e.g. 2026-05-23).`,
+        { ...ctx.recoveryFor('invalid_date') },
       );
     }
     const remainingOnly = input.remainingOnly ?? false;
@@ -149,11 +152,7 @@ export const getFerrySchedule = tool('wsdot_get_ferry_schedule', {
       throw ctx.fail(
         'invalid_terminal_pair',
         `No ferry schedule for terminal ${input.departingTerminalId} → ${input.arrivingTerminalId} on ${tripDate}. These terminals may not have direct service, or a terminal ID may be invalid.`,
-        {
-          recovery: {
-            hint: 'Use wsdot_get_ferry_terminals for valid IDs and wsdot_get_ferry_routes for served routes.',
-          },
-        },
+        { ...ctx.recoveryFor('invalid_terminal_pair') },
       );
     }
 
