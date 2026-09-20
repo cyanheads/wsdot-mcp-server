@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.6](changelog/0.2.x/0.2.6.md) — 2026-09-20
+
+mcp-ts-core 0.13.6 — invalid_date and invalid_terminal_pair recovery hints now reach the wire on the ferry route and schedule tools, matching their declared error contracts.
+
 ## [0.2.5](changelog/0.2.x/0.2.5.md) — 2026-08-25
 
 Docker build stage now runs on the native platform, so a multi-arch build no longer crashes tsc under qemu on the amd64 leg.
