@@ -25,6 +25,10 @@ import { initTrafficApiService } from './services/traffic/traffic-service.js';
 await createApp({
   name: 'wsdot-mcp-server',
   title: 'wsdot-mcp-server',
+  // Every tool is a single-shot read against an upstream API and none calls ctx.requestInput,
+  // so no session has to survive between calls. A deployment's MCP_SESSION_MODE still wins
+  // when it carries a meaningful value.
+  sessionMode: 'stateless',
   // The tool surface is fixed at build time, so a 2026-07-28 client may hold discovery
   // results for a day. Nothing here is tenant- or caller-specific — hence `public`.
   cacheHints: {
