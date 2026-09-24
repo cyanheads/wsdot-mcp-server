@@ -5,8 +5,70 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import {
+  continuationNotice,
+  fitPageToBudget,
+  MAX_FILTER_LENGTH,
+  PAGE_BYTE_BUDGET,
+  renderPage,
+} from '@/mcp-server/tools/page-budget.js';
 import { routeMatches } from '@/services/traffic/route-match.js';
 import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
+
+const CorridorSchema = z
+  .object({
+    travelTimeId: z.number().optional().describe('Unique corridor identifier.'),
+    name: z.string().optional().describe('Corridor name (e.g. "I-5: Northgate to Downtown").'),
+    description: z.string().optional().describe('Additional corridor description.'),
+    currentTimeInMinutes: z
+      .number()
+      .optional()
+      .describe(
+        'Current travel time in minutes. Absent when WSDOT reports no measurement for the corridor — a reversible express lane closed in this direction reports none.',
+      ),
+    averageTimeInMinutes: z
+      .number()
+      .optional()
+      .describe(
+        'Historical average travel time in minutes. Absent when WSDOT reports no measurement for the corridor.',
+      ),
+    delayInMinutes: z
+      .number()
+      .optional()
+      .describe(
+        'Delay above average in minutes. Positive means congestion. Absent when either travel time is unavailable.',
+      ),
+    timeUpdated: z
+      .string()
+      .optional()
+      .describe('When the travel time data was last updated (ISO 8601).'),
+    distanceInMiles: z.number().optional().describe('Corridor distance in miles.'),
+    startPoint: z
+      .object({
+        roadName: z.string().optional().describe('Road name at the start.'),
+        direction: z
+          .string()
+          .optional()
+          .describe('Travel direction code: N (north), S (south), E (east), W (west).'),
+        milePost: z.number().optional().describe('Starting milepost.'),
+      })
+      .optional()
+      .describe('Start of the measured corridor.'),
+    endPoint: z
+      .object({
+        roadName: z.string().optional().describe('Road name at the end.'),
+        direction: z
+          .string()
+          .optional()
+          .describe('Travel direction code: N (north), S (south), E (east), W (west).'),
+        milePost: z.number().optional().describe('Ending milepost.'),
+      })
+      .optional()
+      .describe('End of the measured corridor.'),
+  })
+  .describe('Travel time data for one highway corridor.');
+
+type Corridor = z.infer<typeof CorridorSchema>;
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 500;
@@ -19,11 +81,13 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
     'The route filter matches two ways: a route designation ("I-5", "5", "SR 520") returns every ' +
     'corridor measured on that route, and any text also matches corridor names ("Everett"). ' +
     'When current time exceeds average, the corridor is congested. ' +
-    'Results are paged — pass offset/limit to page through the full set (the notice reports the next offset).',
+    'Results are paged — pass offset/limit to page through the full set. ' +
+    `A page ends at limit or at a ${PAGE_BYTE_BUDGET.toLocaleString('en-US')}-byte response budget, whichever comes first; the notice reports the next offset.`,
   annotations: { readOnlyHint: true },
   input: z.object({
     route: z
       .string()
+      .max(MAX_FILTER_LENGTH)
       .optional()
       .describe(
         'Optional filter. A route designation — "I-5", "5", "005", "SR 520", "520" — matches every ' +
@@ -44,69 +108,11 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
       .max(MAX_LIMIT)
       .optional()
       .describe(
-        `Maximum corridors to return in this page (1–${MAX_LIMIT}). Defaults to ${DEFAULT_LIMIT}.`,
+        `Maximum corridors to return in this page (1–${MAX_LIMIT}). Defaults to ${DEFAULT_LIMIT}. A large page ends sooner, at the ${PAGE_BYTE_BUDGET.toLocaleString('en-US')}-byte response budget.`,
       ),
   }),
   output: z.object({
-    corridors: z
-      .array(
-        z
-          .object({
-            travelTimeId: z.number().optional().describe('Unique corridor identifier.'),
-            name: z
-              .string()
-              .optional()
-              .describe('Corridor name (e.g. "I-5: Northgate to Downtown").'),
-            description: z.string().optional().describe('Additional corridor description.'),
-            currentTimeInMinutes: z
-              .number()
-              .optional()
-              .describe(
-                'Current travel time in minutes. Absent when WSDOT reports no measurement for the corridor — a reversible express lane closed in this direction reports none.',
-              ),
-            averageTimeInMinutes: z
-              .number()
-              .optional()
-              .describe(
-                'Historical average travel time in minutes. Absent when WSDOT reports no measurement for the corridor.',
-              ),
-            delayInMinutes: z
-              .number()
-              .optional()
-              .describe(
-                'Delay above average in minutes. Positive means congestion. Absent when either travel time is unavailable.',
-              ),
-            timeUpdated: z
-              .string()
-              .optional()
-              .describe('When the travel time data was last updated (ISO 8601).'),
-            distanceInMiles: z.number().optional().describe('Corridor distance in miles.'),
-            startPoint: z
-              .object({
-                roadName: z.string().optional().describe('Road name at the start.'),
-                direction: z
-                  .string()
-                  .optional()
-                  .describe('Travel direction code: N (north), S (south), E (east), W (west).'),
-                milePost: z.number().optional().describe('Starting milepost.'),
-              })
-              .optional()
-              .describe('Start of the measured corridor.'),
-            endPoint: z
-              .object({
-                roadName: z.string().optional().describe('Road name at the end.'),
-                direction: z
-                  .string()
-                  .optional()
-                  .describe('Travel direction code: N (north), S (south), E (east), W (west).'),
-                milePost: z.number().optional().describe('Ending milepost.'),
-              })
-              .optional()
-              .describe('End of the measured corridor.'),
-          })
-          .describe('Travel time data for one highway corridor.'),
-      )
-      .describe('Travel time corridors matching the filter.'),
+    corridors: z.array(CorridorSchema).describe('Travel time corridors matching the filter.'),
   }),
 
   enrichment: {
@@ -173,13 +179,14 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
     const totalCount = filtered.length;
     const offset = input.offset ?? 0;
     const limit = input.limit ?? DEFAULT_LIMIT;
-    const corridors = filtered.slice(offset, offset + limit).map((t) => ({
+    const requested: Corridor[] = filtered.slice(offset, offset + limit).map((t) => ({
       ...t,
       delayInMinutes:
         t.currentTimeInMinutes != null && t.averageTimeInMinutes != null
           ? t.currentTimeInMinutes - t.averageTimeInMinutes
           : undefined,
     }));
+    const corridors = fitPageToBudget(requested, renderCorridor, routeFilter);
     const hasMore = offset + corridors.length < totalCount;
     const nextOffset = hasMore ? offset + corridors.length : null;
 
@@ -204,9 +211,11 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
         `Offset ${offset} is past the end of ${totalCount} matching corridors. Use an offset between 0 and ${totalCount - 1}.`,
       );
     } else {
-      const window = `Showing corridors ${offset + 1}–${offset + corridors.length} of ${totalCount}.`;
+      const shown = `Showing corridors ${offset + 1}–${offset + corridors.length} of ${totalCount}.`;
       ctx.enrich.notice(
-        hasMore ? `${window} Pass offset=${nextOffset} for the next page.` : window,
+        nextOffset === null
+          ? shown
+          : `${shown} ${continuationNotice(nextOffset, corridors.length < requested.length)}`,
       );
     }
 
@@ -217,47 +226,48 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
     if (result.corridors.length === 0) {
       return [{ type: 'text', text: 'No corridors matched.' }];
     }
-    const lines: string[] = [];
-    for (const c of result.corridors) {
-      lines.push(`### ${c.name ?? 'Corridor'}`);
-      if (c.description) lines.push(c.description);
-      lines.push(
-        c.currentTimeInMinutes != null
-          ? `**Current:** ${c.currentTimeInMinutes} min`
-          : '**Current:** Not available — WSDOT reports no measurement for this corridor',
-      );
-      if (c.averageTimeInMinutes != null) lines.push(`**Average:** ${c.averageTimeInMinutes} min`);
-      if (c.delayInMinutes != null) {
-        const sign = c.delayInMinutes > 0 ? '+' : '';
-        lines.push(
-          `**Delay:** ${sign}${c.delayInMinutes} min${c.delayInMinutes > 0 ? ' (congested)' : ''}`,
-        );
-      }
-      if (c.distanceInMiles != null) lines.push(`**Distance:** ${c.distanceInMiles} mi`);
-      if (c.startPoint) {
-        const sp = [
-          c.startPoint.roadName,
-          c.startPoint.direction,
-          c.startPoint.milePost != null ? `MP ${c.startPoint.milePost}` : undefined,
-        ]
-          .filter(Boolean)
-          .join(' ');
-        if (sp) lines.push(`**From:** ${sp}`);
-      }
-      if (c.endPoint) {
-        const ep = [
-          c.endPoint.roadName,
-          c.endPoint.direction,
-          c.endPoint.milePost != null ? `MP ${c.endPoint.milePost}` : undefined,
-        ]
-          .filter(Boolean)
-          .join(' ');
-        if (ep) lines.push(`**To:** ${ep}`);
-      }
-      if (c.timeUpdated) lines.push(`**Updated:** ${c.timeUpdated}`);
-      if (c.travelTimeId != null) lines.push(`**ID:** ${c.travelTimeId}`);
-      lines.push('');
-    }
-    return [{ type: 'text', text: lines.join('\n') }];
+    return [{ type: 'text', text: renderPage(result.corridors, renderCorridor) }];
   },
 });
+
+/** One corridor's `content[]` block — shared by `format()` and the page-budget charge. */
+function renderCorridor(c: Corridor): string {
+  const lines = [`### ${c.name ?? 'Corridor'}`];
+  if (c.description) lines.push(c.description);
+  lines.push(
+    c.currentTimeInMinutes != null
+      ? `**Current:** ${c.currentTimeInMinutes} min`
+      : '**Current:** Not available — WSDOT reports no measurement for this corridor',
+  );
+  if (c.averageTimeInMinutes != null) lines.push(`**Average:** ${c.averageTimeInMinutes} min`);
+  if (c.delayInMinutes != null) {
+    const sign = c.delayInMinutes > 0 ? '+' : '';
+    lines.push(
+      `**Delay:** ${sign}${c.delayInMinutes} min${c.delayInMinutes > 0 ? ' (congested)' : ''}`,
+    );
+  }
+  if (c.distanceInMiles != null) lines.push(`**Distance:** ${c.distanceInMiles} mi`);
+  if (c.startPoint) {
+    const sp = [
+      c.startPoint.roadName,
+      c.startPoint.direction,
+      c.startPoint.milePost != null ? `MP ${c.startPoint.milePost}` : undefined,
+    ]
+      .filter(Boolean)
+      .join(' ');
+    if (sp) lines.push(`**From:** ${sp}`);
+  }
+  if (c.endPoint) {
+    const ep = [
+      c.endPoint.roadName,
+      c.endPoint.direction,
+      c.endPoint.milePost != null ? `MP ${c.endPoint.milePost}` : undefined,
+    ]
+      .filter(Boolean)
+      .join(' ');
+    if (ep) lines.push(`**To:** ${ep}`);
+  }
+  if (c.timeUpdated) lines.push(`**Updated:** ${c.timeUpdated}`);
+  if (c.travelTimeId != null) lines.push(`**ID:** ${c.travelTimeId}`);
+  return lines.join('\n');
+}

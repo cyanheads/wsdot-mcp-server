@@ -6,11 +6,83 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { coordinatePair } from '@/mcp-server/tools/coordinate-pair.js';
+import {
+  continuationNotice,
+  fitPageToBudget,
+  MAX_FILTER_LENGTH,
+  PAGE_BYTE_BUDGET,
+  renderPage,
+} from '@/mcp-server/tools/page-budget.js';
 import { byIdThenContent } from '@/services/traffic/stable-order.js';
 import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
 
-const DEFAULT_LIMIT = 50;
+const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 500;
+
+/** The region names the alerts feed carries in `Region`. */
+const REGIONS = ['Eastern', 'North Central', 'Northwest', 'Olympic', 'South Central', 'Southwest'];
+
+const AlertSchema = z
+  .object({
+    alertId: z.number().optional().describe('Unique alert identifier.'),
+    headlineDescription: z
+      .string()
+      .optional()
+      .describe(
+        'Short summary of the alert, as plain text. Upstream authors these in a rich-text editor, so any markup is normalized away and a link is rendered inline as "link text (url)".',
+      ),
+    extendedDescription: z
+      .string()
+      .optional()
+      .describe(
+        'Full description of the alert, normalized to plain text on the same terms as headlineDescription. Often absent — most alerts carry only a headline.',
+      ),
+    eventCategory: z
+      .string()
+      .optional()
+      .describe('Category (e.g. "Incident", "Construction", "Closure").'),
+    eventStatus: z.string().optional().describe('Current status of the event.'),
+    priority: z.string().optional().describe('Priority level.'),
+    region: z.string().optional().describe('WSDOT region where the alert is located.'),
+    county: z.string().optional().describe('County where the alert is located.'),
+    startRoadwayLocation: z
+      .object({
+        roadName: z.string().optional().describe('Road name.'),
+        direction: z
+          .string()
+          .optional()
+          .describe(
+            'Travel direction code: N/S/E/W, B (both directions), A (alternating); may appear as NB/SB/EB/WB.',
+          ),
+        milePost: z.number().optional().describe('Starting milepost.'),
+        latitude: z.number().optional().describe('Latitude.'),
+        longitude: z.number().optional().describe('Longitude.'),
+      })
+      .optional()
+      .describe('Start location of the alert.'),
+    endRoadwayLocation: z
+      .object({
+        roadName: z.string().optional().describe('Road name.'),
+        direction: z
+          .string()
+          .optional()
+          .describe(
+            'Travel direction code: N/S/E/W, B (both directions), A (alternating); may appear as NB/SB/EB/WB.',
+          ),
+        milePost: z.number().optional().describe('Ending milepost.'),
+        latitude: z.number().optional().describe('Latitude.'),
+        longitude: z.number().optional().describe('Longitude.'),
+      })
+      .optional()
+      .describe('End location of the alert, if the event spans a range.'),
+    startTime: z
+      .string()
+      .optional()
+      .describe('When the event started or is scheduled to start (ISO 8601).'),
+    endTime: z.string().optional().describe('When the event is expected to end (ISO 8601).'),
+    lastUpdatedTime: z.string().optional().describe('When this alert was last updated (ISO 8601).'),
+  })
+  .describe('A highway alert or incident.');
 
 export const searchAlerts = tool('wsdot_search_alerts', {
   title: 'Search Highway Alerts',
@@ -20,27 +92,29 @@ export const searchAlerts = tool('wsdot_search_alerts', {
     'WSDOT region (Northwest, Olympic, Southwest, South Central, North Central, Eastern), ' +
     "or milepost range, matched against the alert's full extent. " +
     'Omit all filters to return all current statewide alerts. ' +
-    'Results are ordered by alertId and paged — pass offset/limit to page through the full set ' +
-    '(the notice reports the next offset).',
+    'Results are ordered by alertId and paged — pass offset/limit to page through the full set. ' +
+    `A page ends at limit or at a ${PAGE_BYTE_BUDGET.toLocaleString('en-US')}-byte response budget, whichever comes first; the notice reports the next offset.`,
   annotations: { readOnlyHint: true },
   input: z.object({
     stateRoute: z
       .string()
+      .max(MAX_FILTER_LENGTH)
       .optional()
       .describe(
         'State route to filter by. Accepts natural forms — "I-90", "90", "090", "SR 520", "520" — matched case- and space-insensitively to the route number. A route-type prefix is compared only when both sides carry one, so "SR 26" never matches US 26 while a bare "26" matches either. Omit to include all routes.',
       ),
     region: z
       .string()
+      .max(MAX_FILTER_LENGTH)
       .optional()
       .describe(
-        'WSDOT region name as it appears in alert data: "Northwest", "Olympic", "Southwest", "South Central", "North Central", or "Eastern". Matching is case-insensitive.',
+        'WSDOT region name as it appears in alert data: "Northwest", "Olympic", "Southwest", "South Central", "North Central", or "Eastern". Matching is case-insensitive; any other value is rejected. These are names, not the two-letter codes wsdot_search_cameras takes.',
       ),
     startMilepost: z
       .number()
       .optional()
       .describe(
-        'Start of the milepost range. An alert matches when its extent overlaps the range, so a closure running from MP 10 to MP 30 is returned for a range starting at MP 20. Either bound may be given alone. Alerts reporting no milepost are always included.',
+        'Start of the milepost range. An alert matches when its extent overlaps the range, so a closure running from MP 10 to MP 30 is returned for a range starting at MP 20. Either bound may be given alone; when both are given, startMilepost must not exceed endMilepost. Alerts reporting no milepost are always included.',
       ),
     endMilepost: z
       .number()
@@ -61,81 +135,11 @@ export const searchAlerts = tool('wsdot_search_alerts', {
       .max(MAX_LIMIT)
       .optional()
       .describe(
-        `Maximum alerts to return in this page (1–${MAX_LIMIT}). Defaults to ${DEFAULT_LIMIT}.`,
+        `Maximum alerts to return in this page (1–${MAX_LIMIT}). Defaults to ${DEFAULT_LIMIT}. A page of long alerts can end sooner, at the ${PAGE_BYTE_BUDGET.toLocaleString('en-US')}-byte response budget.`,
       ),
   }),
   output: z.object({
-    alerts: z
-      .array(
-        z
-          .object({
-            alertId: z.number().optional().describe('Unique alert identifier.'),
-            headlineDescription: z
-              .string()
-              .optional()
-              .describe(
-                'Short summary of the alert, as plain text. Upstream authors these in a rich-text editor, so any markup is normalized away and a link is rendered inline as "link text (url)".',
-              ),
-            extendedDescription: z
-              .string()
-              .optional()
-              .describe(
-                'Full description of the alert, normalized to plain text on the same terms as headlineDescription. Often absent — most alerts carry only a headline.',
-              ),
-            eventCategory: z
-              .string()
-              .optional()
-              .describe('Category (e.g. "Incident", "Construction", "Closure").'),
-            eventStatus: z.string().optional().describe('Current status of the event.'),
-            priority: z.string().optional().describe('Priority level.'),
-            region: z.string().optional().describe('WSDOT region where the alert is located.'),
-            county: z.string().optional().describe('County where the alert is located.'),
-            startRoadwayLocation: z
-              .object({
-                roadName: z.string().optional().describe('Road name.'),
-                direction: z
-                  .string()
-                  .optional()
-                  .describe(
-                    'Travel direction code: N/S/E/W, B (both directions), A (alternating); may appear as NB/SB/EB/WB.',
-                  ),
-                milePost: z.number().optional().describe('Starting milepost.'),
-                latitude: z.number().optional().describe('Latitude.'),
-                longitude: z.number().optional().describe('Longitude.'),
-              })
-              .optional()
-              .describe('Start location of the alert.'),
-            endRoadwayLocation: z
-              .object({
-                roadName: z.string().optional().describe('Road name.'),
-                direction: z
-                  .string()
-                  .optional()
-                  .describe(
-                    'Travel direction code: N/S/E/W, B (both directions), A (alternating); may appear as NB/SB/EB/WB.',
-                  ),
-                milePost: z.number().optional().describe('Ending milepost.'),
-                latitude: z.number().optional().describe('Latitude.'),
-                longitude: z.number().optional().describe('Longitude.'),
-              })
-              .optional()
-              .describe('End location of the alert, if the event spans a range.'),
-            startTime: z
-              .string()
-              .optional()
-              .describe('When the event started or is scheduled to start (ISO 8601).'),
-            endTime: z
-              .string()
-              .optional()
-              .describe('When the event is expected to end (ISO 8601).'),
-            lastUpdatedTime: z
-              .string()
-              .optional()
-              .describe('When this alert was last updated (ISO 8601).'),
-          })
-          .describe('A highway alert or incident.'),
-      )
-      .describe('Matching highway alerts.'),
+    alerts: z.array(AlertSchema).describe('Matching highway alerts.'),
   }),
 
   enrichment: {
@@ -197,11 +201,42 @@ export const searchAlerts = tool('wsdot_search_alerts', {
         'Register an access code at https://wsdot.wa.gov/traffic/api/, set WSDOT_ACCESS_CODE on the server, and restart it.',
       thrownBy: 'service',
     },
+    {
+      reason: 'invalid_region',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'The region is not one of the WSDOT region names the alerts feed carries.',
+      recovery: `Pass one of the region names ${REGIONS.join(', ')} (case-insensitive), or omit region.`,
+    },
+    {
+      reason: 'invalid_milepost_range',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'startMilepost is greater than endMilepost.',
+      recovery:
+        'Pass startMilepost less than or equal to endMilepost, or give only one bound for an open-ended range.',
+    },
   ],
 
   async handler(input, ctx) {
     const stateRoute = input.stateRoute?.trim() || undefined;
     const region = input.region?.trim() || undefined;
+    if (region && !REGIONS.some((r) => r.toLowerCase() === region.toLowerCase())) {
+      throw ctx.fail(
+        'invalid_region',
+        `Unknown region "${region}" — wsdot_search_alerts takes a WSDOT region name.`,
+        { ...ctx.recoveryFor('invalid_region') },
+      );
+    }
+    if (
+      input.startMilepost != null &&
+      input.endMilepost != null &&
+      input.startMilepost > input.endMilepost
+    ) {
+      throw ctx.fail(
+        'invalid_milepost_range',
+        `startMilepost ${input.startMilepost} is greater than endMilepost ${input.endMilepost}.`,
+        { ...ctx.recoveryFor('invalid_milepost_range') },
+      );
+    }
     const fetched = await getTrafficApiService().searchAlerts(
       {
         ...(stateRoute && { stateRoute }),
@@ -229,7 +264,8 @@ export const searchAlerts = tool('wsdot_search_alerts', {
     const totalCount = matched.length;
     const offset = input.offset ?? 0;
     const limit = input.limit ?? DEFAULT_LIMIT;
-    const alerts = matched.slice(offset, offset + limit);
+    const requested = matched.slice(offset, offset + limit);
+    const alerts = fitPageToBudget(requested, renderAlert, appliedFilters);
     const hasMore = offset + alerts.length < totalCount;
     const nextOffset = hasMore ? offset + alerts.length : null;
 
@@ -249,9 +285,11 @@ export const searchAlerts = tool('wsdot_search_alerts', {
         `Offset ${offset} is past the end of ${totalCount} matching alerts. Use an offset between 0 and ${totalCount - 1}.`,
       );
     } else {
-      const window = `Showing alerts ${offset + 1}–${offset + alerts.length} of ${totalCount}.`;
+      const shown = `Showing alerts ${offset + 1}–${offset + alerts.length} of ${totalCount}.`;
       ctx.enrich.notice(
-        hasMore ? `${window} Pass offset=${nextOffset} for the next page.` : window,
+        nextOffset === null
+          ? shown
+          : `${shown} ${continuationNotice(nextOffset, alerts.length < requested.length)}`,
       );
     }
 
@@ -262,51 +300,53 @@ export const searchAlerts = tool('wsdot_search_alerts', {
     if (result.alerts.length === 0) {
       return [{ type: 'text', text: 'No active alerts found.' }];
     }
-    const lines: string[] = [];
-    for (const a of result.alerts) {
-      const id = a.alertId != null ? ` #${a.alertId}` : '';
-      // A headline can run to several paragraphs; only its first line belongs in the heading,
-      // otherwise the trailing alert ID lands at the end of the last paragraph.
-      const [heading, ...restOfHeadline] = (a.headlineDescription ?? '').split('\n');
-      lines.push(`### ${heading || 'Alert'}${id}`);
-      if (restOfHeadline.length > 0) lines.push(restOfHeadline.join('\n'));
-      if (a.eventCategory) lines.push(`**Category:** ${a.eventCategory}`);
-      if (a.eventStatus) lines.push(`**Status:** ${a.eventStatus}`);
-      if (a.priority) lines.push(`**Priority:** ${a.priority}`);
-      if (a.region) lines.push(`**Region:** ${a.region}`);
-      if (a.county) lines.push(`**County:** ${a.county}`);
-      if (a.startRoadwayLocation) {
-        const loc = a.startRoadwayLocation;
-        const parts = [
-          loc.roadName,
-          loc.direction,
-          loc.milePost != null ? `MP ${loc.milePost}` : undefined,
-        ]
-          .filter(Boolean)
-          .join(' ');
-        if (parts) lines.push(`**Location:** ${parts}`);
-        const coords = coordinatePair(loc.latitude, loc.longitude);
-        if (coords) lines.push(`**Coords:** ${coords}`);
-      }
-      if (a.endRoadwayLocation) {
-        const end = a.endRoadwayLocation;
-        const endParts = [
-          end.roadName,
-          end.direction,
-          end.milePost != null ? `MP ${end.milePost}` : undefined,
-        ]
-          .filter(Boolean)
-          .join(' ');
-        if (endParts) lines.push(`**End Location:** ${endParts}`);
-        const endCoords = coordinatePair(end.latitude, end.longitude);
-        if (endCoords) lines.push(`**End Coords:** ${endCoords}`);
-      }
-      if (a.extendedDescription) lines.push(a.extendedDescription);
-      if (a.startTime) lines.push(`**Start:** ${a.startTime}`);
-      if (a.endTime) lines.push(`**End:** ${a.endTime}`);
-      if (a.lastUpdatedTime) lines.push(`**Updated:** ${a.lastUpdatedTime}`);
-      lines.push('');
-    }
-    return [{ type: 'text', text: lines.join('\n') }];
+    return [{ type: 'text', text: renderPage(result.alerts, renderAlert) }];
   },
 });
+
+/** One alert's `content[]` block — shared by `format()` and the page-budget charge. */
+function renderAlert(a: z.infer<typeof AlertSchema>): string {
+  const lines: string[] = [];
+  const id = a.alertId != null ? ` #${a.alertId}` : '';
+  // A headline can run to several paragraphs; only its first line belongs in the heading,
+  // otherwise the trailing alert ID lands at the end of the last paragraph.
+  const [heading, ...restOfHeadline] = (a.headlineDescription ?? '').split('\n');
+  lines.push(`### ${heading || 'Alert'}${id}`);
+  if (restOfHeadline.length > 0) lines.push(restOfHeadline.join('\n'));
+  if (a.eventCategory) lines.push(`**Category:** ${a.eventCategory}`);
+  if (a.eventStatus) lines.push(`**Status:** ${a.eventStatus}`);
+  if (a.priority) lines.push(`**Priority:** ${a.priority}`);
+  if (a.region) lines.push(`**Region:** ${a.region}`);
+  if (a.county) lines.push(`**County:** ${a.county}`);
+  if (a.startRoadwayLocation) {
+    const loc = a.startRoadwayLocation;
+    const parts = [
+      loc.roadName,
+      loc.direction,
+      loc.milePost != null ? `MP ${loc.milePost}` : undefined,
+    ]
+      .filter(Boolean)
+      .join(' ');
+    if (parts) lines.push(`**Location:** ${parts}`);
+    const coords = coordinatePair(loc.latitude, loc.longitude);
+    if (coords) lines.push(`**Coords:** ${coords}`);
+  }
+  if (a.endRoadwayLocation) {
+    const end = a.endRoadwayLocation;
+    const endParts = [
+      end.roadName,
+      end.direction,
+      end.milePost != null ? `MP ${end.milePost}` : undefined,
+    ]
+      .filter(Boolean)
+      .join(' ');
+    if (endParts) lines.push(`**End Location:** ${endParts}`);
+    const endCoords = coordinatePair(end.latitude, end.longitude);
+    if (endCoords) lines.push(`**End Coords:** ${endCoords}`);
+  }
+  if (a.extendedDescription) lines.push(a.extendedDescription);
+  if (a.startTime) lines.push(`**Start:** ${a.startTime}`);
+  if (a.endTime) lines.push(`**End:** ${a.endTime}`);
+  if (a.lastUpdatedTime) lines.push(`**Updated:** ${a.lastUpdatedTime}`);
+  return lines.join('\n');
+}

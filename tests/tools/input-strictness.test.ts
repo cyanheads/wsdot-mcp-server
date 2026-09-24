@@ -37,11 +37,22 @@ const tools = [
   { tool: getFerryTerminals, valid: {} },
   { tool: getMountainPasses, valid: {} },
   { tool: getTerminalSpace, valid: { departingTerminalId: 7, offset: 0, limit: 5 } },
-  { tool: getTollRates, valid: { offset: 0, limit: 5 } },
+  { tool: getTollRates, valid: { stateRoute: 'SR 520', offset: 0, limit: 5 } },
   { tool: getTravelTimes, valid: { route: 'I-5', offset: 0, limit: 5 } },
   { tool: getVesselLocations, valid: {} },
   { tool: searchAlerts, valid: { stateRoute: 'I-90', region: 'Northwest', offset: 0, limit: 5 } },
-  { tool: searchCameras, valid: { stateRoute: 'I-90', region: 'NW', offset: 0, limit: 5 } },
+  {
+    tool: searchCameras,
+    valid: {
+      stateRoute: 'I-90',
+      region: 'NW',
+      titleContains: 'Snoqualmie',
+      startMilepost: 50,
+      endMilepost: 55,
+      offset: 0,
+      limit: 5,
+    },
+  },
 ] as const;
 
 /** The single `unrecognized_keys` issue a strict object raises, or a failure naming what came back. */

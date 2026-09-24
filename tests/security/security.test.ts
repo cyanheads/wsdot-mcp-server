@@ -7,8 +7,9 @@
  * @module tests/security/security.test
  */
 
-import type { McpError } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode, type McpError } from '@cyanheads/mcp-ts-core/errors';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ---------------------------------------------------------------------------
@@ -64,7 +65,7 @@ import { searchCameras } from '@/mcp-server/tools/definitions/search-cameras.too
 import { FerryApiService } from '@/services/ferry/ferry-service.js';
 import { htmlToText } from '@/services/html-text.js';
 import { assertUpstreamJson, redactUrl } from '@/services/wsdot-http.js';
-import { formattedText, nth } from '../helpers/assertions.js';
+import { formattedText, nth, rejection } from '../helpers/assertions.js';
 
 beforeEach(() => vi.clearAllMocks());
 afterEach(() => vi.clearAllMocks());
@@ -128,6 +129,22 @@ describe('Input validation — required fields', () => {
 
   it('getTerminalSpace rejects string departingTerminalId', () => {
     expect(() => getTerminalSpace.input.parse({ departingTerminalId: 'seven' })).toThrow();
+  });
+
+  it('both ferry tools reject a terminal ID that is not a positive integer', () => {
+    for (const bad of [0, -1, 7.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => getTerminalSpace.input.parse({ departingTerminalId: bad })).toThrow();
+      expect(() =>
+        getFerrySchedule.input.parse({ departingTerminalId: bad, arrivingTerminalId: 3 }),
+      ).toThrow();
+      expect(() =>
+        getFerrySchedule.input.parse({ departingTerminalId: 7, arrivingTerminalId: bad }),
+      ).toThrow();
+    }
+    expect(() => getTerminalSpace.input.parse({ departingTerminalId: 22 })).not.toThrow();
+    expect(() =>
+      getFerrySchedule.input.parse({ departingTerminalId: 1, arrivingTerminalId: 22 }),
+    ).not.toThrow();
   });
 });
 
@@ -274,6 +291,70 @@ describe('Injection attempts — payloads stay inert on both response paths', ()
     checkOutputForSecrets(formattedText(searchCameras.format!(result)));
   });
 
+  describe('searchCameras titleContains — matched in the handler against served titles', () => {
+    const served = [
+      { cameraId: 1100, title: 'I-90 at MP 52: Snoqualmie Summit' },
+      { cameraId: 1099, title: 'I-90 at MP 51.3: Franklin Falls' },
+    ];
+
+    for (const injection of INJECTION_STRINGS) {
+      it(`${JSON.stringify(injection)} matches no served camera and stays inert`, async () => {
+        mockTrafficService.searchCameras.mockResolvedValue(served);
+        const ctx = createMockContext({ errors: searchCameras.errors });
+        const input = searchCameras.input.parse({ titleContains: injection });
+        const result = await searchCameras.handler(input, ctx);
+        // The payload is never forwarded upstream — the service sees no title filter at all.
+        expect(mockTrafficService.searchCameras).toHaveBeenCalledWith({}, ctx);
+        // A payload that trims away to nothing is no filter, so every served camera comes back.
+        expect(result.cameras).toHaveLength(injection.trim() ? 0 : served.length);
+        const text = formattedText(searchCameras.format!(result));
+        expect(text).not.toContain('<script>');
+        checkOutputForSecrets(result);
+        checkOutputForSecrets(text);
+      });
+    }
+  });
+
+  describe('getTollRates stateRoute — matched in the handler against posted designations', () => {
+    const served = [
+      { tripName: '520tp00422', stateRoute: '520', tollRateInDollars: 3.4 },
+      { tripName: '405tp01351', stateRoute: '405', tollRateInDollars: 0.75 },
+    ];
+
+    for (const injection of INJECTION_STRINGS) {
+      it(`${JSON.stringify(injection)} matches no served toll row and stays inert`, async () => {
+        mockTrafficService.getTollRates.mockResolvedValue(served);
+        const ctx = createMockContext({ errors: getTollRates.errors });
+        const input = getTollRates.input.parse({ stateRoute: injection });
+        const result = await getTollRates.handler(input, ctx);
+        expect(result.rates).toHaveLength(injection.trim() ? 0 : served.length);
+        const text = formattedText(getTollRates.format!(result));
+        expect(text).not.toContain('<script>');
+        checkOutputForSecrets(result);
+        checkOutputForSecrets(text);
+      });
+    }
+  });
+
+  it('a region payload is rejected as invalid_region before any upstream call', async () => {
+    for (const [t, service] of [
+      [searchAlerts, mockTrafficService.searchAlerts],
+      [searchCameras, mockTrafficService.searchCameras],
+    ] as const) {
+      for (const injection of INJECTION_STRINGS.filter((s) => s.trim())) {
+        const err = await rejection(() =>
+          t.handler(
+            t.input.parse({ region: injection }),
+            createMockContext({ errors: t.errors }) as never,
+          ),
+        );
+        expect((err as McpError).data).toMatchObject({ reason: 'invalid_region' });
+        checkOutputForSecrets({ message: (err as McpError).message, data: (err as McpError).data });
+      }
+      expect(service).not.toHaveBeenCalled();
+    }
+  });
+
   it('getTravelTimes matches no corridor for an injection route and renders none', async () => {
     // The corridor filter runs in the handler, so the payload is compared against real names
     // rather than forwarded upstream — a served corridor must not survive the match.
@@ -308,40 +389,80 @@ describe('Injection attempts — payloads stay inert on both response paths', ()
 // Oversized inputs
 // ---------------------------------------------------------------------------
 
-describe('Oversized inputs — handler does not crash', () => {
-  it('searchAlerts: a 10,000-char stateRoute reaches the service whole, uncapped', async () => {
-    const oversized = 'A'.repeat(10_000);
+/**
+ * Every traffic free-text filter is echoed back — in `appliedFilters`/`routeFilter`, the
+ * `content[]` trailer, and some notices — so an unbounded one lets the caller's own input push a
+ * response past the page budget. The schema caps each at 200 characters: the longest live value a
+ * filter is matched against is a 73-character corridor name (camera titles run to 50).
+ */
+describe('Oversized inputs — free-text filters are capped at the schema', () => {
+  const MAX = 200;
+  const filters = [
+    { tool: searchAlerts, field: 'stateRoute' },
+    { tool: searchAlerts, field: 'region' },
+    { tool: searchCameras, field: 'stateRoute' },
+    { tool: searchCameras, field: 'region' },
+    { tool: searchCameras, field: 'titleContains' },
+    { tool: getTravelTimes, field: 'route' },
+    { tool: getTollRates, field: 'stateRoute' },
+  ] as const;
+
+  for (const { tool: t, field } of filters) {
+    it(`${t.name} ${field}: rejects ${MAX + 1} characters and a 30,000-character value`, () => {
+      expect(() => t.input.parse({ [field]: 'A'.repeat(MAX + 1) })).toThrow();
+      expect(() => t.input.parse({ [field]: '5'.repeat(30_000) })).toThrow();
+      // The cap applies before the handler trims, as the advertised maxLength says, so an
+      // over-long whitespace-only value is rejected rather than read as an omitted filter.
+      expect(() => t.input.parse({ [field]: ' '.repeat(MAX + 1) })).toThrow();
+    });
+
+    it(`${t.name} ${field}: accepts ${MAX} characters, and blank values as omitted`, () => {
+      expect(() => t.input.parse({ [field]: 'A'.repeat(MAX) })).not.toThrow();
+      expect(() => t.input.parse({ [field]: '' })).not.toThrow();
+      expect(() => t.input.parse({ [field]: '   ' })).not.toThrow();
+    });
+
+    it(`${t.name} ${field}: advertises maxLength ${MAX} in tools/list`, () => {
+      const schema = z.toJSONSchema(t.input, { io: 'input' }) as {
+        properties: Record<string, { maxLength?: number }>;
+      };
+      expect(schema.properties[field]?.maxLength).toBe(MAX);
+    });
+  }
+
+  it('a 30,000-character toll stateRoute is an InvalidParams rejection on the wire', async () => {
+    mockTrafficService.getTollRates.mockResolvedValue([{ tripName: 't', stateRoute: '520' }]);
+    const result = await runToolContract(getTollRates, { stateRoute: `SR ${'9'.repeat(30_000)}` });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.structuredContent)).toContain(`${JsonRpcErrorCode.InvalidParams}`);
+    expect(mockTrafficService.getTollRates).not.toHaveBeenCalled();
+    // The rejection names the field without echoing the 30 KB value back.
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(2_000);
+  });
+
+  it('searchAlerts: a maximum-length stateRoute reaches the service whole', async () => {
+    const longest = 'A'.repeat(MAX);
     mockTrafficService.searchAlerts.mockResolvedValue([{ alertId: 1, headlineDescription: 'A' }]);
     const ctx = createMockContext({ errors: searchAlerts.errors });
-    const input = searchAlerts.input.parse({ stateRoute: oversized });
-    const result = await searchAlerts.handler(input, ctx);
+    const result = await searchAlerts.handler(
+      searchAlerts.input.parse({ stateRoute: longest }),
+      ctx,
+    );
     // Alert filtering lives in the service, so the invariant here is that the handler forwards
     // the filter unshortened — a silent truncation would widen the query the caller asked for.
-    expect(mockTrafficService.searchAlerts).toHaveBeenCalledWith({ stateRoute: oversized }, ctx);
+    expect(mockTrafficService.searchAlerts).toHaveBeenCalledWith({ stateRoute: longest }, ctx);
     expect(result.alerts).toHaveLength(1);
     checkOutputForSecrets(result);
   });
 
-  it('getTravelTimes: 10,000-char route filter is accepted by Zod and yields empty results', async () => {
-    const oversized = 'X'.repeat(10_000);
-    mockTrafficService.getTravelTimes.mockResolvedValue([{ travelTimeId: 1, name: 'I-5 NB' }]);
-    const ctx = createMockContext({ errors: getTravelTimes.errors });
-    const input = getTravelTimes.input.parse({ route: oversized });
-    const result = await getTravelTimes.handler(input, ctx);
-    // No corridor name matches 10k X's — empty result, not a crash
-    expect(result.corridors).toHaveLength(0);
-    checkOutputForSecrets(result);
-  });
-
-  it('searchCameras: a 10,000-char stateRoute reaches the service whole, uncapped', async () => {
-    const oversized = 'B'.repeat(10_000);
+  it('searchCameras: a maximum-length titleContains still matches on its tokens', async () => {
     mockTrafficService.searchCameras.mockResolvedValue([{ cameraId: 1, title: 'Cam' }]);
-    const ctx = createMockContext({ errors: searchCameras.errors });
-    const input = searchCameras.input.parse({ stateRoute: oversized });
-    const result = await searchCameras.handler(input, ctx);
-    expect(mockTrafficService.searchCameras).toHaveBeenCalledWith({ stateRoute: oversized }, ctx);
+    const result = await searchCameras.handler(
+      searchCameras.input.parse({ titleContains: 'C '.repeat(MAX / 2) }),
+      createMockContext({ errors: searchCameras.errors }),
+    );
+    // Every token is "c", which "Cam" contains — a long query of repeated tokens still matches.
     expect(result.cameras).toHaveLength(1);
-    checkOutputForSecrets(result);
   });
 });
 

@@ -7,11 +7,12 @@
 import type { Context } from '@cyanheads/mcp-ts-core';
 import {
   configurationError,
+  type ErrorContract,
   JsonRpcErrorCode,
   McpError,
   serviceUnavailable,
 } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // --- Mocks (hoisted so vi.mock factory runs before imports) ---
@@ -63,7 +64,7 @@ describe('traffic tools — upstream failure contract', () => {
 
   for (const t of trafficTools) {
     it(`${t.name} declares api_unavailable and invalid_access_code with distinct recovery`, () => {
-      const byReason = new Map(t.errors!.map((e) => [e.reason, e]));
+      const byReason = new Map<string, ErrorContract>(t.errors!.map((e) => [e.reason, e]));
       expect(byReason.get('api_unavailable')?.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
       expect(byReason.get('invalid_access_code')?.code).toBe(JsonRpcErrorCode.ConfigurationError);
       expect(byReason.get('invalid_access_code')?.retryable).toBe(false);
@@ -452,7 +453,7 @@ describePaginationContract({
   pageMarkers: (result) => result.alerts.map((a) => a.alertId as number),
   markerText: (i) => `Alert ${pad(i)}`,
   fixtureSize: 120,
-  defaultLimit: 50,
+  defaultLimit: 20,
   maxLimit: 500,
   unit: 'alerts',
 });
@@ -1072,8 +1073,9 @@ describe('searchCameras', () => {
 
 describe('searchCameras — page windows are reproducible across upstream row orders', () => {
   /**
-   * The camera feed serves one 1,700-row set in more than one order, and a full walk needs four
-   * fetches even at the maximum page size, so an unordered page window straddles the reorder.
+   * The camera feed serves one 1,700-row set in more than one order, and the response budget
+   * holds a page to under a hundred cameras, so a full walk takes about twenty fetches and an
+   * unordered page window straddles the reorder.
    */
   const cameras = Array.from({ length: 12 }, (_, i) => ({
     cameraId: 5000 + i,
@@ -1319,5 +1321,1180 @@ describe('traffic format() parity — one-sided and partial values', () => {
       );
       expect(text).toContain('**Coords:** 47.4, longitude not reported');
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wire-level filter contract — runToolContract runs the real handler, output parse, enrichment,
+// and error envelope, so these assert what a client actually receives.
+// ---------------------------------------------------------------------------
+
+/** Rows in the toll feed's own order, one or more per tolled facility. */
+const tollFeed = [
+  {
+    tripName: '099tp03268',
+    stateRoute: '099',
+    travelDirection: 'S',
+    startMilepost: 33,
+    endMilepost: 30,
+    tollRateInDollars: 1.25,
+    startLocationName: 'SB S Portal',
+    endLocationName: 'NB S Portal',
+  },
+  {
+    tripName: '099tp03060',
+    stateRoute: '099',
+    travelDirection: 'S',
+    startMilepost: 30,
+    endMilepost: 33,
+    tollRateInDollars: 1.25,
+    startLocationName: 'NB S Portal',
+    endLocationName: 'SB S Portal',
+  },
+  {
+    tripName: '405tp01351',
+    stateRoute: '405',
+    travelDirection: 'N',
+    startMilepost: 1.35,
+    endMilepost: 3.5,
+    tollRateInDollars: 0.75,
+    startLocationName: 'SR 167',
+    endLocationName: 'NE 4th',
+  },
+  {
+    tripName: '167tp02565',
+    stateRoute: '167',
+    travelDirection: 'S',
+    startMilepost: 25.6,
+    endMilepost: 18.4,
+    tollRateInDollars: 1,
+    startLocationName: 'S 180th',
+    endLocationName: 'SR 18',
+  },
+  {
+    tripName: '509tp02093',
+    stateRoute: '509',
+    travelDirection: 'S',
+    startMilepost: 20.92,
+    endMilepost: 20.5,
+    tollRateInDollars: 1.3,
+    startLocationName: 'SR 509 Toll',
+    endLocationName: 'SR 509 Toll',
+  },
+  {
+    tripName: '405tp02718',
+    stateRoute: '405',
+    travelDirection: 'S',
+    startMilepost: 27.18,
+    endMilepost: 23,
+    tollRateInDollars: 2.5,
+    startLocationName: 'SR 527',
+    endLocationName: 'NE 160th',
+  },
+  {
+    tripName: '520tp00422',
+    stateRoute: '520',
+    travelDirection: 'E',
+    startMilepost: 4.2,
+    endMilepost: 1.6,
+    tollRateInDollars: 3.4,
+    startLocationName: 'WB 78th Ave',
+    endLocationName: 'EB 78th Ave',
+  },
+  {
+    tripName: '520tp00421',
+    stateRoute: '520',
+    travelDirection: 'E',
+    startMilepost: 1.6,
+    endMilepost: 4.2,
+    tollRateInDollars: 3.4,
+    startLocationName: 'EB 78th Ave',
+    endLocationName: 'WB 78th Ave',
+  },
+];
+
+/**
+ * The I-90 MP 50–55 window as the live camera feed serves it — six cameras, two of them titled
+ * for Snoqualmie — plus cameras elsewhere so a filter has something to exclude. Arrival order is
+ * deliberately not cameraId order.
+ */
+const snoqualmieWindow = [
+  {
+    cameraId: 1100,
+    title: 'I-90 at MP 52: Snoqualmie Summit',
+    roadName: 'I-90',
+    milePost: 52,
+    region: 'SC',
+  },
+  {
+    cameraId: 1099,
+    title: 'I-90 at MP 51.3: Franklin Falls',
+    roadName: 'I-90',
+    milePost: 51.3,
+    region: 'SC',
+  },
+  {
+    cameraId: 9428,
+    title: 'I-90 at MP 53.4: East Snoqualmie Summit',
+    roadName: 'I-90',
+    milePost: 53.4,
+    region: 'SC',
+  },
+  {
+    cameraId: 1102,
+    title: 'I-90 at MP 55.1: Hyak',
+    roadName: 'I-90',
+    milePost: 55.1,
+    region: 'SC',
+  },
+  {
+    cameraId: 10296,
+    title: 'I-90 at MP 54.5: Hyak Hill',
+    roadName: 'I-90',
+    milePost: 54.5,
+    region: 'SC',
+  },
+  { cameraId: 10070, title: 'I-90 at MP 55.2: ', roadName: 'I-90', milePost: 55.2, region: 'SC' },
+];
+const elsewhereCameras = [
+  { cameraId: 3059, title: 'I-205 at Stafford Rd.', roadName: 'I-205', milePost: 3, region: 'OS' },
+  { cameraId: 9818, title: 'Anacortes Airport Fuel Pump', roadName: 'Airports', region: 'WA' },
+  {
+    cameraId: 1500,
+    title: 'SR 18 at MP 1: Snoqualmie Parkway',
+    roadName: 'SR 18',
+    milePost: 1,
+    region: 'NW',
+  },
+];
+
+const alertFeed = [
+  {
+    alertId: 702,
+    headlineDescription: 'Right lane closed on I-90 EB',
+    region: 'South Central',
+    startRoadwayLocation: { roadName: '090', direction: 'E', milePost: 52 },
+    endRoadwayLocation: { roadName: '090', direction: 'E', milePost: 54 },
+  },
+  {
+    alertId: 701,
+    headlineDescription: 'Collision on I-5 NB',
+    region: 'Northwest',
+    startRoadwayLocation: { roadName: '005', direction: 'N', milePost: 165 },
+  },
+];
+
+/** The text of a contract result's single text block. */
+function wireText(result: Awaited<ReturnType<typeof runToolContract>>): string {
+  return result.content
+    .map((block) => ('text' in block && typeof block.text === 'string' ? block.text : ''))
+    .join('\n');
+}
+
+describe('unfiltered calls — pinned wire output', () => {
+  it('wsdot_get_toll_rates serves every feed row in feed order, rendered unchanged', async () => {
+    mockService.getTollRates.mockResolvedValue(tollFeed);
+    const result = await runToolContract(getTollRates, {});
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchInlineSnapshot(`
+      {
+        "hasMore": false,
+        "nextOffset": null,
+        "notice": "Showing toll rates 1–8 of 8.",
+        "rates": [
+          {
+            "endLocationName": "NB S Portal",
+            "endMilepost": 30,
+            "startLocationName": "SB S Portal",
+            "startMilepost": 33,
+            "stateRoute": "099",
+            "tollRateInDollars": 1.25,
+            "travelDirection": "S",
+            "tripName": "099tp03268",
+          },
+          {
+            "endLocationName": "SB S Portal",
+            "endMilepost": 33,
+            "startLocationName": "NB S Portal",
+            "startMilepost": 30,
+            "stateRoute": "099",
+            "tollRateInDollars": 1.25,
+            "travelDirection": "S",
+            "tripName": "099tp03060",
+          },
+          {
+            "endLocationName": "NE 4th",
+            "endMilepost": 3.5,
+            "startLocationName": "SR 167",
+            "startMilepost": 1.35,
+            "stateRoute": "405",
+            "tollRateInDollars": 0.75,
+            "travelDirection": "N",
+            "tripName": "405tp01351",
+          },
+          {
+            "endLocationName": "SR 18",
+            "endMilepost": 18.4,
+            "startLocationName": "S 180th",
+            "startMilepost": 25.6,
+            "stateRoute": "167",
+            "tollRateInDollars": 1,
+            "travelDirection": "S",
+            "tripName": "167tp02565",
+          },
+          {
+            "endLocationName": "SR 509 Toll",
+            "endMilepost": 20.5,
+            "startLocationName": "SR 509 Toll",
+            "startMilepost": 20.92,
+            "stateRoute": "509",
+            "tollRateInDollars": 1.3,
+            "travelDirection": "S",
+            "tripName": "509tp02093",
+          },
+          {
+            "endLocationName": "NE 160th",
+            "endMilepost": 23,
+            "startLocationName": "SR 527",
+            "startMilepost": 27.18,
+            "stateRoute": "405",
+            "tollRateInDollars": 2.5,
+            "travelDirection": "S",
+            "tripName": "405tp02718",
+          },
+          {
+            "endLocationName": "EB 78th Ave",
+            "endMilepost": 1.6,
+            "startLocationName": "WB 78th Ave",
+            "startMilepost": 4.2,
+            "stateRoute": "520",
+            "tollRateInDollars": 3.4,
+            "travelDirection": "E",
+            "tripName": "520tp00422",
+          },
+          {
+            "endLocationName": "WB 78th Ave",
+            "endMilepost": 4.2,
+            "startLocationName": "EB 78th Ave",
+            "startMilepost": 1.6,
+            "stateRoute": "520",
+            "tollRateInDollars": 3.4,
+            "travelDirection": "E",
+            "tripName": "520tp00421",
+          },
+        ],
+        "totalCount": 8,
+      }
+    `);
+    expect(wireText(result)).toMatchInlineSnapshot(`
+      "### SB S Portal → NB S Portal
+      **Trip:** 099tp03268
+      **Route:** SR 99
+      **Direction:** S
+      **From:** SB S Portal
+      **To:** NB S Portal
+      **Start MP:** 33
+      **End MP:** 30
+      **Rate:** $1.25
+
+      ### NB S Portal → SB S Portal
+      **Trip:** 099tp03060
+      **Route:** SR 99
+      **Direction:** S
+      **From:** NB S Portal
+      **To:** SB S Portal
+      **Start MP:** 30
+      **End MP:** 33
+      **Rate:** $1.25
+
+      ### SR 167 → NE 4th
+      **Trip:** 405tp01351
+      **Route:** I-405
+      **Direction:** N
+      **From:** SR 167
+      **To:** NE 4th
+      **Start MP:** 1.35
+      **End MP:** 3.5
+      **Rate:** $0.75
+
+      ### S 180th → SR 18
+      **Trip:** 167tp02565
+      **Route:** SR 167
+      **Direction:** S
+      **From:** S 180th
+      **To:** SR 18
+      **Start MP:** 25.6
+      **End MP:** 18.4
+      **Rate:** $1.00
+
+      ### SR 509 Toll
+      **Trip:** 509tp02093
+      **Route:** SR 509
+      **Direction:** S
+      **From:** SR 509 Toll
+      **To:** SR 509 Toll
+      **Start MP:** 20.92
+      **End MP:** 20.5
+      **Rate:** $1.30
+
+      ### SR 527 → NE 160th
+      **Trip:** 405tp02718
+      **Route:** I-405
+      **Direction:** S
+      **From:** SR 527
+      **To:** NE 160th
+      **Start MP:** 27.18
+      **End MP:** 23
+      **Rate:** $2.50
+
+      ### WB 78th Ave → EB 78th Ave
+      **Trip:** 520tp00422
+      **Route:** SR 520
+      **Direction:** E
+      **From:** WB 78th Ave
+      **To:** EB 78th Ave
+      **Start MP:** 4.2
+      **End MP:** 1.6
+      **Rate:** $3.40
+
+      ### EB 78th Ave → WB 78th Ave
+      **Trip:** 520tp00421
+      **Route:** SR 520
+      **Direction:** E
+      **From:** EB 78th Ave
+      **To:** WB 78th Ave
+      **Start MP:** 1.6
+      **End MP:** 4.2
+      **Rate:** $3.40
+
+
+
+      **totalCount:** 8
+      **nextOffset:** null
+      **hasMore:** false
+      > Showing toll rates 1–8 of 8."
+    `);
+  });
+
+  it('wsdot_search_cameras serves every camera in cameraId order, rendered unchanged', async () => {
+    mockService.searchCameras.mockResolvedValue([...snoqualmieWindow, ...elsewhereCameras]);
+    const result = await runToolContract(searchCameras, {});
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchInlineSnapshot(`
+      {
+        "appliedFilters": {},
+        "cameras": [
+          {
+            "cameraId": 1099,
+            "milePost": 51.3,
+            "region": "SC",
+            "roadName": "I-90",
+            "title": "I-90 at MP 51.3: Franklin Falls",
+          },
+          {
+            "cameraId": 1100,
+            "milePost": 52,
+            "region": "SC",
+            "roadName": "I-90",
+            "title": "I-90 at MP 52: Snoqualmie Summit",
+          },
+          {
+            "cameraId": 1102,
+            "milePost": 55.1,
+            "region": "SC",
+            "roadName": "I-90",
+            "title": "I-90 at MP 55.1: Hyak",
+          },
+          {
+            "cameraId": 1500,
+            "milePost": 1,
+            "region": "NW",
+            "roadName": "SR 18",
+            "title": "SR 18 at MP 1: Snoqualmie Parkway",
+          },
+          {
+            "cameraId": 3059,
+            "milePost": 3,
+            "region": "OS",
+            "roadName": "I-205",
+            "title": "I-205 at Stafford Rd.",
+          },
+          {
+            "cameraId": 9428,
+            "milePost": 53.4,
+            "region": "SC",
+            "roadName": "I-90",
+            "title": "I-90 at MP 53.4: East Snoqualmie Summit",
+          },
+          {
+            "cameraId": 9818,
+            "region": "WA",
+            "roadName": "Airports",
+            "title": "Anacortes Airport Fuel Pump",
+          },
+          {
+            "cameraId": 10070,
+            "milePost": 55.2,
+            "region": "SC",
+            "roadName": "I-90",
+            "title": "I-90 at MP 55.2: ",
+          },
+          {
+            "cameraId": 10296,
+            "milePost": 54.5,
+            "region": "SC",
+            "roadName": "I-90",
+            "title": "I-90 at MP 54.5: Hyak Hill",
+          },
+        ],
+        "hasMore": false,
+        "nextOffset": null,
+        "notice": "Showing cameras 1–9 of 9. Camera images are copyright WSDOT.",
+        "totalCount": 9,
+      }
+    `);
+    expect(wireText(result)).toMatchInlineSnapshot(`
+      "### I-90 at MP 51.3: Franklin Falls
+      **Location:** I-90 MP 51.3
+      **Region:** SC
+      **ID:** 1099
+
+      ### I-90 at MP 52: Snoqualmie Summit
+      **Location:** I-90 MP 52
+      **Region:** SC
+      **ID:** 1100
+
+      ### I-90 at MP 55.1: Hyak
+      **Location:** I-90 MP 55.1
+      **Region:** SC
+      **ID:** 1102
+
+      ### SR 18 at MP 1: Snoqualmie Parkway
+      **Location:** SR 18 MP 1
+      **Region:** NW
+      **ID:** 1500
+
+      ### I-205 at Stafford Rd.
+      **Location:** I-205 MP 3
+      **Region:** OS
+      **ID:** 3059
+
+      ### I-90 at MP 53.4: East Snoqualmie Summit
+      **Location:** I-90 MP 53.4
+      **Region:** SC
+      **ID:** 9428
+
+      ### Anacortes Airport Fuel Pump
+      **Location:** Airports
+      **Region:** WA
+      **ID:** 9818
+
+      ### I-90 at MP 55.2: 
+      **Location:** I-90 MP 55.2
+      **Region:** SC
+      **ID:** 10070
+
+      ### I-90 at MP 54.5: Hyak Hill
+      **Location:** I-90 MP 54.5
+      **Region:** SC
+      **ID:** 10296
+
+
+
+      **totalCount:** 9
+      **Applied Filters:** none
+      **nextOffset:** null
+      **hasMore:** false
+      > Showing cameras 1–9 of 9. Camera images are copyright WSDOT."
+    `);
+  });
+
+  it('wsdot_search_alerts serves every alert in alertId order, rendered unchanged', async () => {
+    mockService.searchAlerts.mockResolvedValue(alertFeed);
+    const result = await runToolContract(searchAlerts, {});
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchInlineSnapshot(`
+      {
+        "alerts": [
+          {
+            "alertId": 701,
+            "headlineDescription": "Collision on I-5 NB",
+            "region": "Northwest",
+            "startRoadwayLocation": {
+              "direction": "N",
+              "milePost": 165,
+              "roadName": "005",
+            },
+          },
+          {
+            "alertId": 702,
+            "endRoadwayLocation": {
+              "direction": "E",
+              "milePost": 54,
+              "roadName": "090",
+            },
+            "headlineDescription": "Right lane closed on I-90 EB",
+            "region": "South Central",
+            "startRoadwayLocation": {
+              "direction": "E",
+              "milePost": 52,
+              "roadName": "090",
+            },
+          },
+        ],
+        "appliedFilters": {},
+        "hasMore": false,
+        "nextOffset": null,
+        "notice": "Showing alerts 1–2 of 2.",
+        "totalCount": 2,
+      }
+    `);
+    expect(wireText(result)).toMatchInlineSnapshot(`
+      "### Collision on I-5 NB #701
+      **Region:** Northwest
+      **Location:** 005 N MP 165
+
+      ### Right lane closed on I-90 EB #702
+      **Region:** South Central
+      **Location:** 090 E MP 52
+      **End Location:** 090 E MP 54
+
+
+
+      **totalCount:** 2
+      **Applied Filters:** none
+      **nextOffset:** null
+      **hasMore:** false
+      > Showing alerts 1–2 of 2."
+    `);
+  });
+});
+
+/**
+ * `format()` output byte for byte, for the multi-row shapes the wire tests above do not reach:
+ * a corridor page, and an alert page with a multi-paragraph headline and extended description.
+ * Each row renders as its own block, blocks are separated by one blank line, and the text ends
+ * with a single newline.
+ */
+describe('format() — pinned multi-row layout', () => {
+  it('wsdot_get_travel_times renders each corridor as its own block', () => {
+    const text = formattedText(
+      getTravelTimes.format!({
+        corridors: [
+          {
+            travelTimeId: 1,
+            name: 'I-5 NB: Northgate to Downtown',
+            description: 'I-5 northbound',
+            currentTimeInMinutes: 18,
+            averageTimeInMinutes: 12,
+            delayInMinutes: 6,
+            distanceInMiles: 6.2,
+            startPoint: { roadName: 'I-5', direction: 'N', milePost: 168 },
+            endPoint: { roadName: 'I-5', direction: 'N', milePost: 174 },
+            timeUpdated: '2023-11-14T22:13:20.000Z',
+          },
+          { averageTimeInMinutes: 10 },
+          {
+            name: 'SR 520 EB',
+            currentTimeInMinutes: 8,
+            averageTimeInMinutes: 10,
+            delayInMinutes: -2,
+          },
+        ],
+      }),
+    );
+    expect(text).toBe(
+      [
+        '### I-5 NB: Northgate to Downtown',
+        'I-5 northbound',
+        '**Current:** 18 min',
+        '**Average:** 12 min',
+        '**Delay:** +6 min (congested)',
+        '**Distance:** 6.2 mi',
+        '**From:** I-5 N MP 168',
+        '**To:** I-5 N MP 174',
+        '**Updated:** 2023-11-14T22:13:20.000Z',
+        '**ID:** 1',
+        '',
+        '### Corridor',
+        '**Current:** Not available — WSDOT reports no measurement for this corridor',
+        '**Average:** 10 min',
+        '',
+        '### SR 520 EB',
+        '**Current:** 8 min',
+        '**Average:** 10 min',
+        '**Delay:** -2 min',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  it('wsdot_search_alerts keeps multi-line headline and description text inside its block', () => {
+    const text = formattedText(
+      searchAlerts.format!({
+        alerts: [
+          {
+            alertId: 5,
+            headlineDescription: 'Line one\nLine two',
+            extendedDescription: 'Para A\n\nPara B',
+            eventCategory: 'Closure',
+            eventStatus: 'Active',
+            priority: 'High',
+            region: 'Northwest',
+            county: 'King',
+            startRoadwayLocation: {
+              roadName: '090',
+              direction: 'E',
+              milePost: 52,
+              latitude: 47.5,
+              longitude: -121.7,
+            },
+            endRoadwayLocation: { roadName: '090', direction: 'E', milePost: 54, latitude: 47.6 },
+            startTime: '2026-09-01T08:00:00.000Z',
+            endTime: '2026-09-30T08:00:00.000Z',
+            lastUpdatedTime: '2026-09-02T08:00:00.000Z',
+          },
+          { eventCategory: 'Incident' },
+        ],
+      }),
+    );
+    expect(text).toBe(
+      [
+        '### Line one #5',
+        'Line two',
+        '**Category:** Closure',
+        '**Status:** Active',
+        '**Priority:** High',
+        '**Region:** Northwest',
+        '**County:** King',
+        '**Location:** 090 E MP 52',
+        '**Coords:** 47.5, -121.7',
+        '**End Location:** 090 E MP 54',
+        '**End Coords:** 47.6, longitude not reported',
+        'Para A',
+        '',
+        'Para B',
+        '**Start:** 2026-09-01T08:00:00.000Z',
+        '**End:** 2026-09-30T08:00:00.000Z',
+        '**Updated:** 2026-09-02T08:00:00.000Z',
+        '',
+        '### Alert',
+        '**Category:** Incident',
+        '',
+      ].join('\n'),
+    );
+  });
+});
+
+describe('filter inputs the tools accept today', () => {
+  it.each(['Northwest', 'northwest', ' Northwest ', 'NORTHWEST'])(
+    'wsdot_search_alerts accepts region %j and echoes it trimmed',
+    async (region) => {
+      mockService.searchAlerts.mockResolvedValue([]);
+      const result = await runToolContract(searchAlerts, { region });
+      expect(result.isError).toBeFalsy();
+      expect(mockService.searchAlerts).toHaveBeenCalledWith(
+        { region: region.trim() },
+        expect.anything(),
+      );
+      expect(result.structuredContent).toMatchObject({ appliedFilters: { region: region.trim() } });
+    },
+  );
+
+  it.each(['NW', 'nw', ' Nw '])(
+    'wsdot_search_cameras accepts region %j and echoes it trimmed',
+    async (region) => {
+      mockService.searchCameras.mockResolvedValue([]);
+      const result = await runToolContract(searchCameras, { region });
+      expect(result.isError).toBeFalsy();
+      expect(mockService.searchCameras).toHaveBeenCalledWith(
+        { region: region.trim() },
+        expect.anything(),
+      );
+      expect(result.structuredContent).toMatchObject({ appliedFilters: { region: region.trim() } });
+    },
+  );
+
+  describe.each(['', '   '])('blank value %j is treated as omitted', (blank) => {
+    it('wsdot_search_alerts: region and stateRoute', async () => {
+      mockService.searchAlerts.mockResolvedValue(alertFeed);
+      const result = await runToolContract(searchAlerts, { region: blank, stateRoute: blank });
+      expect(result.isError).toBeFalsy();
+      expect(mockService.searchAlerts).toHaveBeenCalledWith({}, expect.anything());
+      expect(result.structuredContent).toMatchObject({ appliedFilters: {}, totalCount: 2 });
+      expect(wireText(result)).toContain('**Applied Filters:** none');
+    });
+
+    it('wsdot_search_cameras: region and stateRoute', async () => {
+      mockService.searchCameras.mockResolvedValue(snoqualmieWindow);
+      const result = await runToolContract(searchCameras, { region: blank, stateRoute: blank });
+      expect(result.isError).toBeFalsy();
+      expect(mockService.searchCameras).toHaveBeenCalledWith({}, expect.anything());
+      expect(result.structuredContent).toMatchObject({ appliedFilters: {}, totalCount: 6 });
+      expect(wireText(result)).toContain('**Applied Filters:** none');
+    });
+
+    it('wsdot_get_travel_times: route', async () => {
+      mockService.getTravelTimes.mockResolvedValue([{ travelTimeId: 1, name: 'Seattle-Everett' }]);
+      const result = await runToolContract(getTravelTimes, { route: blank });
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({ totalCount: 1 });
+      expect(result.structuredContent).not.toHaveProperty('routeFilter');
+    });
+  });
+
+  describe.each([
+    { tool: 'wsdot_search_alerts', run: (input: object) => runToolContract(searchAlerts, input) },
+    { tool: 'wsdot_search_cameras', run: (input: object) => runToolContract(searchCameras, input) },
+  ])('$tool milepost bounds', ({ run }) => {
+    beforeEach(() => {
+      mockService.searchAlerts.mockResolvedValue([]);
+      mockService.searchCameras.mockResolvedValue([]);
+    });
+
+    it.each([
+      { startMilepost: 10 },
+      { endMilepost: 100 },
+      { startMilepost: 52, endMilepost: 52 },
+      { startMilepost: 10, endMilepost: 100 },
+    ])('accepts %j and forwards it', async (bounds) => {
+      const result = await run(bounds);
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({ appliedFilters: bounds });
+    });
+  });
+});
+
+interface WireError {
+  code: number;
+  data?: { reason?: string; recovery?: { hint?: string } } & Record<string, unknown>;
+  message: string;
+}
+
+/** The error a contract result carries, failing when the call succeeded instead. */
+function wireError(result: Awaited<ReturnType<typeof runToolContract>>): WireError {
+  expect(result.isError).toBe(true);
+  const error = (result.structuredContent as { error?: WireError } | undefined)?.error;
+  if (!error) throw new Error('Expected structuredContent.error on a failed call.');
+  return error;
+}
+
+// ---------------------------------------------------------------------------
+// Region vocabulary and milepost order are checked before any upstream call
+// ---------------------------------------------------------------------------
+
+describe('region values outside the tool vocabulary fail with invalid_region', () => {
+  const ALERT_REGIONS = [
+    'Eastern',
+    'North Central',
+    'Northwest',
+    'Olympic',
+    'South Central',
+    'Southwest',
+  ];
+  const CAMERA_REGIONS = ['ER', 'NC', 'NW', 'OL', 'OS', 'SC', 'SW', 'WA'];
+
+  it.each(['NW', 'nw', 'East', 'Puget Sound'])(
+    'wsdot_search_alerts rejects region %j and lists the region names it takes',
+    async (region) => {
+      mockService.searchAlerts.mockResolvedValue(alertFeed);
+      const result = await runToolContract(searchAlerts, { region });
+      const error = wireError(result);
+      expect(error.code).toBe(JsonRpcErrorCode.ValidationError);
+      expect(error.data?.reason).toBe('invalid_region');
+      expect(error.message).toContain('region');
+      expect(error.message).toContain(`"${region}"`);
+      const hint = error.data?.recovery?.hint ?? '';
+      for (const name of ALERT_REGIONS) expect(hint).toContain(name);
+      expect(wireText(result)).toContain(hint);
+      expect(mockService.searchAlerts).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['East', 'Northwest', 'northwest', 'XX'])(
+    'wsdot_search_cameras rejects region %j and lists the region codes it takes',
+    async (region) => {
+      mockService.searchCameras.mockResolvedValue(snoqualmieWindow);
+      const result = await runToolContract(searchCameras, { region });
+      const error = wireError(result);
+      expect(error.code).toBe(JsonRpcErrorCode.ValidationError);
+      expect(error.data?.reason).toBe('invalid_region');
+      expect(error.message).toContain('region');
+      expect(error.message).toContain(`"${region}"`);
+      const hint = error.data?.recovery?.hint ?? '';
+      for (const code of CAMERA_REGIONS) expect(hint).toContain(code);
+      expect(hint).not.toContain('Northwest');
+      expect(wireText(result)).toContain(hint);
+      expect(mockService.searchCameras).not.toHaveBeenCalled();
+    },
+  );
+
+  it('declares invalid_region on both search tools with the ValidationError code', () => {
+    for (const t of [searchAlerts, searchCameras]) {
+      const entry = t.errors?.find((e) => e.reason === 'invalid_region');
+      expect(entry?.code).toBe(JsonRpcErrorCode.ValidationError);
+    }
+  });
+});
+
+describe('a reversed milepost range fails with invalid_milepost_range', () => {
+  it.each([
+    { name: 'wsdot_search_alerts', run: (input: object) => runToolContract(searchAlerts, input) },
+    { name: 'wsdot_search_cameras', run: (input: object) => runToolContract(searchCameras, input) },
+  ])('$name rejects startMilepost 100 with endMilepost 10', async ({ run }) => {
+    mockService.searchAlerts.mockResolvedValue(alertFeed);
+    mockService.searchCameras.mockResolvedValue(snoqualmieWindow);
+    const result = await run({ startMilepost: 100, endMilepost: 10 });
+    const error = wireError(result);
+    expect(error.code).toBe(JsonRpcErrorCode.ValidationError);
+    expect(error.data?.reason).toBe('invalid_milepost_range');
+    expect(error.message).toContain('startMilepost');
+    expect(error.message).toContain('endMilepost');
+    const hint = error.data?.recovery?.hint ?? '';
+    expect(hint).toContain('startMilepost');
+    expect(wireText(result)).toContain(hint);
+    expect(mockService.searchAlerts).not.toHaveBeenCalled();
+    expect(mockService.searchCameras).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// wsdot_get_toll_rates — stateRoute filter
+// ---------------------------------------------------------------------------
+
+describe('wsdot_get_toll_rates stateRoute filter', () => {
+  const tripsOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+    (result.structuredContent as { rates: { tripName?: string }[] }).rates.map((r) => r.tripName);
+
+  beforeEach(() => mockService.getTollRates.mockResolvedValue(tollFeed));
+
+  it.each(['SR 520', '520', '0520', 'sr520', 'SR-520', ' SR 520 '])(
+    '%j returns exactly the SR 520 rows',
+    async (stateRoute) => {
+      const result = await runToolContract(getTollRates, { stateRoute });
+      expect(result.isError).toBeFalsy();
+      expect(tripsOf(result)).toEqual(['520tp00422', '520tp00421']);
+      expect(result.structuredContent).toMatchObject({
+        totalCount: 2,
+        hasMore: false,
+        nextOffset: null,
+        appliedFilters: { stateRoute: stateRoute.trim() },
+      });
+    },
+  );
+
+  it.each(['I-405', '405', 'i-405', '0405'])(
+    '%j returns exactly the I-405 rows',
+    async (stateRoute) => {
+      const result = await runToolContract(getTollRates, { stateRoute });
+      expect(tripsOf(result)).toEqual(['405tp01351', '405tp02718']);
+      expect(result.structuredContent).toMatchObject({ totalCount: 2 });
+    },
+  );
+
+  it('matches on the posted designation, so SR 99 and 099 both reach the tunnel rows', async () => {
+    for (const stateRoute of ['SR 99', '99', '099']) {
+      const result = await runToolContract(getTollRates, { stateRoute });
+      expect(tripsOf(result)).toEqual(['099tp03268', '099tp03060']);
+    }
+  });
+
+  it.each(['SR 405', 'I-520', 'SR 2', 'US 2', 'I-90'])(
+    '%j names a route with no tolled facility — an empty page naming the tolled routes',
+    async (stateRoute) => {
+      const result = await runToolContract(getTollRates, { stateRoute });
+      expect(result.isError).toBeFalsy();
+      expect(tripsOf(result)).toEqual([]);
+      const sc = result.structuredContent as { notice: string };
+      expect(result.structuredContent).toMatchObject({
+        totalCount: 0,
+        hasMore: false,
+        nextOffset: null,
+        appliedFilters: { stateRoute },
+      });
+      expect(sc.notice).toContain('SR 99, SR 167, I-405, SR 509, SR 520');
+      const text = wireText(result);
+      expect(text).toContain('No toll rate data available.');
+      expect(text).toContain(sc.notice);
+      expect(text).toContain(`**Applied Filters:**\n- **Route:** ${stateRoute}`);
+    },
+  );
+
+  it('lists each tolled route once when the feed pads one route two ways', async () => {
+    mockService.getTollRates.mockResolvedValue([
+      { tripName: '099tp03268', stateRoute: '099' },
+      { tripName: '99tp03060', stateRoute: '99' },
+      { tripName: '520tp00422', stateRoute: '520' },
+    ]);
+    const result = await runToolContract(getTollRates, { stateRoute: 'SR 2' });
+    const sc = result.structuredContent as { notice: string };
+    expect(sc.notice).toContain('The feed carries tolls on SR 99, SR 520 —');
+  });
+
+  it.each(['', '   '])(
+    'a blank stateRoute %j is treated as omitted — output identical to an unfiltered call',
+    async (blank) => {
+      const unfiltered = await runToolContract(getTollRates, {});
+      const result = await runToolContract(getTollRates, { stateRoute: blank });
+      expect(result.structuredContent).toEqual(unfiltered.structuredContent);
+      expect(wireText(result)).toBe(wireText(unfiltered));
+      expect(result.structuredContent).not.toHaveProperty('appliedFilters');
+    },
+  );
+
+  it('renders the filtered page in content[] with the filter echoed in the trailer', async () => {
+    const result = await runToolContract(getTollRates, {
+      stateRoute: 'I-405',
+      limit: 1,
+      offset: 1,
+    });
+    expect(tripsOf(result)).toEqual(['405tp02718']);
+    const text = wireText(result);
+    expect(text.match(/^### /gm)?.length).toBe(1);
+    expect(text).toContain('**Trip:** 405tp02718');
+    expect(text).not.toContain('405tp01351');
+    expect(text).toContain('**Applied Filters:**\n- **Route:** I-405');
+    expect(result.structuredContent).toMatchObject({
+      totalCount: 2,
+      hasMore: false,
+      nextOffset: null,
+    });
+  });
+
+  describe('paging walks the filtered set', () => {
+    /** SR 167 and I-405 rows interleaved the way the live feed serves them. */
+    const bigFeed = Array.from({ length: 100 }, (_, i) => ({
+      tripName: `${i % 5 === 0 ? '405' : '167'}tp${pad(i)}`,
+      stateRoute: i % 5 === 0 ? '405' : '167',
+      startMilepost: i,
+    }));
+    const sr167 = bigFeed.filter((r) => r.stateRoute === '167').map((r) => r.startMilepost);
+
+    beforeEach(() => mockService.getTollRates.mockResolvedValue(bigFeed));
+
+    const page = async (input: object) => {
+      const result = await runToolContract(getTollRates, { stateRoute: 'SR 167', ...input });
+      const sc = result.structuredContent as {
+        hasMore: boolean;
+        nextOffset: number | null;
+        notice: string;
+        rates: { startMilepost?: number }[];
+        totalCount: number;
+      };
+      return { sc, markers: sc.rates.map((r) => r.startMilepost) };
+    };
+
+    it('reports the matching count and continues within it on the default page', async () => {
+      const { sc, markers } = await page({});
+      expect(markers).toEqual(sr167.slice(0, 50));
+      expect(sc.totalCount).toBe(80);
+      expect(sc.hasMore).toBe(true);
+      expect(sc.nextOffset).toBe(50);
+      expect(sc.notice).toContain('of 80');
+    });
+
+    it('visits every matching row exactly once, in feed order', async () => {
+      const seen: (number | undefined)[] = [];
+      let offset: number | null = 0;
+      while (offset !== null) {
+        const { sc, markers } = await page({ offset, limit: 7 });
+        expect(sc.totalCount).toBe(80);
+        seen.push(...markers);
+        offset = sc.nextOffset;
+      }
+      expect(seen).toEqual(sr167);
+    });
+
+    it('reports an offset past the end of the matching set', async () => {
+      const { sc, markers } = await page({ offset: 80 });
+      expect(markers).toEqual([]);
+      expect(sc.notice).toContain('Offset 80 is past the end of 80');
+    });
+  });
+
+  it('describes the input forms, the bare output value, and the fixed direction codes', () => {
+    const inputDescription = getTollRates.input.shape.stateRoute.description ?? '';
+    expect(inputDescription).toContain('"SR 520"');
+    expect(inputDescription).toContain('"I-405"');
+    const rate = getTollRates.output.shape.rates.element.shape;
+    expect(rate.stateRoute.description).toContain('"099"');
+    expect(rate.travelDirection.description).toMatch(/SR 99.*SR 509.*SR 520/);
+    expect(rate.travelDirection.description).not.toMatch(
+      /^Travel direction code for this toll segment/,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// wsdot_search_cameras — titleContains
+// ---------------------------------------------------------------------------
+
+describe('wsdot_search_cameras titleContains', () => {
+  const idsOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+    (result.structuredContent as { cameras: { cameraId?: number }[] }).cameras.map(
+      (c) => c.cameraId,
+    );
+
+  beforeEach(() =>
+    mockService.searchCameras.mockResolvedValue([...snoqualmieWindow, ...elsewhereCameras]),
+  );
+
+  it('returns the cameras whose titles contain the text, case-insensitively', async () => {
+    const result = await runToolContract(searchCameras, { titleContains: 'snoqualmie' });
+    expect(result.isError).toBeFalsy();
+    expect(idsOf(result)).toEqual([1100, 1500, 9428]);
+    expect(result.structuredContent).toMatchObject({
+      totalCount: 3,
+      appliedFilters: { titleContains: 'snoqualmie' },
+    });
+    // The filter runs on this side; the service is never asked to apply it.
+    expect(mockService.searchCameras).toHaveBeenCalledWith({}, expect.anything());
+  });
+
+  it.each(['Snoqualmie Summit', 'Summit Snoqualmie', '  SUMMIT   snoqualmie '])(
+    'requires every token of %j in any order',
+    async (titleContains) => {
+      const result = await runToolContract(searchCameras, { titleContains });
+      expect(idsOf(result)).toEqual([1100, 9428]);
+      expect(result.structuredContent).toMatchObject({
+        totalCount: 2,
+        appliedFilters: { titleContains: titleContains.trim() },
+      });
+    },
+  );
+
+  it('composes with the route and milepost filters the service applied', async () => {
+    mockService.searchCameras.mockResolvedValue(snoqualmieWindow);
+    const result = await runToolContract(searchCameras, {
+      stateRoute: 'I-90',
+      startMilepost: 50,
+      endMilepost: 55,
+      titleContains: 'Snoqualmie',
+    });
+    expect(mockService.searchCameras).toHaveBeenCalledWith(
+      { stateRoute: 'I-90', startMilepost: 50, endMilepost: 55 },
+      expect.anything(),
+    );
+    expect(idsOf(result)).toEqual([1100, 9428]);
+    expect(result.structuredContent).toMatchObject({
+      totalCount: 2,
+      appliedFilters: {
+        stateRoute: 'I-90',
+        startMilepost: 50,
+        endMilepost: 55,
+        titleContains: 'Snoqualmie',
+      },
+    });
+  });
+
+  it('excludes a camera with no title rather than throwing', async () => {
+    mockService.searchCameras.mockResolvedValue([
+      { cameraId: 1, roadName: 'I-90' },
+      ...snoqualmieWindow,
+    ]);
+    const result = await runToolContract(searchCameras, { titleContains: 'I-90' });
+    expect(result.isError).toBeFalsy();
+    expect(idsOf(result)).toEqual([1099, 1100, 1102, 9428, 10070, 10296]);
+  });
+
+  it('answers a title matching nothing with an empty page, a filtered notice, and the echo', async () => {
+    const result = await runToolContract(searchCameras, { titleContains: 'Stevens Pass' });
+    expect(idsOf(result)).toEqual([]);
+    const sc = result.structuredContent as { notice: string };
+    expect(result.structuredContent).toMatchObject({
+      totalCount: 0,
+      hasMore: false,
+      nextOffset: null,
+      appliedFilters: { titleContains: 'Stevens Pass' },
+    });
+    expect(sc.notice).toContain('No cameras matched the applied filters');
+    expect(sc.notice).toContain('titleContains');
+    const text = wireText(result);
+    expect(text).toContain('No cameras found');
+    expect(text).toContain('**Applied Filters:**\n- **Title contains:** Stevens Pass');
+    expect(text).toContain(sc.notice);
+  });
+
+  it.each(['', '   '])(
+    'a blank titleContains %j is treated as omitted — output identical to an unfiltered call',
+    async (blank) => {
+      const unfiltered = await runToolContract(searchCameras, {});
+      const result = await runToolContract(searchCameras, { titleContains: blank });
+      expect(result.structuredContent).toEqual(unfiltered.structuredContent);
+      expect(wireText(result)).toBe(wireText(unfiltered));
+    },
+  );
+
+  describe('paging walks the filtered set', () => {
+    const cameras = Array.from({ length: 100 }, (_, i) => ({
+      cameraId: 2000 + i,
+      title: i % 5 === 0 ? `SR 18 at MP ${i}: Echo Lake` : `I-90 at MP ${i}: Hyak ${pad(i)}`,
+      roadName: i % 5 === 0 ? 'SR 18' : 'I-90',
+    }));
+    const hyak = cameras.filter((c) => c.title.includes('Hyak')).map((c) => c.cameraId);
+
+    beforeEach(() => mockService.searchCameras.mockResolvedValue([...cameras].reverse()));
+
+    it('reports the matching count on the default page and continues within it', async () => {
+      const result = await runToolContract(searchCameras, { titleContains: 'hyak' });
+      expect(idsOf(result)).toEqual(hyak.slice(0, 50));
+      expect(result.structuredContent).toMatchObject({
+        totalCount: 80,
+        hasMore: true,
+        nextOffset: 50,
+      });
+    });
+
+    it('visits every matching camera exactly once', async () => {
+      const seen: (number | undefined)[] = [];
+      let offset: number | null = 0;
+      while (offset !== null) {
+        const result: Awaited<ReturnType<typeof runToolContract>> = await runToolContract(
+          searchCameras,
+          { titleContains: 'hyak', offset, limit: 9 },
+        );
+        seen.push(...idsOf(result));
+        offset = (result.structuredContent as { nextOffset: number | null }).nextOffset;
+      }
+      expect(seen).toEqual(hyak);
+    });
+
+    it('reports an offset past the end of the matching set', async () => {
+      const result = await runToolContract(searchCameras, { titleContains: 'hyak', offset: 85 });
+      expect(idsOf(result)).toEqual([]);
+      expect((result.structuredContent as { notice: string }).notice).toContain(
+        'Offset 85 is past the end of 80 matching cameras',
+      );
+    });
+
+    it('renders exactly the filtered page in content[]', async () => {
+      const result = await runToolContract(searchCameras, {
+        titleContains: 'hyak',
+        offset: 3,
+        limit: 2,
+      });
+      const ids = idsOf(result);
+      expect(ids).toEqual(hyak.slice(3, 5));
+      const text = wireText(result);
+      expect(text.match(/^### /gm)?.length).toBe(2);
+      for (const id of ids) expect(text).toContain(`**ID:** ${id}`);
+      expect(text).toContain('- **Title contains:** hyak');
+    });
+  });
+
+  it('describes the title match and steers route filtering to stateRoute', () => {
+    const description = searchCameras.input.shape.titleContains.description ?? '';
+    expect(description).toContain('Snoqualmie');
+    expect(description).toContain('stateRoute');
+  });
+});
+
+describe('camera region descriptions name what the codes hold', () => {
+  it('OS is the Oregon (Portland-area) set and WA the airport and ferry cameras', () => {
+    const description = searchCameras.input.shape.region.description ?? '';
+    expect(description).not.toContain('Olympic South');
+    expect(description).not.toContain('statewide');
+    expect(description).toMatch(/OS \([^)]*Oregon/);
+    expect(description).toMatch(/WA \([^)]*airport[^)]*ferr/i);
   });
 });

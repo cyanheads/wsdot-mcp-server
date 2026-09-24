@@ -6,6 +6,14 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { coordinatePair } from '@/mcp-server/tools/coordinate-pair.js';
+import {
+  continuationNotice,
+  fitPageToBudget,
+  MAX_FILTER_LENGTH,
+  PAGE_BYTE_BUDGET,
+  renderPage,
+} from '@/mcp-server/tools/page-budget.js';
+import { routeMatches } from '@/services/traffic/route-match.js';
 import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
 
 const DEFAULT_LIMIT = 50;
@@ -24,17 +32,55 @@ function routeDesignation(stateRoute: string): string {
   return INTERSTATE_ROUTE_NUMBERS.has(number) ? `I-${number}` : `SR ${number}`;
 }
 
+const TollRateSchema = z
+  .object({
+    tripName: z.string().optional().describe('Name of the tolled trip or lane segment.'),
+    stateRoute: z
+      .string()
+      .optional()
+      .describe(
+        'Route number as the feed reports it: bare and zero-padded, with no route type ("099", "405"). The rendered text shows the posted designation (SR 99, I-405).',
+      ),
+    travelDirection: z
+      .string()
+      .optional()
+      .describe(
+        'Direction code the feed assigns the toll trip: N, S, E, or W. On SR 99, SR 509, and SR 520 it is one fixed code per facility (S, S, and E) although trips run both ways, so read the direction of travel from the segment ends — startLocationName/endLocationName and startMilepost → endMilepost — not from this code.',
+      ),
+    startMilepost: z.number().optional().describe('Starting milepost of the toll segment.'),
+    endMilepost: z.number().optional().describe('Ending milepost of the toll segment.'),
+    tollRateInDollars: z.number().optional().describe('Current toll rate in US dollars.'),
+    message: z.string().optional().describe('Dynamic message associated with this toll.'),
+    startLocationName: z.string().optional().describe('Human-readable start location name.'),
+    endLocationName: z.string().optional().describe('Human-readable end location name.'),
+    startLatitude: z.number().optional().describe('Latitude of the segment start point.'),
+    startLongitude: z.number().optional().describe('Longitude of the segment start point.'),
+    endLatitude: z.number().optional().describe('Latitude of the segment end point.'),
+    endLongitude: z.number().optional().describe('Longitude of the segment end point.'),
+    timeUpdated: z.string().optional().describe('When this toll rate was last updated (ISO 8601).'),
+  })
+  .describe('Current toll rate for one segment or trip.');
+
 export const getTollRates = tool('wsdot_get_toll_rates', {
   title: 'Get Toll Rates',
   description:
     'Returns current dynamic toll rates for WA express lanes and tolled facilities: SR 99 (WSDOT Tunnel), ' +
     'SR 167 HOT Lanes, I-405 Express Lanes, SR 509 tolled segment, and the SR 520 Bridge. ' +
     'Rates are time-banded and change dynamically based on traffic conditions. ' +
-    'stateRoute is a bare, zero-padded route number ("099", "405") — the posted designation is in ' +
-    'the rendered text. Results are paged — pass offset/limit to page through the full set ' +
-    '(the notice reports the next offset).',
+    'Filter to one facility with stateRoute ("SR 520", "520", "I-405", or "405" all work). ' +
+    'Each row reports stateRoute as the bare, zero-padded number the feed carries ("099", "405") — ' +
+    'the posted designation is in the rendered text. Results are paged — pass offset/limit to page ' +
+    'through the matching set. ' +
+    `A page ends at limit or at a ${PAGE_BYTE_BUDGET.toLocaleString('en-US')}-byte response budget, whichever comes first; the notice reports the next offset.`,
   annotations: { readOnlyHint: true },
   input: z.object({
+    stateRoute: z
+      .string()
+      .max(MAX_FILTER_LENGTH)
+      .optional()
+      .describe(
+        'Tolled route to filter by. Accepts natural forms — "SR 520", "520", "0520", "I-405", "405" — matched case- and space-insensitively against each row\'s posted designation, so a route-type prefix must agree: "SR 405" matches nothing because the I-405 Express Lanes are an Interstate. A route with no tolled facility returns an empty page whose notice names the tolled routes. Omit to include every facility.',
+      ),
     offset: z
       .number()
       .int()
@@ -48,60 +94,47 @@ export const getTollRates = tool('wsdot_get_toll_rates', {
       .max(MAX_LIMIT)
       .optional()
       .describe(
-        `Maximum toll rates to return in this page (1–${MAX_LIMIT}). Defaults to ${DEFAULT_LIMIT}.`,
+        `Maximum toll rates to return in this page (1–${MAX_LIMIT}). Defaults to ${DEFAULT_LIMIT}. A large page ends sooner, at the ${PAGE_BYTE_BUDGET.toLocaleString('en-US')}-byte response budget.`,
       ),
   }),
   output: z.object({
     rates: z
-      .array(
-        z
-          .object({
-            tripName: z.string().optional().describe('Name of the tolled trip or lane segment.'),
-            stateRoute: z.string().optional().describe('State route number.'),
-            travelDirection: z
-              .string()
-              .optional()
-              .describe(
-                'Travel direction code for this toll segment: N (north), S (south), E (east), W (west).',
-              ),
-            startMilepost: z.number().optional().describe('Starting milepost of the toll segment.'),
-            endMilepost: z.number().optional().describe('Ending milepost of the toll segment.'),
-            tollRateInDollars: z.number().optional().describe('Current toll rate in US dollars.'),
-            message: z.string().optional().describe('Dynamic message associated with this toll.'),
-            startLocationName: z
-              .string()
-              .optional()
-              .describe('Human-readable start location name.'),
-            endLocationName: z.string().optional().describe('Human-readable end location name.'),
-            startLatitude: z.number().optional().describe('Latitude of the segment start point.'),
-            startLongitude: z.number().optional().describe('Longitude of the segment start point.'),
-            endLatitude: z.number().optional().describe('Latitude of the segment end point.'),
-            endLongitude: z.number().optional().describe('Longitude of the segment end point.'),
-            timeUpdated: z
-              .string()
-              .optional()
-              .describe('When this toll rate was last updated (ISO 8601).'),
-          })
-          .describe('Current toll rate for one segment or trip.'),
-      )
-      .describe('Current toll rates for all active tolled facilities.'),
+      .array(TollRateSchema)
+      .describe('Current toll rates for the matching tolled facilities.'),
   }),
 
   enrichment: {
     totalCount: z
       .number()
-      .describe('Total toll rate entries across all pages (not just this page).'),
+      .describe(
+        'Total toll rate entries matching the filter across all pages (not just this page).',
+      ),
     nextOffset: z
       .number()
       .nullable()
       .describe('Offset to pass to retrieve the next page, or null when this is the last page.'),
     hasMore: z.boolean().describe('True when more toll rates remain beyond the current page.'),
+    appliedFilters: z
+      .object({
+        stateRoute: z.string().optional().describe('State route filter applied.'),
+      })
+      .optional()
+      .describe('Active filters applied to the toll rates. Absent when no filter was applied.'),
     notice: z
       .string()
       .optional()
       .describe(
-        'Informational note about the page window, or guidance when no toll rate data is available or the offset ran past the end.',
+        'Informational note about the page window, or guidance when no toll rate data is available, the route has no tolled facility, or the offset ran past the end.',
       ),
+  },
+
+  enrichmentTrailer: {
+    appliedFilters: {
+      render: (filters) =>
+        filters?.stateRoute
+          ? `**Applied Filters:**\n- **Route:** ${filters.stateRoute}`
+          : '**Applied Filters:** none',
+    },
   },
 
   errors: [
@@ -126,34 +159,63 @@ export const getTollRates = tool('wsdot_get_toll_rates', {
   ],
 
   async handler(input, ctx) {
+    const stateRoute = input.stateRoute?.trim() || undefined;
     const allRates = await getTrafficApiService().getTollRates(ctx);
+    // The feed value carries no route type, so it is matched as its posted designation — a bare
+    // "405" would otherwise let "SR 405" return the I-405 Express Lanes.
+    const matched = stateRoute
+      ? allRates.filter(
+          (r) => r.stateRoute != null && routeMatches(stateRoute, routeDesignation(r.stateRoute)),
+        )
+      : allRates;
 
-    // Page the full set so structuredContent and content[] carry the identical page (the
-    // service stays filter-only; paging is a tool-handler concern). totalCount stays the
-    // full entry count so the agent knows how much lies beyond this page.
-    const totalCount = allRates.length;
+    // Page the matching set so structuredContent and content[] carry the identical page (the
+    // service stays fetch-only; filtering and paging are tool-handler concerns). totalCount
+    // stays the full match count so the agent knows how much lies beyond this page.
+    const totalCount = matched.length;
     const offset = input.offset ?? 0;
     const limit = input.limit ?? DEFAULT_LIMIT;
-    const rates = allRates.slice(offset, offset + limit);
+    const requested = matched.slice(offset, offset + limit);
+    const rates = fitPageToBudget(requested, renderTollRate, stateRoute);
     const hasMore = offset + rates.length < totalCount;
     const nextOffset = hasMore ? offset + rates.length : null;
 
     ctx.log.info('Toll rates fetched', { totalCount, offset, limit, returned: rates.length });
 
-    ctx.enrich({ totalCount, nextOffset, hasMore });
+    ctx.enrich({
+      totalCount,
+      nextOffset,
+      hasMore,
+      ...(stateRoute && { appliedFilters: { stateRoute } }),
+    });
 
-    if (totalCount === 0) {
+    if (allRates.length === 0) {
       ctx.enrich.notice(
         'No toll rate data available. The WSDOT API may be temporarily unavailable — retry in 30 seconds.',
+      );
+    } else if (totalCount === 0) {
+      // Dedupe the designations, not the raw values — "099" and "99" are one facility.
+      const tolled = [
+        ...new Set(
+          allRates
+            .flatMap((r) => (r.stateRoute ? [r.stateRoute] : []))
+            .toSorted((a, b) => Number.parseInt(a, 10) - Number.parseInt(b, 10))
+            .map(routeDesignation),
+        ),
+      ];
+      ctx.enrich.notice(
+        `No tolled facility on ${stateRoute}. The feed carries tolls on ${tolled.join(', ')} — pass one of those, or omit stateRoute for every facility.`,
       );
     } else if (rates.length === 0) {
       ctx.enrich.notice(
         `Offset ${offset} is past the end of ${totalCount} toll rate entries. Use an offset between 0 and ${totalCount - 1}.`,
       );
     } else {
-      const window = `Showing toll rates ${offset + 1}–${offset + rates.length} of ${totalCount}.`;
+      const shown = `Showing toll rates ${offset + 1}–${offset + rates.length} of ${totalCount}.`;
       ctx.enrich.notice(
-        hasMore ? `${window} Pass offset=${nextOffset} for the next page.` : window,
+        nextOffset === null
+          ? shown
+          : `${shown} ${continuationNotice(nextOffset, rates.length < requested.length)}`,
       );
     }
 
@@ -164,29 +226,30 @@ export const getTollRates = tool('wsdot_get_toll_rates', {
     if (result.rates.length === 0) {
       return [{ type: 'text', text: 'No toll rate data available.' }];
     }
-    const lines: string[] = [];
-    for (const r of result.rates) {
-      // tripName is an opaque upstream key ("099tp03268"); the endpoint names read as a segment,
-      // so they lead. A segment whose ends carry the same name collapses to one.
-      const ends = [r.startLocationName, r.endLocationName].filter(Boolean);
-      const segment = [...new Set(ends)].join(' → ');
-      lines.push(`### ${segment || r.tripName || 'Toll segment'}`);
-      if (r.tripName) lines.push(`**Trip:** ${r.tripName}`);
-      if (r.stateRoute) lines.push(`**Route:** ${routeDesignation(r.stateRoute)}`);
-      if (r.travelDirection) lines.push(`**Direction:** ${r.travelDirection}`);
-      if (r.startLocationName) lines.push(`**From:** ${r.startLocationName}`);
-      if (r.endLocationName) lines.push(`**To:** ${r.endLocationName}`);
-      if (r.startMilepost != null) lines.push(`**Start MP:** ${r.startMilepost}`);
-      if (r.endMilepost != null) lines.push(`**End MP:** ${r.endMilepost}`);
-      if (r.tollRateInDollars != null) lines.push(`**Rate:** $${r.tollRateInDollars.toFixed(2)}`);
-      if (r.message) lines.push(`**Message:** ${r.message}`);
-      const startCoords = coordinatePair(r.startLatitude, r.startLongitude);
-      if (startCoords) lines.push(`**Start Coords:** ${startCoords}`);
-      const endCoords = coordinatePair(r.endLatitude, r.endLongitude);
-      if (endCoords) lines.push(`**End Coords:** ${endCoords}`);
-      if (r.timeUpdated) lines.push(`**Updated:** ${r.timeUpdated}`);
-      lines.push('');
-    }
-    return [{ type: 'text', text: lines.join('\n') }];
+    return [{ type: 'text', text: renderPage(result.rates, renderTollRate) }];
   },
 });
+
+/** One toll rate's `content[]` block — shared by `format()` and the page-budget charge. */
+function renderTollRate(r: z.infer<typeof TollRateSchema>): string {
+  // tripName is an opaque upstream key ("099tp03268"); the endpoint names read as a segment,
+  // so they lead. A segment whose ends carry the same name collapses to one.
+  const ends = [r.startLocationName, r.endLocationName].filter(Boolean);
+  const segment = [...new Set(ends)].join(' → ');
+  const lines = [`### ${segment || r.tripName || 'Toll segment'}`];
+  if (r.tripName) lines.push(`**Trip:** ${r.tripName}`);
+  if (r.stateRoute) lines.push(`**Route:** ${routeDesignation(r.stateRoute)}`);
+  if (r.travelDirection) lines.push(`**Direction:** ${r.travelDirection}`);
+  if (r.startLocationName) lines.push(`**From:** ${r.startLocationName}`);
+  if (r.endLocationName) lines.push(`**To:** ${r.endLocationName}`);
+  if (r.startMilepost != null) lines.push(`**Start MP:** ${r.startMilepost}`);
+  if (r.endMilepost != null) lines.push(`**End MP:** ${r.endMilepost}`);
+  if (r.tollRateInDollars != null) lines.push(`**Rate:** $${r.tollRateInDollars.toFixed(2)}`);
+  if (r.message) lines.push(`**Message:** ${r.message}`);
+  const startCoords = coordinatePair(r.startLatitude, r.startLongitude);
+  if (startCoords) lines.push(`**Start Coords:** ${startCoords}`);
+  const endCoords = coordinatePair(r.endLatitude, r.endLongitude);
+  if (endCoords) lines.push(`**End Coords:** ${endCoords}`);
+  if (r.timeUpdated) lines.push(`**Updated:** ${r.timeUpdated}`);
+  return lines.join('\n');
+}
