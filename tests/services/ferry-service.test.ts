@@ -18,6 +18,7 @@ vi.mock('@cyanheads/mcp-ts-core/utils', () => ({
   withRetry: (fn: () => Promise<unknown>) => fn(),
 }));
 
+import { getFerryRoutes } from '@/mcp-server/tools/definitions/get-ferry-routes.tool.js';
 import { getFerryTerminals } from '@/mcp-server/tools/definitions/get-ferry-terminals.tool.js';
 import { FerryApiService } from '@/services/ferry/ferry-service.js';
 import { nth } from '../helpers/assertions.js';
@@ -34,8 +35,19 @@ const UNREGISTERED_CODE_BODY = {
     "Use of WSDOT Traveler API failed.  Please make sure you've registered (at this location https://wsdot.wa.gov/traffic/api/) for a developer Access Code.  This value should then be passed with every service request.",
 };
 
-const mockFetch = vi.fn();
+/**
+ * A request no test stubbed rejects, naming the endpoint (query string dropped, so the credential
+ * never enters the message). The file-level reset below restores this default before every test,
+ * so one test's `mockResolvedValue` cannot answer a later test's request.
+ */
+const mockFetch = vi.fn<(url: string | URL | Request) => Promise<unknown>>((url) =>
+  Promise.reject(new Error(`Unstubbed fetch: ${String(url).split('?')[0]}`)),
+);
 vi.stubGlobal('fetch', mockFetch);
+
+beforeEach(() => {
+  mockFetch.mockReset();
+});
 
 function makeResponse(body: unknown, status = 200, contentType = 'application/json') {
   return {
@@ -44,6 +56,21 @@ function makeResponse(body: unknown, status = 200, contentType = 'application/js
     headers: { get: (h: string) => (h === 'content-type' ? contentType : null) },
     text: () => Promise.resolve(typeof body === 'string' ? body : JSON.stringify(body)),
   };
+}
+
+/** WSF's cache-flush stamp — a bare WCF date string, served JSON-encoded. */
+const FLUSH_STAMP = '/Date(1790284800913-0700)/';
+
+/** The cache-flush response carrying `stamp`. */
+const flushResponse = (stamp = FLUSH_STAMP) => makeResponse(JSON.stringify(stamp));
+
+/** Answer each request with the response of the first entry whose path fragment its URL contains. */
+function stubByPath(table: [fragment: string, response: ReturnType<typeof makeResponse>][]) {
+  mockFetch.mockImplementation((url) => {
+    const path = String(url).split('?')[0] ?? '';
+    const hit = table.find(([fragment]) => path.includes(fragment));
+    return hit ? Promise.resolve(hit[1]) : Promise.reject(new Error(`Unstubbed fetch: ${path}`));
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -168,13 +195,20 @@ describe('FerryApiService.getTerminals', () => {
     expect('longitude' in t).toBe(false);
   });
 
-  it('falls back to defaults when TerminalID/Name are null', async () => {
-    const raw = [{ TerminalID: null, TerminalName: null }];
+  it('keeps a terminal with no ID or name without fabricating either', async () => {
+    const raw = [
+      { TerminalID: null, TerminalName: null, TerminalAbbrev: 'COU' },
+      { Latitude: 48.1597, Longitude: -122.6725 },
+      { TerminalID: 11, TerminalName: '  ' },
+    ];
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const terminals = await svc.getTerminals(ctx);
-    expect(nth(terminals).terminalId).toBe(0);
-    expect(nth(terminals).terminalName).toBe('Unknown');
+    expect(terminals).toEqual([
+      { terminalAbbrev: 'COU' },
+      { latitude: 48.1597, longitude: -122.6725 },
+      { terminalId: 11 },
+    ]);
   });
 
   it('returns empty array when API returns []', async () => {
@@ -208,7 +242,11 @@ describe('FerryApiService.getRoutes', () => {
 
   it('maps all raw route fields to domain fields', async () => {
     const raw = [{ RouteID: 1, RouteAbbrev: 'SEA-BI', Description: 'Seattle/Bainbridge Island' }];
-    mockFetch.mockResolvedValue(makeResponse(raw));
+    stubByPath([
+      ['/routes/', makeResponse(raw)],
+      ['/cacheflushdate', flushResponse()],
+      ['/terminalsandmatesbyroute/', makeResponse([])],
+    ]);
     const ctx = createMockContext();
     const routes = await svc.getRoutes('2026-05-23', ctx);
 
@@ -220,7 +258,10 @@ describe('FerryApiService.getRoutes', () => {
 
   it('omits optional fields when raw values are null', async () => {
     const raw = [{ RouteID: null, RouteAbbrev: null, Description: null }];
-    mockFetch.mockResolvedValue(makeResponse(raw));
+    stubByPath([
+      ['/routes/', makeResponse(raw)],
+      ['/cacheflushdate', flushResponse()],
+    ]);
     const ctx = createMockContext();
     const routes = await svc.getRoutes('2026-05-23', ctx);
     expect('routeId' in nth(routes)).toBe(false);
@@ -229,11 +270,338 @@ describe('FerryApiService.getRoutes', () => {
   });
 
   it('includes the trip date in the request URL', async () => {
-    mockFetch.mockResolvedValue(makeResponse([]));
+    stubByPath([
+      ['/routes/', makeResponse([])],
+      ['/cacheflushdate', flushResponse()],
+    ]);
     const ctx = createMockContext();
     await svc.getRoutes('2026-05-23', ctx);
     const url: string = nth(mockFetch.mock.calls)[0] as string;
-    expect(url).toContain('2026-05-23');
+    expect(url).toContain('/Schedule/rest/routes/2026-05-23?');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getRoutes — the terminal pairs each route serves
+// ---------------------------------------------------------------------------
+
+describe('FerryApiService.getRoutes — terminal pairs', () => {
+  let svc: FerryApiService;
+
+  beforeEach(() => {
+    svc = new FerryApiService({} as never, {} as never);
+  });
+
+  const ROUTES = [
+    { RouteID: 5, RouteAbbrev: 'sea-bi', Description: 'Seattle / Bainbridge Island' },
+    { RouteID: 9, RouteAbbrev: 'ana-sj', Description: 'Anacortes / San Juan Islands' },
+    { RouteID: 21, RouteAbbrev: 'x', Description: 'A route with no pairs today' },
+  ];
+
+  const PAIRS: Record<number, unknown> = {
+    5: [
+      {
+        DepartingTerminalID: 3,
+        DepartingDescription: 'Bainbridge Island',
+        ArrivingTerminalID: 7,
+        ArrivingDescription: 'Seattle',
+      },
+      {
+        DepartingTerminalID: 7,
+        DepartingDescription: 'Seattle',
+        ArrivingTerminalID: 3,
+        ArrivingDescription: 'Bainbridge Island',
+      },
+    ],
+    9: [
+      {
+        DepartingTerminalID: 15,
+        DepartingDescription: 'Orcas Island ',
+        ArrivingTerminalID: 18,
+        ArrivingDescription: '  ',
+      },
+      // A pair missing a terminal ID cannot be passed to the schedule tool, so it is not listed.
+      { DepartingTerminalID: 15, DepartingDescription: 'Orcas Island' },
+    ],
+    21: [],
+  };
+
+  /** Serve routes, a flush stamp, and per-route pairs; count the pair lookups by route. */
+  function stubFerry(options: { flush?: () => string; routes?: unknown[] } = {}) {
+    const lookups: number[] = [];
+    mockFetch.mockImplementation((url) => {
+      const path = String(url).split('?')[0] ?? '';
+      if (path.includes('/Schedule/rest/routes/')) {
+        return Promise.resolve(makeResponse(options.routes ?? ROUTES));
+      }
+      if (path.endsWith('/Schedule/rest/cacheflushdate')) {
+        return Promise.resolve(flushResponse(options.flush?.()));
+      }
+      const byRoute = /\/terminalsandmatesbyroute\/(\d{4}-\d{2}-\d{2})\/(\d+)$/.exec(path);
+      if (byRoute) {
+        const routeId = Number(byRoute[2]);
+        lookups.push(routeId);
+        return Promise.resolve(makeResponse(PAIRS[routeId] ?? []));
+      }
+      return Promise.reject(new Error(`Unstubbed fetch: ${path}`));
+    });
+    return lookups;
+  }
+
+  it('looks up each route’s pairs for the trip date and maps them', async () => {
+    const lookups = stubFerry();
+    const routes = await svc.getRoutes('2026-09-25', createMockContext());
+
+    expect(lookups.sort((a, b) => a - b)).toEqual([5, 9, 21]);
+    const byRouteUrls = mockFetch.mock.calls
+      .map(([url]) => String(url))
+      .filter((url) => url.includes('terminalsandmatesbyroute'));
+    for (const url of byRouteUrls) {
+      expect(url).toMatch(/\/Schedule\/rest\/terminalsandmatesbyroute\/2026-09-25\/\d+\?/);
+    }
+    expect(routes).toEqual([
+      {
+        routeId: 5,
+        routeAbbrev: 'sea-bi',
+        description: 'Seattle / Bainbridge Island',
+        terminalPairs: [
+          {
+            departingTerminalId: 3,
+            departingTerminalName: 'Bainbridge Island',
+            arrivingTerminalId: 7,
+            arrivingTerminalName: 'Seattle',
+          },
+          {
+            departingTerminalId: 7,
+            departingTerminalName: 'Seattle',
+            arrivingTerminalId: 3,
+            arrivingTerminalName: 'Bainbridge Island',
+          },
+        ],
+      },
+      {
+        routeId: 9,
+        routeAbbrev: 'ana-sj',
+        description: 'Anacortes / San Juan Islands',
+        // Padded name trimmed, blank name dropped, ID-less pair dropped.
+        terminalPairs: [
+          {
+            departingTerminalId: 15,
+            departingTerminalName: 'Orcas Island',
+            arrivingTerminalId: 18,
+          },
+        ],
+      },
+      {
+        routeId: 21,
+        routeAbbrev: 'x',
+        description: 'A route with no pairs today',
+        terminalPairs: [],
+      },
+    ]);
+  });
+
+  it('gives a route whose pair lookup returns null an empty list, not a failure', async () => {
+    mockFetch.mockImplementation((url) => {
+      const path = String(url).split('?')[0] ?? '';
+      if (path.includes('/routes/')) return Promise.resolve(makeResponse([ROUTES[0]]));
+      if (path.endsWith('/cacheflushdate')) return Promise.resolve(flushResponse());
+      return Promise.resolve(makeResponse(null));
+    });
+    const routes = await svc.getRoutes('2026-09-25', createMockContext());
+    expect(nth(routes).terminalPairs).toEqual([]);
+  });
+
+  it('carries no terminalPairs for a route with no ID, and looks nothing up for it', async () => {
+    const lookups = stubFerry({ routes: [{ RouteAbbrev: 'anon', Description: 'No ID' }] });
+    const routes = await svc.getRoutes('2026-09-25', createMockContext());
+    expect(routes).toEqual([{ routeAbbrev: 'anon', description: 'No ID' }]);
+    expect(lookups).toEqual([]);
+  });
+
+  it('makes no pair lookup and no flush check when the date lists no routes', async () => {
+    const lookups = stubFerry({ routes: [] });
+    expect(await svc.getRoutes('2027-01-15', createMockContext())).toEqual([]);
+    expect(lookups).toEqual([]);
+  });
+
+  it('answers a repeat call for the same date from the cache while the flush stamp holds', async () => {
+    const lookups = stubFerry();
+    const first = await svc.getRoutes('2026-09-25', createMockContext());
+    expect(lookups).toHaveLength(3);
+
+    mockFetch.mockClear();
+    const second = await svc.getRoutes('2026-09-25', createMockContext());
+    expect(second).toEqual(first);
+    expect(lookups).toHaveLength(3);
+    const paths = mockFetch.mock.calls.map(([url]) => String(url).split('?')[0]);
+    expect(paths).toEqual([
+      'https://www.wsdot.wa.gov/Ferries/API/Schedule/rest/routes/2026-09-25',
+      'https://www.wsdot.wa.gov/Ferries/API/Schedule/rest/cacheflushdate',
+    ]);
+  });
+
+  it('looks the pairs up again once the flush stamp changes', async () => {
+    let stamp = FLUSH_STAMP;
+    const lookups = stubFerry({ flush: () => stamp });
+    await svc.getRoutes('2026-09-25', createMockContext());
+    await svc.getRoutes('2026-09-25', createMockContext());
+    expect(lookups).toHaveLength(3);
+
+    stamp = '/Date(1790371200000-0700)/';
+    await svc.getRoutes('2026-09-25', createMockContext());
+    expect(lookups).toHaveLength(6);
+    await svc.getRoutes('2026-09-25', createMockContext());
+    expect(lookups).toHaveLength(6);
+  });
+
+  it('caches per trip date — another date gets its own lookups', async () => {
+    const lookups = stubFerry();
+    await svc.getRoutes('2026-09-25', createMockContext());
+    await svc.getRoutes('2026-09-27', createMockContext());
+    expect(lookups).toHaveLength(6);
+    const dates = mockFetch.mock.calls
+      .map(([url]) => /terminalsandmatesbyroute\/([\d-]+)\//.exec(String(url))?.[1])
+      .filter(Boolean);
+    expect(new Set(dates)).toEqual(new Set(['2026-09-25', '2026-09-27']));
+  });
+
+  it('fails the whole call when one pair lookup fails — no partial route list', async () => {
+    mockFetch.mockImplementation((url) => {
+      const path = String(url).split('?')[0] ?? '';
+      if (path.includes('/routes/')) return Promise.resolve(makeResponse(ROUTES));
+      if (path.endsWith('/cacheflushdate')) return Promise.resolve(flushResponse());
+      if (path.endsWith('/9')) {
+        return Promise.resolve(makeResponse('Service Unavailable', 503, 'text/plain'));
+      }
+      return Promise.resolve(makeResponse([]));
+    });
+    const ctx = createMockContext({ errors: getFerryRoutes.errors });
+    const err = (await svc.getRoutes('2026-09-25', ctx).catch((e) => e)) as McpError;
+    expect(err).toBeInstanceOf(McpError);
+    expect(err.data).toMatchObject({
+      reason: 'api_unavailable',
+      status: 503,
+      url: 'https://www.wsdot.wa.gov/Ferries/API/Schedule/rest/terminalsandmatesbyroute/2026-09-25/9',
+    });
+  });
+
+  it('classifies an access-code rejection on a pair lookup as invalid_access_code', async () => {
+    mockFetch.mockImplementation((url) => {
+      const path = String(url).split('?')[0] ?? '';
+      if (path.includes('/routes/')) return Promise.resolve(makeResponse(ROUTES));
+      if (path.endsWith('/cacheflushdate')) return Promise.resolve(flushResponse());
+      return Promise.resolve(makeResponse(UNREGISTERED_CODE_BODY, 400));
+    });
+    const err = (await svc
+      .getRoutes('2026-09-25', createMockContext())
+      .catch((e) => e)) as McpError;
+    expect(err.code).toBe(JsonRpcErrorCode.ConfigurationError);
+    expect(err.data).toMatchObject({ reason: 'invalid_access_code' });
+  });
+
+  it('does not cache pairs a call fetched under a flush stamp that changed before they arrived', async () => {
+    /** Pairs WSF serves for route 5 before and after its schedule flush. */
+    const before = [{ DepartingTerminalID: 3, ArrivingTerminalID: 7 }];
+    const after = [{ DepartingTerminalID: 7, ArrivingTerminalID: 3 }];
+    let stamp = FLUSH_STAMP;
+    let pairs: unknown = before;
+    let releaseHeld: (() => void) | undefined;
+    let holdNext = true;
+    mockFetch.mockImplementation(async (url) => {
+      const path = String(url).split('?')[0] ?? '';
+      if (path.includes('/routes/')) return makeResponse([ROUTES[0]]);
+      if (path.endsWith('/cacheflushdate')) return flushResponse(stamp);
+      // The first lookup answers with the pre-flush pairs, but only once the test releases it.
+      const body = pairs;
+      if (holdNext) {
+        holdNext = false;
+        await new Promise<void>((resolve) => {
+          releaseHeld = resolve;
+        });
+      }
+      return makeResponse(body);
+    });
+
+    const slow = svc.getRoutes('2026-09-25', createMockContext());
+    await vi.waitFor(() => expect(releaseHeld).toBeDefined());
+
+    // WSF flushes; a second call reads the new stamp and caches the new pairs.
+    stamp = '/Date(1790371200000-0700)/';
+    pairs = after;
+    const fresh = await svc.getRoutes('2026-09-25', createMockContext());
+    expect(nth(fresh).terminalPairs).toEqual([{ departingTerminalId: 7, arrivingTerminalId: 3 }]);
+
+    // The slow call's pre-flush lookup lands last.
+    releaseHeld?.();
+    await slow;
+
+    const next = await svc.getRoutes('2026-09-25', createMockContext());
+    expect(nth(next).terminalPairs).toEqual([{ departingTerminalId: 7, arrivingTerminalId: 3 }]);
+  });
+
+  it('serves concurrent calls for the same date the same pairs', async () => {
+    const lookups = stubFerry();
+    const [a, b] = await Promise.all([
+      svc.getRoutes('2026-09-25', createMockContext()),
+      svc.getRoutes('2026-09-25', createMockContext()),
+    ]);
+    expect(a).toEqual(b);
+    expect(nth(a).terminalPairs).toHaveLength(2);
+    // Both calls missed the empty cache, so each looked every route up once.
+    expect(lookups).toHaveLength(6);
+    await svc.getRoutes('2026-09-25', createMockContext());
+    expect(lookups).toHaveLength(6);
+  });
+
+  it('caches the routes a failed call did look up, and looks up only the rest again', async () => {
+    let fail = true;
+    const lookups: number[] = [];
+    const many = Array.from({ length: 7 }, (_, i) => ({ RouteID: i + 1, Description: `R${i}` }));
+    mockFetch.mockImplementation(async (url) => {
+      const path = String(url).split('?')[0] ?? '';
+      if (path.includes('/routes/')) return makeResponse(many);
+      if (path.endsWith('/cacheflushdate')) return flushResponse();
+      const routeId = Number(path.split('/').at(-1));
+      lookups.push(routeId);
+      // Route 7 sits in the second batch of five.
+      if (routeId === 7 && fail) return makeResponse('Service Unavailable', 503, 'text/plain');
+      return makeResponse([{ DepartingTerminalID: routeId, ArrivingTerminalID: routeId + 100 }]);
+    });
+
+    await expect(svc.getRoutes('2026-09-25', createMockContext())).rejects.toBeInstanceOf(McpError);
+    expect(lookups.toSorted((x, y) => x - y)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+
+    fail = false;
+    lookups.length = 0;
+    const routes = await svc.getRoutes('2026-09-25', createMockContext());
+    // The first batch completed and was cached; the failed batch is looked up again in full.
+    expect(lookups.toSorted((x, y) => x - y)).toEqual([6, 7]);
+    for (const r of routes) {
+      expect(r.terminalPairs).toEqual([
+        { departingTerminalId: r.routeId, arrivingTerminalId: (r.routeId ?? 0) + 100 },
+      ]);
+    }
+  });
+
+  it('keeps at most five pair lookups in flight', async () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({ RouteID: i + 1, Description: `R${i}` }));
+    let inFlight = 0;
+    let peak = 0;
+    mockFetch.mockImplementation(async (url) => {
+      const path = String(url).split('?')[0] ?? '';
+      if (path.includes('/routes/')) return makeResponse(many);
+      if (path.endsWith('/cacheflushdate')) return flushResponse();
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight--;
+      return makeResponse([]);
+    });
+    const routes = await svc.getRoutes('2026-09-25', createMockContext());
+    expect(routes).toHaveLength(12);
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(5);
   });
 });
 
@@ -367,6 +735,203 @@ describe('FerryApiService.getSchedule', () => {
     expect(schedule.sailings).toHaveLength(1);
     expect('isCancelled' in nth(schedule.sailings)).toBe(false);
     expect(nth(schedule.sailings).vesselName).toBe('Yakima');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getSchedule — per-sailing loading rule, vessel, and annotations
+// ---------------------------------------------------------------------------
+
+describe('FerryApiService.getSchedule — loading rule, vessel, and annotations', () => {
+  let svc: FerryApiService;
+
+  beforeEach(() => {
+    svc = new FerryApiService({} as never, {} as never);
+  });
+
+  const sailing = (overrides: Record<string, unknown>) => ({
+    DepartingTime: '/Date(1790344200000-0700)/',
+    ArrivingTime: '/Date(1790345100000-0700)/',
+    VesselName: 'Chelan',
+    VesselPositionNum: 1,
+    Routes: [9],
+    ...overrides,
+  });
+
+  it('maps each sailing’s loading rule, vessel ID, and accessibility on a pair that mixes rules', async () => {
+    mockFetch.mockResolvedValue(
+      makeResponse({
+        TerminalCombos: [
+          {
+            DepartingTerminalName: 'Orcas Island',
+            ArrivingTerminalName: 'Shaw Island',
+            Annotations: ['No interisland vehicles. Foot passenger and bikes okay.'],
+            Times: [
+              sailing({
+                LoadingRule: 3,
+                VesselID: 2,
+                VesselHandicapAccessible: true,
+                AnnotationIndexes: [],
+              }),
+              sailing({
+                LoadingRule: 1,
+                VesselID: 38,
+                VesselName: 'Yakima',
+                VesselHandicapAccessible: false,
+                AnnotationIndexes: [0],
+              }),
+            ],
+          },
+        ],
+      }),
+    );
+    const schedule = await svc.getSchedule(15, 18, '2026-09-25', false, createMockContext());
+    expect(schedule.annotations).toEqual([
+      'No interisland vehicles. Foot passenger and bikes okay.',
+    ]);
+    expect(schedule.sailings).toEqual([
+      {
+        departureTime: '2026-09-25T13:50:00.000Z',
+        arrivalTime: '2026-09-25T14:05:00.000Z',
+        vesselName: 'Chelan',
+        vesselId: 2,
+        loadingRule: 3,
+        vesselHandicapAccessible: true,
+        annotationIndexes: [],
+      },
+      {
+        departureTime: '2026-09-25T13:50:00.000Z',
+        arrivalTime: '2026-09-25T14:05:00.000Z',
+        vesselName: 'Yakima',
+        vesselId: 38,
+        loadingRule: 1,
+        vesselHandicapAccessible: false,
+        annotationIndexes: [0],
+      },
+    ]);
+    // Undocumented upstream fields stay out.
+    expect(JSON.stringify(schedule)).not.toMatch(/VesselPositionNum|vesselPositionNum|routes/);
+  });
+
+  it('normalizes the HTML in both note fields to plain text, keeping link destinations', async () => {
+    mockFetch.mockResolvedValue(
+      makeResponse({
+        TerminalCombos: [
+          {
+            DepartingTerminalName: 'Kingston',
+            ArrivingTerminalName: 'Edmonds',
+            SailingNotes:
+              '<p><a href="https://tinyurl.com/mptshczh" target="_blank" rel="noopener noreferrer">Boarding pass required for vehicles</a> 8 a.m.–8 p.m. to hold your place in line at Kingston. Ferry tickets sold separately.</p>',
+            Annotations: [
+              'The 5:30am sailing from Kingston will operate approximately 10 minutes late.',
+              '<a href="https://tinyurl.com/mptshczh">Boarding Pass</a> required for vehicles.',
+              'Loads foot passengers, motorcycles, and pre-registered carpools and vanpools <i>only</i>.',
+            ],
+            Times: [sailing({ AnnotationIndexes: [0, 1, 2] })],
+          },
+        ],
+      }),
+    );
+    const schedule = await svc.getSchedule(12, 8, '2026-09-25', false, createMockContext());
+    expect(schedule.sailingNotes).toBe(
+      'Boarding pass required for vehicles (https://tinyurl.com/mptshczh) 8 a.m.–8 p.m. to hold your place in line at Kingston. Ferry tickets sold separately.',
+    );
+    expect(schedule.annotations).toEqual([
+      'The 5:30am sailing from Kingston will operate approximately 10 minutes late.',
+      'Boarding Pass (https://tinyurl.com/mptshczh) required for vehicles.',
+      'Loads foot passengers, motorcycles, and pre-registered carpools and vanpools only.',
+    ]);
+    expect(JSON.stringify(schedule)).not.toMatch(/<[a-z/]/i);
+  });
+
+  it('drops blank annotations and remaps every index onto the entries kept', async () => {
+    mockFetch.mockResolvedValue(
+      makeResponse({
+        TerminalCombos: [
+          {
+            SailingNotes: '<p>&nbsp;</p>',
+            Annotations: ['First.', '  ', '<p></p>', 'Fourth.'],
+            Times: [
+              sailing({ AnnotationIndexes: [0, 3] }),
+              sailing({ AnnotationIndexes: [1, 2] }),
+              // An index past the end resolves to nothing, so it is not carried.
+              sailing({ AnnotationIndexes: [3, 7] }),
+            ],
+          },
+        ],
+      }),
+    );
+    const schedule = await svc.getSchedule(15, 18, '2026-09-25', false, createMockContext());
+    expect(schedule.annotations).toEqual(['First.', 'Fourth.']);
+    expect(schedule.sailings.map((s) => s.annotationIndexes)).toEqual([[0, 1], [], [1]]);
+    expect('sailingNotes' in schedule).toBe(false);
+    for (const s of schedule.sailings) {
+      for (const i of s.annotationIndexes ?? []) expect(schedule.annotations?.[i]).toBeDefined();
+    }
+  });
+
+  it('keeps every remapped index on the text it pointed at — duplicates too — and drops ones that point at nothing', async () => {
+    mockFetch.mockResolvedValue(
+      makeResponse({
+        TerminalCombos: [
+          {
+            Annotations: ['', 'Second.', ' ', 'Fourth.', '<br>', 'Sixth.'],
+            Times: [
+              sailing({ AnnotationIndexes: [5, 1, 5] }),
+              sailing({ AnnotationIndexes: [-1, 1.5, 6, 0, 2, 4] }),
+              sailing({ AnnotationIndexes: [3] }),
+            ],
+          },
+        ],
+      }),
+    );
+    const schedule = await svc.getSchedule(15, 18, '2026-09-25', false, createMockContext());
+    const resolved = schedule.sailings.map((s) =>
+      (s.annotationIndexes ?? []).map((i) => schedule.annotations?.[i]),
+    );
+    expect(resolved).toEqual([['Sixth.', 'Second.', 'Sixth.'], [], ['Fourth.']]);
+  });
+
+  it('gives a sailing no indexes when the pair sends indexes but no annotations', async () => {
+    mockFetch.mockResolvedValue(
+      makeResponse({ TerminalCombos: [{ Times: [sailing({ AnnotationIndexes: [0, 1] })] }] }),
+    );
+    const schedule = await svc.getSchedule(15, 18, '2026-09-25', false, createMockContext());
+    expect('annotations' in schedule).toBe(false);
+    expect(nth(schedule.sailings).annotationIndexes).toEqual([]);
+  });
+
+  it('omits every new field from a sparse payload that sends none of them', async () => {
+    mockFetch.mockResolvedValue(
+      makeResponse({
+        TerminalCombos: [
+          {
+            DepartingTerminalName: 'Seattle',
+            ArrivingTerminalName: 'Bainbridge Island',
+            Times: [{ DepartingTime: '/Date(1790344200000-0700)/', VesselName: 'Wenatchee' }],
+          },
+        ],
+      }),
+    );
+    const schedule = await svc.getSchedule(7, 3, '2026-09-25', false, createMockContext());
+    expect(schedule).toEqual({
+      departingTerminalName: 'Seattle',
+      arrivingTerminalName: 'Bainbridge Island',
+      tripDate: '2026-09-25',
+      remainingOnly: false,
+      sailings: [{ departureTime: '2026-09-25T13:50:00.000Z', vesselName: 'Wenatchee' }],
+    });
+  });
+
+  it('keeps an empty annotations list the pair sends as a stated empty list', async () => {
+    mockFetch.mockResolvedValue(
+      makeResponse({
+        TerminalCombos: [{ Annotations: [], Times: [sailing({ AnnotationIndexes: [] })] }],
+      }),
+    );
+    const schedule = await svc.getSchedule(7, 3, '2026-09-25', false, createMockContext());
+    expect(schedule.annotations).toEqual([]);
+    expect(nth(schedule.sailings).annotationIndexes).toEqual([]);
   });
 });
 
@@ -932,6 +1497,254 @@ describe('FerryApiService.getAlerts', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Blank and padded upstream strings — a blank or whitespace-only string is absent from the
+// normalized record; a populated one is kept with its ends trimmed.
+// ---------------------------------------------------------------------------
+
+describe('FerryApiService — blank and padded upstream strings', () => {
+  let svc: FerryApiService;
+
+  beforeEach(() => {
+    svc = new FerryApiService({} as never, {} as never);
+  });
+
+  /** Every optional upstream string each ferry feed maps, set to `blank`. */
+  function blankFeeds(blank: string) {
+    return {
+      terminals: [{ TerminalID: 1, TerminalName: blank, TerminalAbbrev: blank }],
+      routes: [{ RouteID: 1, RouteAbbrev: blank, Description: blank }],
+      pairs: [
+        {
+          DepartingTerminalID: 3,
+          DepartingDescription: blank,
+          ArrivingTerminalID: 7,
+          ArrivingDescription: blank,
+        },
+      ],
+      schedule: {
+        TerminalCombos: [
+          {
+            DepartingTerminalName: blank,
+            ArrivingTerminalName: blank,
+            SailingNotes: blank,
+            Annotations: [blank, blank],
+            Times: [
+              {
+                DepartingTime: blank,
+                ArrivingTime: blank,
+                VesselName: blank,
+                AnnotationIndexes: [0, 1],
+              },
+            ],
+          },
+        ],
+      },
+      vessels: [
+        {
+          VesselID: 1,
+          VesselName: blank,
+          DepartingTerminalName: blank,
+          ArrivingTerminalName: blank,
+          LeftDock: blank,
+          Eta: blank,
+          ScheduledDeparture: blank,
+          TimeStamp: blank,
+          OpRouteAbbrev: [blank, blank],
+        },
+      ],
+      space: [
+        {
+          TerminalID: 1,
+          TerminalName: blank,
+          DepartingSpaces: [
+            {
+              Departure: blank,
+              VesselName: blank,
+              SpaceForArrivalTerminals: [
+                { TerminalName: blank, DriveUpSpaceHexColor: blank, DriveUpSpaceCount: 4 },
+              ],
+            },
+            {
+              Departure: blank,
+              VesselName: blank,
+              MaxSpaceCount: 10,
+              SpaceForArrivalTerminals: [],
+            },
+          ],
+        },
+      ],
+      alerts: [
+        {
+          BulletinID: 1,
+          AlertFullTitle: blank,
+          RouteAlertText: blank,
+          BulletinText: blank,
+          AlertType: blank,
+          PublishDate: blank,
+          AffectedRouteIDs: [],
+        },
+      ],
+    };
+  }
+
+  describe.each([
+    ['empty', ''],
+    ['whitespace-only', ' \t\r\n   '],
+  ])('an all-%s fixture yields no string field from any mapper', (_label, blank) => {
+    const feeds = blankFeeds(blank);
+
+    it('terminals', async () => {
+      mockFetch.mockResolvedValue(makeResponse(feeds.terminals));
+      expect(await svc.getTerminals(createMockContext())).toEqual([{ terminalId: 1 }]);
+    });
+
+    it('routes, terminal pairs included', async () => {
+      stubByPath([
+        ['/routes/', makeResponse(feeds.routes)],
+        ['/cacheflushdate', flushResponse()],
+        ['/terminalsandmatesbyroute/', makeResponse(feeds.pairs)],
+      ]);
+      expect(await svc.getRoutes('2026-05-23', createMockContext())).toEqual([
+        {
+          routeId: 1,
+          terminalPairs: [{ departingTerminalId: 3, arrivingTerminalId: 7 }],
+        },
+      ]);
+    });
+
+    it('schedule, sailings included', async () => {
+      mockFetch.mockResolvedValue(makeResponse(feeds.schedule));
+      expect(await svc.getSchedule(7, 3, '2027-01-01', false, createMockContext())).toEqual({
+        tripDate: '2027-01-01',
+        remainingOnly: false,
+        // Every annotation was blank, so none is kept and no sailing points at one.
+        annotations: [],
+        sailings: [{ annotationIndexes: [] }],
+      });
+    });
+
+    it('vessel locations, route abbreviations included', async () => {
+      mockFetch.mockResolvedValue(makeResponse(feeds.vessels));
+      expect(await svc.getVesselLocations(createMockContext())).toEqual([
+        { vesselId: 1, opRouteAbbrev: [] },
+      ]);
+    });
+
+    it('terminal sailing space, both departure-row shapes included', async () => {
+      mockFetch.mockResolvedValue(makeResponse(feeds.space));
+      expect(await svc.getTerminalSailingSpace(createMockContext())).toEqual([
+        { terminalId: 1, departingSpaces: [{ driveUpSpaceCount: 4 }, { maxSpaceCount: 10 }] },
+      ]);
+    });
+
+    it('alerts', async () => {
+      mockFetch.mockResolvedValue(makeResponse(feeds.alerts));
+      expect(await svc.getAlerts(createMockContext())).toEqual([
+        { alertId: 1, impactedRouteIds: [] },
+      ]);
+    });
+  });
+
+  it.each([
+    ['empty', ''],
+    ['whitespace-only', '   '],
+    ['absent', undefined],
+  ])('falls back to the alert title when RouteAlertText is %s', async (_label, routeAlertText) => {
+    const raw = [
+      { BulletinID: 202, RouteAlertText: routeAlertText, AlertFullTitle: 'Maintenance Notice' },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const a = nth(await svc.getAlerts(createMockContext()));
+    expect(a.alertDescription).toBe('Maintenance Notice');
+    expect(a.alertTitle).toBe('Maintenance Notice');
+  });
+
+  it('drops a bulletin body holding only markup or entity whitespace', async () => {
+    const raw = [
+      { BulletinID: 205, RouteAlertText: 'Summary.', BulletinText: '<p>&nbsp;</p><br />' },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    expect('bulletinText' in nth(await svc.getAlerts(createMockContext()))).toBe(false);
+  });
+
+  it('drops blank route abbreviations and trims the rest, keeping the array', async () => {
+    const raw = [{ VesselID: 2, OpRouteAbbrev: [' pt-key ', '', '  ', 'sea-bi'] }];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    expect(nth(await svc.getVesselLocations(createMockContext())).opRouteAbbrev).toEqual([
+      'pt-key',
+      'sea-bi',
+    ]);
+  });
+
+  it('trims the padded Coupeville name wherever a feed carries it', async () => {
+    mockFetch.mockResolvedValue(
+      makeResponse([{ TerminalID: 11, TerminalName: 'Coupeville ', TerminalAbbrev: 'COU' }]),
+    );
+    expect(await svc.getTerminals(createMockContext())).toEqual([
+      { terminalId: 11, terminalName: 'Coupeville', terminalAbbrev: 'COU' },
+    ]);
+
+    mockFetch.mockResolvedValue(
+      makeResponse([
+        {
+          VesselID: 3,
+          DepartingTerminalName: 'Coupeville ',
+          ArrivingTerminalName: ' Port Townsend',
+          OpRouteAbbrev: ['pt-key'],
+        },
+      ]),
+    );
+    const vessel = nth(await svc.getVesselLocations(createMockContext()));
+    expect(vessel.departingTerminalName).toBe('Coupeville');
+    expect(vessel.arrivingTerminalName).toBe('Port Townsend');
+
+    mockFetch.mockResolvedValue(
+      makeResponse({
+        TerminalCombos: [
+          {
+            DepartingTerminalName: 'Port Townsend',
+            ArrivingTerminalName: 'Coupeville ',
+            Times: [],
+          },
+        ],
+      }),
+    );
+    const schedule = await svc.getSchedule(17, 11, '2027-01-01', false, createMockContext());
+    expect(schedule.arrivingTerminalName).toBe('Coupeville');
+
+    mockFetch.mockResolvedValue(
+      makeResponse([
+        {
+          TerminalID: 11,
+          TerminalName: 'Coupeville ',
+          DepartingSpaces: [
+            {
+              Departure: '/Date(1700000000000-0800)/',
+              SpaceForArrivalTerminals: [
+                { TerminalName: 'Port Townsend -> Coupeville ', ArrivalTerminalIDs: [11] },
+              ],
+            },
+          ],
+        },
+      ]),
+    );
+    const space = nth(await svc.getTerminalSailingSpace(createMockContext()));
+    expect(space.terminalName).toBe('Coupeville');
+    expect(nth(space.departingSpaces).itineraryLabel).toBe('Port Townsend -> Coupeville');
+  });
+
+  it('trims a padded alert summary, keeping its internal spacing', async () => {
+    const raw = [
+      { BulletinID: 9, RouteAlertText: 'Muk/Clin - Construction  activity at Clinton  ' },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    expect(nth(await svc.getAlerts(createMockContext())).alertDescription).toBe(
+      'Muk/Clin - Construction  activity at Clinton',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // HTTP error handling
 // ---------------------------------------------------------------------------
 
@@ -1055,6 +1868,115 @@ describe('FerryApiService — HTTP error handling', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Trip dates WSF has no schedule for
+// ---------------------------------------------------------------------------
+
+describe('FerryApiService — trip dates WSF has no schedule for', () => {
+  let svc: FerryApiService;
+
+  beforeEach(() => {
+    svc = new FerryApiService({} as never, {} as never);
+  });
+
+  /** WSF's rejection of a trip date outside its window, as served for a future and a past date. */
+  const tripDateRejection = (date: string) => ({
+    Message: `The TripDate ${date} is not valid. The valid range begins with today's date (9/24/2026) and extends to the end of the most recently posted schedule (3/20/2027).`,
+  });
+
+  it.each([
+    ['past the posted schedule', '2099-01-01', '1/1/2099'],
+    ['before today', '2026-09-23', '9/23/2026'],
+  ])(
+    'classifies an HTTP 400 TripDate rejection %s as non-retryable invalid_date',
+    async (_label, iso, wsf) => {
+      mockFetch.mockResolvedValue(makeResponse(tripDateRejection(wsf), 400));
+      const ctx = createMockContext({ errors: getFerryRoutes.errors });
+      const err = (await svc.getRoutes(iso, ctx).catch((e) => e)) as McpError;
+      expect(err).toBeInstanceOf(McpError);
+      expect(err.code).toBe(JsonRpcErrorCode.ValidationError);
+      expect(err.message).toContain(`The TripDate ${wsf} is not valid`);
+      expect(err.message).toContain('(3/20/2027)');
+      expect(err.data).toMatchObject({
+        reason: 'invalid_date',
+        retryable: false,
+        status: 400,
+        url: `https://www.wsdot.wa.gov/Ferries/API/Schedule/rest/routes/${iso}`,
+        recovery: { hint: expect.stringContaining('YYYY-MM-DD') },
+      });
+      expect(JSON.stringify(err.data)).not.toContain(ACCESS_CODE);
+    },
+  );
+
+  it('classifies the same rejection on the schedule endpoint', async () => {
+    mockFetch.mockResolvedValue(makeResponse(tripDateRejection('1/1/2099'), 400));
+    const err = (await svc
+      .getSchedule(7, 3, '2099-01-01', false, createMockContext())
+      .catch((e) => e)) as McpError;
+    expect(err.data).toMatchObject({ reason: 'invalid_date', retryable: false });
+  });
+
+  it('classifies a TripDate rejection served with HTTP 200', async () => {
+    mockFetch.mockResolvedValue(makeResponse(tripDateRejection('1/1/2099')));
+    const err = (await svc
+      .getRoutes('2099-01-01', createMockContext())
+      .catch((e) => e)) as McpError;
+    expect(err.code).toBe(JsonRpcErrorCode.ValidationError);
+    expect(err.data).toMatchObject({ reason: 'invalid_date', retryable: false, status: 200 });
+  });
+
+  it('leaves a terminal-combination rejection unclassified for the schedule tool to judge', async () => {
+    mockFetch.mockResolvedValue(
+      makeResponse(
+        {
+          Message:
+            'The terminal combination DepartingTerminalID 7 and ArrivingTerminalID 1 is not valid for a TripDate of 9/25/2026.',
+        },
+        400,
+      ),
+    );
+    const err = (await svc
+      .getSchedule(7, 1, '2026-09-25', false, createMockContext())
+      .catch((e) => e)) as McpError;
+    expect(err.data).toMatchObject({ reason: 'api_unavailable', status: 400 });
+  });
+
+  it.each([
+    [[{ RouteID: 5 }], true],
+    [[], false],
+    [null, false],
+  ])('hasRoutes reads routes/{TripDate} (%j → %s)', async (routes, expected) => {
+    mockFetch.mockResolvedValue(makeResponse(routes));
+    expect(await svc.hasRoutes('2027-01-15', createMockContext())).toBe(expected);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(String(nth(mockFetch.mock.calls)[0])).toContain('/Schedule/rest/routes/2027-01-15?');
+  });
+});
+
+describe('FerryApiService.getSchedule — the effective remainingOnly', () => {
+  let svc: FerryApiService;
+
+  beforeEach(() => {
+    svc = new FerryApiService({} as never, {} as never);
+    mockFetch.mockResolvedValue(makeResponse({ TerminalCombos: [] }));
+  });
+
+  it('reports false for a future date even when true was requested', async () => {
+    const schedule = await svc.getSchedule(7, 3, '2099-01-01', true, createMockContext());
+    expect(schedule.remainingOnly).toBe(false);
+  });
+
+  it('reports the requested value for today', async () => {
+    const today = FerryApiService.todayFerryDate();
+    expect((await svc.getSchedule(7, 3, today, true, createMockContext())).remainingOnly).toBe(
+      true,
+    );
+    expect((await svc.getSchedule(7, 3, today, false, createMockContext())).remainingOnly).toBe(
+      false,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Credential containment
 // ---------------------------------------------------------------------------
 
@@ -1088,7 +2010,7 @@ describe('FerryApiService — access code never reaches the error payload', () =
     const err = await svc.getTerminals(createMockContext()).catch((e) => e);
     expect(wirePayload(err)).not.toContain(ACCESS_CODE);
     expect((err as McpError).data?.url).toBe(
-      'https://www.wsdot.wa.gov/Ferries/API/Terminals/rest/terminalbasics',
+      'https://www.wsdot.wa.gov/Ferries/API/Terminals/rest/terminallocations',
     );
   });
 
@@ -1111,7 +2033,7 @@ describe('FerryApiService — access code never reaches the error payload', () =
   it('scrubs an upstream body that echoes the request query string', async () => {
     mockFetch.mockResolvedValue(
       makeResponse(
-        `Server Error. GET /Ferries/API/Terminals/rest/terminalbasics?apiaccesscode=${ACCESS_CODE} failed.`,
+        `Server Error. GET /Ferries/API/Terminals/rest/terminallocations?apiaccesscode=${ACCESS_CODE} failed.`,
         500,
         'text/plain',
       ),
@@ -1126,7 +2048,7 @@ describe('FerryApiService — access code never reaches the error payload', () =
     const networkError = Object.assign(
       new Error('Unable to connect. Is the computer able to access the url?'),
       {
-        path: `https://www.wsdot.wa.gov/Ferries/API/Terminals/rest/terminalbasics?apiaccesscode=${ACCESS_CODE}`,
+        path: `https://www.wsdot.wa.gov/Ferries/API/Terminals/rest/terminallocations?apiaccesscode=${ACCESS_CODE}`,
         code: 'ConnectionRefused',
       },
     );
@@ -1144,5 +2066,17 @@ describe('FerryApiService — access code never reaches the error payload', () =
     const err = await svc.getTerminals(createMockContext()).catch((e) => e);
     expect((err as McpError).code).toBe(JsonRpcErrorCode.Timeout);
     expect(wirePayload(err)).not.toContain(ACCESS_CODE);
+  });
+});
+
+describe('FerryApiService — the fetch stub', () => {
+  it('rejects a request no test stubbed, naming the endpoint without the credential', async () => {
+    const svc = new FerryApiService({} as never, {} as never);
+    const err = await svc.getTerminals(createMockContext()).catch((e) => e);
+    expect(err).toBeInstanceOf(McpError);
+    expect((err as McpError).message).toContain(
+      'Unstubbed fetch: https://www.wsdot.wa.gov/Ferries/API/Terminals/rest/terminallocations',
+    );
+    expect((err as McpError).message).not.toContain(ACCESS_CODE);
   });
 });

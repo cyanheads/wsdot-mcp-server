@@ -24,6 +24,7 @@ const mockService = {
   getVesselLocations: vi.fn(),
   getTerminalSailingSpace: vi.fn(),
   getAlerts: vi.fn(),
+  hasRoutes: vi.fn(),
 };
 
 const mockToFerryDate = vi.fn((isoDate: string) => isoDate.trim().slice(0, 10));
@@ -51,6 +52,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   // Restore default (valid) implementation before each test
   mockToFerryDate.mockImplementation((isoDate: string) => isoDate.trim().slice(0, 10));
+  // A date with routes unless a test says otherwise — the schedule tool asks only when WSF
+  // rejects a pair, to tell a bad pair from a date with no sailings loaded.
+  mockService.hasRoutes.mockResolvedValue(true);
 });
 
 // ---------------------------------------------------------------------------
@@ -261,6 +265,61 @@ describe('getFerryRoutes', () => {
     expect(text).toContain('1'); // routeId
   });
 
+  it('renders every terminal pair with both IDs and names', () => {
+    const text = formattedText(
+      getFerryRoutes.format!({
+        routes: [
+          {
+            ...routeFixture,
+            terminalPairs: [
+              {
+                departingTerminalId: 7,
+                departingTerminalName: 'Seattle',
+                arrivingTerminalId: 3,
+                arrivingTerminalName: 'Bainbridge Island',
+              },
+              {
+                departingTerminalId: 3,
+                departingTerminalName: 'Bainbridge Island',
+                arrivingTerminalId: 7,
+                arrivingTerminalName: 'Seattle',
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(text).toContain('**Terminal pairs** (departing → arriving):');
+    expect(text).toContain('- Seattle (7) → Bainbridge Island (3)');
+    expect(text).toContain('- Bainbridge Island (3) → Seattle (7)');
+  });
+
+  it('states an empty terminalPairs rather than omitting it', () => {
+    const text = formattedText(
+      getFerryRoutes.format!({ routes: [{ ...routeFixture, terminalPairs: [] }] }),
+    );
+    expect(text).toContain('**Terminal pairs:** none served on this date');
+  });
+
+  it('keeps a pair’s IDs when upstream omits its terminal names', () => {
+    const text = formattedText(
+      getFerryRoutes.format!({
+        routes: [
+          { ...routeFixture, terminalPairs: [{ departingTerminalId: 15, arrivingTerminalId: 18 }] },
+        ],
+      }),
+    );
+    expect(text).toContain('- terminal 15 → terminal 18');
+    expect(text).not.toContain('undefined');
+  });
+
+  it('says nothing about pairs for a route that carries none (no route ID to look up)', () => {
+    const text = formattedText(
+      getFerryRoutes.format!({ routes: [{ routeAbbrev: 'anon', description: 'No ID' }] }),
+    );
+    expect(text).not.toContain('Terminal pairs');
+  });
+
   it('surfaces invalid_date reason via ctx.fail when tripDate is invalid', async () => {
     mockToFerryDate.mockImplementation(() => {
       throw new Error('Invalid date');
@@ -285,6 +344,7 @@ describe('getFerrySchedule', () => {
     departingTerminalName: 'Seattle',
     arrivingTerminalName: 'Bainbridge Island',
     tripDate: '2026-05-23',
+    remainingOnly: false,
     sailings: [
       {
         departureTime: '6:00 AM',
@@ -457,7 +517,11 @@ describe('getFerrySchedule', () => {
     expect(err).toBeInstanceOf(McpError);
     expect((err as McpError).data).toMatchObject({
       reason: 'invalid_terminal_pair',
-      recovery: { hint: expect.stringContaining('wsdot_get_ferry_terminals') },
+      recovery: {
+        hint: expect.stringMatching(
+          /wsdot_get_ferry_routes for the same tripDate.*terminalPairs.*wsdot_get_ferry_terminals/,
+        ),
+      },
     });
   });
 
@@ -478,7 +542,11 @@ describe('getFerrySchedule', () => {
     expect(err).toBeInstanceOf(McpError);
     expect((err as McpError).data).toMatchObject({
       reason: 'invalid_terminal_pair',
-      recovery: { hint: expect.stringContaining('wsdot_get_ferry_terminals') },
+      recovery: {
+        hint: expect.stringMatching(
+          /wsdot_get_ferry_routes for the same tripDate.*terminalPairs.*wsdot_get_ferry_terminals/,
+        ),
+      },
     });
   });
 
@@ -500,6 +568,108 @@ describe('getFerrySchedule', () => {
     const err = await rejection(() => getFerrySchedule.handler(input, ctx));
     expect((err as McpError).code).toBe(JsonRpcErrorCode.ConfigurationError);
     expect((err as McpError).data).toMatchObject({ reason: 'invalid_access_code' });
+  });
+
+  it('passes an invalid_date from getSchedule through unchanged, without asking for routes', async () => {
+    // The service classifies WSF's own TripDate rejection; the tool must not relabel it as a
+    // terminal-pair fault, whatever its status.
+    const dateRejection = new McpError(
+      JsonRpcErrorCode.ValidationError,
+      "WSF has no schedule for trip date 2099-01-01: The TripDate 1/1/2099 is not valid. The valid range begins with today's date (9/24/2026) and extends to the end of the most recently posted schedule (3/20/2027).",
+      { reason: 'invalid_date', status: 400, retryable: false },
+    );
+    mockService.getSchedule.mockRejectedValue(dateRejection);
+    const ctx = createMockContext({ errors: getFerrySchedule.errors });
+    const input = getFerrySchedule.input.parse({
+      departingTerminalId: 7,
+      arrivingTerminalId: 3,
+      tripDate: '2099-01-01',
+    });
+    const err = await rejection(() => getFerrySchedule.handler(input, ctx));
+    expect(err).toBe(dateRejection);
+    expect(mockService.hasRoutes).not.toHaveBeenCalled();
+  });
+
+  it('maps a pair rejection on a date with no routes to invalid_date', async () => {
+    mockService.getSchedule.mockRejectedValue(
+      new McpError(JsonRpcErrorCode.ServiceUnavailable, 'WSF Ferry API returned HTTP 400.', {
+        reason: 'api_unavailable',
+        status: 400,
+        retryable: false,
+      }),
+    );
+    mockService.hasRoutes.mockResolvedValue(false);
+    const ctx = createMockContext({ errors: getFerrySchedule.errors });
+    const input = getFerrySchedule.input.parse({
+      departingTerminalId: 7,
+      arrivingTerminalId: 3,
+      tripDate: '2027-01-15',
+    });
+    const err = await rejection(() => getFerrySchedule.handler(input, ctx));
+    expect((err as McpError).code).toBe(JsonRpcErrorCode.ValidationError);
+    expect((err as McpError).message).toContain('2027-01-15');
+    expect((err as McpError).data).toMatchObject({
+      reason: 'invalid_date',
+      retryable: false,
+      recovery: { hint: expect.any(String) },
+    });
+    expect(mockService.hasRoutes).toHaveBeenCalledWith('2027-01-15', ctx);
+  });
+
+  it('keeps a schedule outage as api_unavailable without asking for routes', async () => {
+    const outage = new McpError(
+      JsonRpcErrorCode.ServiceUnavailable,
+      'WSF Ferry API returned HTTP 503.',
+      { reason: 'api_unavailable', status: 503 },
+    );
+    mockService.getSchedule.mockRejectedValue(outage);
+    const ctx = createMockContext({ errors: getFerrySchedule.errors });
+    const input = getFerrySchedule.input.parse({
+      departingTerminalId: 7,
+      arrivingTerminalId: 3,
+      tripDate: '2026-12-28',
+    });
+    expect(await rejection(() => getFerrySchedule.handler(input, ctx))).toBe(outage);
+    expect(mockService.hasRoutes).not.toHaveBeenCalled();
+  });
+
+  it('surfaces an outage on the routes check as api_unavailable, not as invalid_date', async () => {
+    mockService.getSchedule.mockRejectedValue(
+      new McpError(JsonRpcErrorCode.ServiceUnavailable, 'WSF Ferry API returned HTTP 400.', {
+        reason: 'api_unavailable',
+        status: 400,
+        retryable: false,
+      }),
+    );
+    const probeOutage = new McpError(
+      JsonRpcErrorCode.ServiceUnavailable,
+      'WSF Ferry API returned HTTP 503.',
+      { reason: 'api_unavailable', status: 503 },
+    );
+    mockService.hasRoutes.mockRejectedValue(probeOutage);
+    const ctx = createMockContext({ errors: getFerrySchedule.errors });
+    const input = getFerrySchedule.input.parse({
+      departingTerminalId: 7,
+      arrivingTerminalId: 3,
+      tripDate: '2026-12-28',
+    });
+    expect(await rejection(() => getFerrySchedule.handler(input, ctx))).toBe(probeOutage);
+  });
+
+  it('reports the effective remainingOnly the service returns, not the requested one', async () => {
+    mockService.getSchedule.mockResolvedValue({ ...scheduleFixture, sailings: [] });
+    const ctx = createMockContext({ errors: getFerrySchedule.errors });
+    const input = getFerrySchedule.input.parse({
+      departingTerminalId: 7,
+      arrivingTerminalId: 3,
+      tripDate: '2026-06-01',
+      remainingOnly: true,
+    });
+    await getFerrySchedule.handler(input, ctx);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.remainingOnly).toBe(false);
+    expect(enrichment.notice).toContain('2026-06-01');
+    expect(enrichment.notice).not.toContain('remaining sailings today');
   });
 
   it('re-throws non-WSF errors from getSchedule without wrapping', async () => {
@@ -1237,9 +1407,119 @@ describe('ferry format() parity — false, empty, and one-sided values', () => {
       );
       expect(text).toContain('47.6237, longitude not reported');
     });
+
+    it('renders a terminal with no ID or name under a generic label, keeping its other fields', () => {
+      const text = render(
+        getFerryTerminals.format!({
+          terminals: [{ terminalAbbrev: 'COU', latitude: 48.1597, longitude: -122.6725 }],
+        }),
+      );
+      expect(text).toBe('- **Terminal** (COU) — 48.1597, -122.6725');
+    });
+
+    it('keeps the ID on a terminal that has no name', () => {
+      const text = render(getFerryTerminals.format!({ terminals: [{ terminalId: 11 }] }));
+      expect(text).toBe('- **Terminal** — ID: 11');
+    });
+
+    it('renders a named terminal with no ID and no coordinates as the name alone', () => {
+      const text = render(
+        getFerryTerminals.format!({ terminals: [{ terminalName: 'Coupeville' }] }),
+      );
+      expect(text).toBe('- **Coupeville**');
+    });
   });
 
   describe('getFerrySchedule', () => {
+    const pair = {
+      departingTerminalName: 'Orcas Island',
+      arrivingTerminalName: 'Shaw Island',
+    };
+
+    it('renders loadingRule, vesselId, and accessibility on every sailing, a rule-1 sailing included', () => {
+      const text = render(
+        getFerrySchedule.format!({
+          ...pair,
+          annotations: ['No interisland vehicles. Foot passenger and bikes okay.'],
+          sailings: [
+            {
+              departureTime: 'T1',
+              vesselName: 'Chelan',
+              vesselId: 2,
+              loadingRule: 3,
+              vesselHandicapAccessible: true,
+              annotationIndexes: [],
+            },
+            {
+              departureTime: 'T2',
+              vesselName: 'Yakima',
+              vesselId: 38,
+              loadingRule: 1,
+              vesselHandicapAccessible: false,
+              annotationIndexes: [0],
+            },
+          ],
+        }),
+      );
+      expect(text).toContain(
+        '- T1 | Chelan (vesselId 2) | loadingRule 3 | vesselHandicapAccessible: true\n- T2',
+      );
+      expect(text).toContain(
+        '- T2 | Yakima (vesselId 38) | loadingRule 1 | vesselHandicapAccessible: false\n' +
+          '  - [0] No interisland vehicles. Foot passenger and bikes okay.',
+      );
+      expect(text).toContain(
+        '**Annotations** (sailings below cite them by index):\n- [0] No interisland vehicles.',
+      );
+    });
+
+    it('states an empty annotations list, and renders no note line for an empty annotationIndexes', () => {
+      const text = render(
+        getFerrySchedule.format!({
+          ...pair,
+          annotations: [],
+          sailings: [{ departureTime: 'T1', vesselName: 'Chelan', annotationIndexes: [] }],
+        }),
+      );
+      expect(text).toContain('**Annotations:** none');
+      expect(text).toContain('- T1 | Chelan');
+      expect(text).not.toContain('- [');
+    });
+
+    it('says nothing about annotations when upstream sent none', () => {
+      const text = render(
+        getFerrySchedule.format!({ ...pair, sailings: [{ departureTime: 'T1' }] }),
+      );
+      expect(text).not.toContain('Annotations');
+      expect(text).toContain('- T1');
+    });
+
+    it('renders the pair-wide sailing note', () => {
+      const text = render(
+        getFerrySchedule.format!({
+          ...pair,
+          sailingNotes: 'Boarding pass required for vehicles (https://tinyurl.com/mptshczh).',
+          sailings: [],
+        }),
+      );
+      expect(text).toContain(
+        '**Sailing notes:** Boarding pass required for vehicles (https://tinyurl.com/mptshczh).',
+      );
+    });
+
+    it('keeps a vessel ID whose name is absent, and a multi-line note under its sailing', () => {
+      const text = render(
+        getFerrySchedule.format!({
+          ...pair,
+          annotations: ['Line one.\nLine two.'],
+          sailings: [{ departureTime: 'T1', vesselId: 25, annotationIndexes: [0, 4] }],
+        }),
+      );
+      expect(text).toContain('- T1 | (vesselId 25)\n  - [0] Line one.\n    Line two.');
+      // An index format() is handed directly that points past the list is named, not dropped.
+      expect(text).toContain('  - [4] not listed in annotations');
+    });
+
     it('documents sailing timestamps as UTC on both time fields', () => {
       // tripDate is the Pacific service day while the sailing times are UTC, so an evening
       // sailing carries the next calendar date and the schemas must say so.
@@ -1283,6 +1563,8 @@ describe('terminal ID inputs', () => {
     mockService.getSchedule.mockResolvedValue({
       departingTerminalName: 'Seattle',
       arrivingTerminalName: 'Bainbridge Island',
+      tripDate: '2026-05-23',
+      remainingOnly: false,
       sailings: [{ departureTime: '2026-09-24T22:00:00.000Z', vesselName: 'Wenatchee' }],
     });
     const result = await runToolContract(getFerrySchedule, {

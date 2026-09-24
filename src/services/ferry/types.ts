@@ -3,7 +3,10 @@
  * @module services/ferry/types
  */
 
-/** Raw ferry terminal from upstream API. */
+/**
+ * Raw ferry terminal from `Terminals/rest/terminallocations`. The address, directions, and map-link
+ * fields that endpoint also sends are not read.
+ */
 export interface RawFerryTerminal {
   Latitude?: number | null;
   Longitude?: number | null;
@@ -12,13 +15,13 @@ export interface RawFerryTerminal {
   TerminalName?: string | null;
 }
 
-/** Normalized ferry terminal. */
+/** Normalized ferry terminal. Identity is optional too — never fabricated when absent. */
 export interface FerryTerminal {
   latitude?: number;
   longitude?: number;
   terminalAbbrev?: string;
-  terminalId: number;
-  terminalName: string;
+  terminalId?: number;
+  terminalName?: string;
 }
 
 /** Raw ferry route from upstream API. */
@@ -33,6 +36,30 @@ export interface FerryRoute {
   description?: string;
   routeAbbrev?: string;
   routeId?: number;
+  /**
+   * Directed terminal pairs the route serves on the trip date — `[]` when it serves none. Absent
+   * only when upstream omitted the route's ID, which the lookup is keyed by.
+   */
+  terminalPairs?: TerminalPair[];
+}
+
+/** Raw pair from `Schedule/rest/terminalsandmatesbyroute/{TripDate}/{RouteID}`. */
+export interface RawTerminalPair {
+  ArrivingDescription?: string | null;
+  ArrivingTerminalID?: number | null;
+  DepartingDescription?: string | null;
+  DepartingTerminalID?: number | null;
+}
+
+/**
+ * A directed departing → arriving terminal pair with service on a trip date. Both IDs are required:
+ * a pair is listed so it can be passed to the schedule tool, and one missing an ID cannot be.
+ */
+export interface TerminalPair {
+  arrivingTerminalId: number;
+  arrivingTerminalName?: string;
+  departingTerminalId: number;
+  departingTerminalName?: string;
 }
 
 /**
@@ -42,20 +69,32 @@ export interface FerryRoute {
  * terminal sailing-space feed's `IsCancelled`.
  */
 export interface RawSailing {
+  /** Positions in the combo's `Annotations` of the notes that apply to this sailing. */
+  AnnotationIndexes?: number[] | null;
   /** Actual API field name (was ArrivalTime in older API). */
   ArrivingTime?: string | null;
   /** Actual API field name (was DepartureTime in older API). */
   DepartingTime?: string | null;
+  /**
+   * Undocumented loading-rule code. Observed: 3 on nearly every sailing, 1 only on sailings whose
+   * annotation restricts vehicles. Carried as the number WSF sends — no meaning is asserted.
+   */
+  LoadingRule?: number | null;
+  VesselHandicapAccessible?: boolean | null;
   VesselID?: number | null;
   VesselName?: string | null;
 }
 
 /** Terminal combo entry within a schedule response. */
 export interface RawTerminalCombo {
+  /** Notes sailings reference by position. Authored as HTML (`<a href>`, `<i>`). */
+  Annotations?: string[] | null;
   ArrivingTerminalID?: number | null;
   ArrivingTerminalName?: string | null;
   DepartingTerminalID?: number | null;
   DepartingTerminalName?: string | null;
+  /** A note covering the whole pair, authored as HTML; `""` on almost every pair. */
+  SailingNotes?: string | null;
   Times?: RawSailing[] | null;
 }
 
@@ -68,15 +107,26 @@ export interface RawFerrySchedule {
 
 /** Normalized sailing. */
 export interface Sailing {
+  /** Positions in the schedule's `annotations`; each one resolves to an entry. */
+  annotationIndexes?: number[];
   arrivalTime?: string;
   departureTime?: string;
+  loadingRule?: number;
+  vesselHandicapAccessible?: boolean;
+  vesselId?: number;
   vesselName?: string;
 }
 
 /** Normalized ferry schedule. */
 export interface FerrySchedule {
+  /** The pair's notes as plain text, blank ones removed; sailings point at them by position. */
+  annotations?: string[];
   arrivingTerminalName?: string;
   departingTerminalName?: string;
+  /** Whether only today's remaining sailings were requested upstream — false for any other date. */
+  remainingOnly: boolean;
+  /** The pair-wide note as plain text. */
+  sailingNotes?: string;
   sailings: Sailing[];
   tripDate: string;
 }

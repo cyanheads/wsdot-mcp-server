@@ -10,10 +10,12 @@ import { FerryApiService, getFerryApiService } from '@/services/ferry/ferry-serv
 export const getFerryRoutes = tool('wsdot_get_ferry_routes', {
   title: 'Get Ferry Routes',
   description:
-    'Returns the main WSF ferry routes operating on a given date. ' +
+    'Returns the main WSF ferry routes operating on a given date, each with the directed terminal ' +
+    'pairs it serves that day (terminalPairs) — departing and arriving terminal IDs and names, which ' +
+    'are exactly the pairs wsdot_get_ferry_schedule accepts for that date. ' +
     'Route IDs correspond to impactedRouteIds in ferry alerts from wsdot_get_ferry_alerts, though some ' +
     'alert route IDs (seasonal, San Juan interisland, or Sidney B.C.) may not appear in this list. ' +
-    'To get terminal IDs for schedule and space lookups, use wsdot_get_ferry_terminals.',
+    'For the full terminal list with coordinates, use wsdot_get_ferry_terminals.',
   annotations: { readOnlyHint: true },
   input: z.object({
     tripDate: z
@@ -43,6 +45,38 @@ export const getFerryRoutes = tool('wsdot_get_ferry_routes', {
               .string()
               .optional()
               .describe('Full route description (e.g. "Seattle/Bainbridge Island").'),
+            terminalPairs: z
+              .array(
+                z
+                  .object({
+                    departingTerminalId: z
+                      .number()
+                      .describe(
+                        'Departing terminal ID — the departingTerminalId to pass to wsdot_get_ferry_schedule.',
+                      ),
+                    departingTerminalName: z
+                      .string()
+                      .optional()
+                      .describe('Departing terminal name. Absent when upstream omits it.'),
+                    arrivingTerminalId: z
+                      .number()
+                      .describe(
+                        'Arriving terminal ID — the arrivingTerminalId to pass to wsdot_get_ferry_schedule.',
+                      ),
+                    arrivingTerminalName: z
+                      .string()
+                      .optional()
+                      .describe('Arriving terminal name. Absent when upstream omits it.'),
+                  })
+                  .describe(
+                    'One direction of service between two terminals on the requested date.',
+                  ),
+              )
+              .optional()
+              .describe(
+                'Directed terminal pairs this route serves on the requested date; empty when it serves none. ' +
+                  'Absent only when upstream omits the route ID the lookup needs.',
+              ),
           })
           .describe('A WSF ferry route operating on the requested date.'),
       )
@@ -82,8 +116,10 @@ export const getFerryRoutes = tool('wsdot_get_ferry_routes', {
     {
       reason: 'invalid_date',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'The provided tripDate is not a valid ISO 8601 date.',
-      recovery: 'Provide a valid date in YYYY-MM-DD format, such as 2026-05-23.',
+      when: 'The tripDate is not a valid YYYY-MM-DD date, or WSF rejects it as outside the dates it has published a schedule for.',
+      retryable: false,
+      recovery:
+        'Use a YYYY-MM-DD date from today (Pacific time) through the end of the posted schedule; when WSF rejects the date, the message states the range it accepts.',
     },
   ],
 
@@ -107,7 +143,7 @@ export const getFerryRoutes = tool('wsdot_get_ferry_routes', {
     ctx.enrich({ tripDate, totalCount: routes.length });
     if (routes.length === 0) {
       ctx.enrich.notice(
-        `No ferry routes found for ${tripDate}. The WSF API may be temporarily unavailable or no routes operate on this date — retry in 30 seconds.`,
+        `WSF lists no routes for ${tripDate}. The date is inside the window WSF accepts, but no sailings are loaded for it yet — typically a season whose schedule has not been posted. Try an earlier date.`,
       );
     }
 
@@ -118,12 +154,24 @@ export const getFerryRoutes = tool('wsdot_get_ferry_routes', {
     if (result.routes.length === 0) {
       return [{ type: 'text', text: 'No ferry routes found for this date.' }];
     }
+    const terminal = (id: number, name: string | undefined) =>
+      name ? `${name} (${id})` : `terminal ${id}`;
     const lines: string[] = [];
     for (const r of result.routes) {
       const name = r.description ?? r.routeAbbrev ?? 'Unknown route';
       lines.push(`### ${name}`);
       if (r.routeAbbrev != null) lines.push(`**Abbrev:** ${r.routeAbbrev}`);
       if (r.routeId != null) lines.push(`**Route ID:** ${r.routeId}`);
+      if (r.terminalPairs?.length === 0) {
+        lines.push('**Terminal pairs:** none served on this date');
+      } else if (r.terminalPairs) {
+        lines.push('**Terminal pairs** (departing → arriving):');
+        for (const p of r.terminalPairs) {
+          lines.push(
+            `- ${terminal(p.departingTerminalId, p.departingTerminalName)} → ${terminal(p.arrivingTerminalId, p.arrivingTerminalName)}`,
+          );
+        }
+      }
       lines.push('');
     }
     return [{ type: 'text', text: lines.join('\n') }];

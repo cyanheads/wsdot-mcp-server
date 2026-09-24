@@ -11,7 +11,7 @@ import { getFerryApiService } from '@/services/ferry/ferry-service.js';
 export const getFerryTerminals = tool('wsdot_get_ferry_terminals', {
   title: 'Get Ferry Terminals',
   description:
-    'Returns all WSF ferry terminals with their numeric IDs, names, and abbreviations. ' +
+    'Returns all WSF ferry terminals with their numeric IDs, names, abbreviations, and coordinates. ' +
     'Call this first to resolve human-readable terminal names (e.g. "Bainbridge Island", ' +
     '"Seattle", "Kingston") to the numeric terminal IDs required by the schedule and space tools. ' +
     'The terminal list is small (20 terminals) and rarely changes.',
@@ -24,8 +24,16 @@ export const getFerryTerminals = tool('wsdot_get_ferry_terminals', {
           .object({
             terminalId: z
               .number()
-              .describe('Numeric terminal ID used in schedule and space API calls.'),
-            terminalName: z.string().describe('Full terminal name (e.g. "Bainbridge Island").'),
+              .optional()
+              .describe(
+                'Numeric terminal ID used in schedule and space API calls. Absent when upstream omits it.',
+              ),
+            terminalName: z
+              .string()
+              .optional()
+              .describe(
+                'Full terminal name (e.g. "Bainbridge Island"). Absent when upstream omits it.',
+              ),
             terminalAbbrev: z.string().optional().describe('Short abbreviation (e.g. "BI").'),
             latitude: z.number().optional().describe('Terminal latitude.'),
             longitude: z.number().optional().describe('Terminal longitude.'),
@@ -85,9 +93,12 @@ export const getFerryTerminals = tool('wsdot_get_ferry_terminals', {
     const lines: string[] = [];
     for (const t of result.terminals) {
       const abbrev = t.terminalAbbrev ? ` (${t.terminalAbbrev})` : '';
-      const pair = coordinatePair(t.latitude, t.longitude);
+      const details = [
+        t.terminalId != null ? `ID: ${t.terminalId}` : undefined,
+        coordinatePair(t.latitude, t.longitude),
+      ].filter(Boolean);
       lines.push(
-        `- **${t.terminalName}**${abbrev} — ID: ${t.terminalId}${pair ? ` | ${pair}` : ''}`,
+        `- **${t.terminalName ?? 'Terminal'}**${abbrev}${details.length > 0 ? ` — ${details.join(' | ')}` : ''}`,
       );
     }
     return [{ type: 'text', text: lines.join('\n') }];
