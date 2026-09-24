@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.0](changelog/0.3.x/0.3.0.md) — 2026-09-24 · ⚠️ Breaking
+
+Traffic tools reject invalid regions and reversed milepost ranges, toll rates gain a stateRoute filter and cameras a titleContains filter, and each traffic page now ends at a 24,000-byte budget per surface.
+
 ## [0.2.6](changelog/0.2.x/0.2.6.md) — 2026-09-20
 
 mcp-ts-core 0.13.6 — invalid_date and invalid_terminal_pair recovery hints now reach the wire on the ferry route and schedule tools, matching their declared error contracts.
