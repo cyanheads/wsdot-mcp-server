@@ -12,12 +12,12 @@
 | `wsdot_get_toll_rates` | Current dynamic toll rates on SR 99, SR 167, I-405, SR 509, SR 520, optionally filtered to one route | `stateRoute?`, `offset?`, `limit?` | `readOnlyHint: true` |
 | `wsdot_get_border_waits` | Canada border crossing wait times for all WA crossings (I-5 Peace Arch, SR 543 Pacific Highway, SR 539 Lynden, SR 9 Sumas) | (none — returns all crossings) | `readOnlyHint: true` |
 | `wsdot_search_cameras` | Highway camera locations and metadata URLs (no image bytes — WSDOT copyright) filtered by route, region, milepost range, or title words | `stateRoute?`, `region?`, `startMilepost?`, `endMilepost?`, `titleContains?`, `offset?`, `limit?` | `readOnlyHint: true` |
-| `wsdot_get_ferry_routes` | All WSF ferry routes operating on a given date — route ID, abbreviation, and description for each, for route discovery and ferry-alert cross-reference (numeric terminal IDs come from `wsdot_get_ferry_terminals`) | `tripDate?` (defaults to today) | `readOnlyHint: true` |
-| `wsdot_get_ferry_schedule` | Departure times for a specific ferry route on a given date, optionally filtered to remaining sailings only | `departingTerminalId`, `arrivingTerminalId`, `tripDate?`, `remainingOnly?` | `readOnlyHint: true` |
+| `wsdot_get_ferry_routes` | All WSF ferry routes operating on a given date — route ID, abbreviation, description, and the directed terminal pairs each serves that day (the pairs `wsdot_get_ferry_schedule` accepts), for route discovery and ferry-alert cross-reference | `tripDate?` (defaults to today) | `readOnlyHint: true` |
+| `wsdot_get_ferry_schedule` | Departure times for a specific ferry route on a given date, optionally filtered to remaining sailings only, with each sailing's vessel ID, loading rule, and annotations | `departingTerminalId`, `arrivingTerminalId`, `tripDate?`, `remainingOnly?` | `readOnlyHint: true` |
 | `wsdot_get_vessel_locations` | Real-time AIS positions, speed, heading, ETA, and dock status for all active WSF vessels — use for "where is the ferry now?" or tracking a named vessel | (none — returns all vessels) | `readOnlyHint: true` |
 | `wsdot_get_terminal_space` | Real-time drive-up and reservable vehicle space available at each terminal for upcoming sailings | `departingTerminalId?`, `offset?`, `limit?` | `readOnlyHint: true` |
 | `wsdot_get_ferry_alerts` | Active service disruptions and bulletins across the WSF system | (none — returns all active alerts) | `readOnlyHint: true` |
-| `wsdot_get_ferry_terminals` | Terminal list with IDs, names, and abbreviations — call first to resolve human-readable names (e.g. "Bainbridge Island") to numeric terminal IDs required by schedule and space tools | (none — returns all terminals) | `readOnlyHint: true` |
+| `wsdot_get_ferry_terminals` | Terminal list with IDs, names, abbreviations, and coordinates — call first to resolve human-readable names (e.g. "Bainbridge Island") to numeric terminal IDs required by schedule and space tools | (none — returns all terminals) | `readOnlyHint: true` |
 
 ### Resources
 
@@ -53,9 +53,9 @@ Both upstream APIs share a single access code (email registration, free).
 - **JSON only** — all endpoints support `AsJson` or JSON-native paths; no XML parsing
 - **Camera images** — surface metadata and image URLs only; do not proxy JPEG bytes (WSDOT copyright)
 - **Ferry terminal IDs** — WSF API uses numeric terminal IDs, not names; `wsdot_get_ferry_terminals` provides the lookup
-- **Date format** — ferry API uses `M/D/YYYY` format in URL path segments for `TripDate`
+- **Date format** — ferry API accepts `YYYY-MM-DD` in the `TripDate` URL path segment; the service sends the validated ISO date unchanged. WSF's own error messages echo the date back as `M/D/YYYY`
 - **No upstream pagination** — no endpoint paginates; every list endpoint returns the complete dataset in a single response. `wsdot_search_alerts`, `wsdot_get_travel_times`, `wsdot_get_toll_rates`, `wsdot_search_cameras`, and `wsdot_get_terminal_space` page in the tool handler instead, slicing the full fetched set so `structuredContent` and `content[]` carry the identical page
-- **Format parity** — every field and enrichment value in `structuredContent` gets an explicit representation in `content[]`, including `false`, empty arrays, and one populated half of an independently-optional pair. Clients read different surfaces; a conditional that renders only the populated case makes them see different data
+- **Format parity** — every field and enrichment value in `structuredContent` gets an explicit representation in `content[]`, including `false`, empty arrays, and one populated half of an independently-optional pair. Clients read different surfaces; a conditional that renders only the populated case makes them see different data. A blank string never reaches `format()`: the services apply one rule to every optional upstream string (`value?.trim() || undefined`, `src/services/text-field.ts`), so an empty, whitespace-only, or markup-only value is absent from both surfaces and a populated one is kept with its ends trimmed. A missing ID or name is absent too, never `0` or `'Unknown'`
 
 ---
 
@@ -66,12 +66,12 @@ Both upstream APIs share a single access code (email registration, free).
 | `TrafficApiService` | WSDOT Traffic API (`wsdot.wa.gov/Traffic/api/`) | `wsdot_get_mountain_passes`, `wsdot_search_alerts`, `wsdot_get_travel_times`, `wsdot_get_toll_rates`, `wsdot_get_border_waits`, `wsdot_search_cameras` |
 | `FerryApiService` | WSDOT Ferries API (`wsdot.wa.gov/Ferries/API/`) | `wsdot_get_ferry_routes`, `wsdot_get_ferry_schedule`, `wsdot_get_vessel_locations`, `wsdot_get_terminal_space`, `wsdot_get_ferry_alerts`, `wsdot_get_ferry_terminals` |
 
-Both services are read-only HTTP clients — no shared state beyond the access code and base URL. Init/accessor pattern: initialize once at startup, accessed via `getTrafficApiService()` / `getFerryApiService()`.
+Both services are read-only HTTP clients. The one piece of state either holds is `FerryApiService`'s in-memory cache of route terminal pairs (see [decision 13](#design-decisions)). Init/accessor pattern: initialize once at startup, accessed via `getTrafficApiService()` / `getFerryApiService()`.
 
 **API quirks each service must handle:**
 
 - `TrafficApiService` — auth failure returns an HTML page (`Content-Type: text/html`, body `The supplied access code was missing or invalid.`) instead of a JSON error. The fetch layer must check `Content-Type` before attempting JSON parse; an HTML body should throw `ServiceUnavailable` with a message directing the user to verify `WSDOT_ACCESS_CODE`.
-- `FerryApiService` — schedule endpoints report an invalid terminal ID pair as a JSON body `{"Message":"<human-readable error>"}`, served as HTTP 400 today and historically as HTTP 200. The response handler checks both the status and a top-level `Message` field, and the schedule tool maps the rejection to `invalid_terminal_pair`.
+- `FerryApiService` — schedule endpoints report a rejected request as a JSON body `{"Message":"<human-readable error>"}`, served as HTTP 400 today and historically as HTTP 200. The response handler checks both the status and a top-level `Message` field. A message of the form `The TripDate … is not valid. The valid range begins with today's date (…) and extends to the end of the most recently posted schedule (…)` is classified in the service as `invalid_date` (non-retryable) whatever the status; the schedule tool maps every other rejection to `invalid_terminal_pair`, or to `invalid_date` when the date lists no routes.
 
 ---
 
@@ -119,15 +119,17 @@ Excluded endpoints: TrafficFlow (sensor-level speed/volume data — too granular
 
 | Noun | Operation | Endpoint |
 |:-----|:----------|:---------|
-| Terminal | list | `GET Terminals/rest/terminalbasics` |
+| Terminal | list (with coordinates) | `GET Terminals/rest/terminallocations` |
 | Route | list-by-date | `GET Schedule/rest/routes/{TripDate}` |
+| TerminalPair | list-by-date-and-route | `GET Schedule/rest/terminalsandmatesbyroute/{TripDate}/{RouteID}` |
+| CacheFlushDate | get | `GET Schedule/rest/cacheflushdate` |
 | Schedule | by-terminal-pair | `GET Schedule/rest/schedule/{TripDate}/{DepartingTerminalID}/{ArrivingTerminalID}` |
 | Schedule | today-remaining | `GET Schedule/rest/scheduletoday/{DepartingTerminalID}/{ArrivingTerminalID}/{OnlyRemainingTimes}` |
 | Alert | list | `GET Schedule/rest/alerts` |
 | VesselLocation | list-all | `GET Vessels/rest/vessellocations` |
 | TerminalSailingSpace | list-all | `GET Terminals/rest/terminalsailingspace` |
 
-Excluded: `/allsailings` (full season dump — too large, not useful per-query), `/sailings/{SchedRouteID}` (requires SchedRouteID lookup chain — use schedule-by-terminal-pair instead), `/timeadj` (time adjustment metadata — internal schedule tooling), `/vesselhistory` (historical data, not traveler-relevant), `/vesselaccommodations` (vessel amenities — low query frequency), fares API (complex multi-param structure, low agent value vs. cost of implementation; noted as v2 candidate).
+Excluded: `/validdaterange` (a TripDate rejection already states WSF's window, and a pre-check would miss in-window dates with no sailings loaded), `/terminalsandmates/{TripDate}` (every served pair in one request, but without a `RouteID` to join a pair back to its route), `/allsailings` (full season dump — too large, not useful per-query), `/sailings/{SchedRouteID}` (requires SchedRouteID lookup chain — use schedule-by-terminal-pair instead), `/timeadj` (time adjustment metadata — internal schedule tooling), `/vesselhistory` (historical data, not traveler-relevant), `/vesselaccommodations` (vessel amenities — low query frequency), fares API (complex multi-param structure, low agent value vs. cost of implementation; noted as v2 candidate).
 
 ---
 
@@ -140,7 +142,7 @@ Every tool declares the same two error reasons unless noted: `api_unavailable` (
 ### `wsdot_get_mountain_passes`
 
 - **Input:** none
-- **Output:** `passes[]` — `mountainPassId`, `mountainPassName`, `elevation?`, `temperatureInFahrenheit?`, `weatherCondition?`, `roadCondition?`, `travelAdvisoryActive?`, `restrictionOne?` (`text?`, `travelDirection?`), `restrictionTwo?` (`text?`, `travelDirection?`), `dateUpdated?`, `latitude?`, `longitude?`
+- **Output:** `passes[]` — `mountainPassId?`, `mountainPassName?`, `elevation?`, `temperatureInFahrenheit?`, `weatherCondition?`, `roadCondition?`, `travelAdvisoryActive?`, `restrictionOne?` (`text?`, `travelDirection?`), `restrictionTwo?` (`text?`, `travelDirection?`), `dateUpdated?`, `latitude?`, `longitude?`
 - **Enrichment:** `totalCount`, `notice?`
 - **Notes:** Upstream `RestrictionOne`/`RestrictionTwo` are `TravelRestriction` objects carrying `TravelRestrictionComment` and `RestrictionType`; both are flattened to `text` and `travelDirection`, and either can be absent. `TemperatureInFahrenheit` is nullable upstream. All passes are returned (small fixed set, 16 rows); no filter parameter.
 
@@ -187,26 +189,28 @@ Every tool declares the same two error reasons unless noted: `api_unavailable` (
 ### `wsdot_get_ferry_terminals`
 
 - **Input:** none
-- **Output:** `terminals[]` — `terminalId`, `terminalName`, `terminalAbbrev?`, `latitude?`, `longitude?`
+- **Output:** `terminals[]` — `terminalId?`, `terminalName?`, `terminalAbbrev?`, `latitude?`, `longitude?`
 - **Enrichment:** `totalCount`, `notice?`
-- **Notes:** The reference step before either schedule or space lookup — agents need `terminalId`. Small, stable set (20 terminals).
+- **Notes:** The reference step before either schedule or space lookup — agents need `terminalId`. Small, stable set (20 terminals). Uses `GET Terminals/rest/terminallocations`, which returns the same IDs, names, and abbreviations as `terminalbasics` in the same order, plus coordinates on every record; the address, directions, and map-link fields it also carries are not mapped.
 
 ### `wsdot_get_ferry_routes`
 
-- **Input:** `tripDate?` (ISO 8601 `YYYY-MM-DD`, defaults to today; converted internally to `M/D/YYYY`)
-- **Output:** `routes[]` — `routeId?`, `routeAbbrev?`, `description?`
+- **Input:** `tripDate?` (ISO 8601 `YYYY-MM-DD`, defaults to today; sent to WSF as-is)
+- **Output:** `routes[]` — `routeId?`, `routeAbbrev?`, `description?`, `terminalPairs?[]` (`departingTerminalId`, `departingTerminalName?`, `arrivingTerminalId`, `arrivingTerminalName?`)
 - **Enrichment:** `tripDate`, `totalCount`, `notice?`
-- **Errors:** the two shared reasons, plus `invalid_date` (`ValidationError`)
-- **Notes:** Uses `GET Schedule/rest/routes/{TripDate}`. Route identity only — no terminal IDs (those come from `wsdot_get_ferry_terminals`). `routeId` matches `impactedRouteIds` from `wsdot_get_ferry_alerts`, so this tool resolves alert route IDs to readable names; some seasonal, interisland, or Sidney B.C. route IDs will not appear for a given date.
+- **Errors:** the two shared reasons, plus `invalid_date` (`ValidationError`, non-retryable) — a malformed date, or one WSF rejects as outside its published window, with WSF's range in the message
+- **Notes:** Uses `GET Schedule/rest/routes/{TripDate}`, then `GET Schedule/rest/terminalsandmatesbyroute/{TripDate}/{RouteID}` once per route (at most five in flight) for `terminalPairs` — the directed pairs the route serves that date, which are exactly the pairs `wsdot_get_ferry_schedule` accepts; their union across routes is WSF's `terminalsandmates/{TripDate}` set. A route serving none carries `[]`; `terminalPairs` is absent only on a route with no `routeId` to look up with, and a pair missing either terminal ID is dropped. Pair lookups are cached per trip date and dropped when `Schedule/rest/cacheflushdate` changes, so a repeat call costs the routes request plus the flush check. Any failed lookup fails the whole call through the shared reasons — a list with one route's pairs missing would read as that route serving none. An in-window date with no sailings loaded (a season WSF has registered but not yet populated) returns `[]` with a notice that does not suggest retrying. `routeId` matches `impactedRouteIds` from `wsdot_get_ferry_alerts`, so this tool resolves alert route IDs to readable names; some seasonal, interisland, or Sidney B.C. route IDs will not appear for a given date.
 
 ### `wsdot_get_ferry_schedule`
 
 - **Input:** `departingTerminalId`, `arrivingTerminalId` (both positive integers — WSF IDs run 1–22 — so a zero, negative, or fractional ID is an argument rejection that never reaches the upstream), `tripDate?` (defaults to today), `remainingOnly?` (default false)
 - **Routing:** `GET Schedule/rest/scheduletoday/{DepartingTerminalID}/{ArrivingTerminalID}/{OnlyRemainingTimes}` for today, `GET Schedule/rest/schedule/{TripDate}/{DepartingTerminalID}/{ArrivingTerminalID}` for a future date.
-- **Output:** `departingTerminalName?`, `arrivingTerminalName?`, `sailings[]` (`departureTime?`, `arrivalTime?`, `vesselName?`)
-- **Enrichment:** `tripDate`, `remainingOnly`, `totalSailings`, `notice?`
-- **Errors:** the two shared reasons, plus `invalid_terminal_pair` and `invalid_date` (both `ValidationError`)
-- **Notes:** Sailing timestamps are ISO 8601 UTC while `tripDate` is the Pacific service day, so an evening sailing carries the following UTC calendar date and will not match `tripDate`. `arrivalTime` is populated on some routes and absent on others. No cancellation status: neither schedule endpoint returns `IsCancelled` — WSF drops a cancelled sailing from the schedule instead of flagging it — so the field is not carried; route-level disruptions come from `wsdot_get_ferry_alerts`. An invalid or non-through terminal pair comes back as either a 200 with a `{"Message"}` body or a real 4xx, and both map to `invalid_terminal_pair`; an unregistered access code also returns 4xx but keeps `invalid_access_code`.
+- **Output:** `departingTerminalName?`, `arrivingTerminalName?`, `annotations?[]`, `sailingNotes?`, `sailings[]` (`departureTime?`, `arrivalTime?`, `vesselName?`, `vesselId?`, `loadingRule?`, `vesselHandicapAccessible?`, `annotationIndexes?[]`)
+- **Enrichment:** `tripDate`, `remainingOnly` (the effective value — `false` for any date other than today, whatever was requested), `totalSailings`, `notice?`
+- **Errors:** the two shared reasons, plus `invalid_terminal_pair` and `invalid_date` (both `ValidationError`; `invalid_date` non-retryable)
+- **Notes:** Sailing timestamps are ISO 8601 UTC while `tripDate` is the Pacific service day, so an evening sailing carries the following UTC calendar date and will not match `tripDate`. `arrivalTime` is populated on some routes and absent on others. No cancellation status: neither schedule endpoint returns `IsCancelled` — WSF drops a cancelled sailing from the schedule instead of flagging it — so the field is not carried; route-level disruptions come from `wsdot_get_ferry_alerts`.
+- **Sailing detail:** mapped from the payload the schedule request already returns — no extra request. `vesselId` is the ID `wsdot_get_vessel_locations` reports. `loadingRule` is undocumented by WSF; the description states what was observed (3 on nearly every sailing, 1 only on sailings whose annotation restricts vehicles) rather than asserting a code mapping. `Annotations` (per pair) and `SailingNotes` (per pair, set on very few) arrive as HTML and are rendered to plain text with the alert-bulletin normalizer. A blank annotation is dropped and every sailing's `annotationIndexes` is remapped onto the entries kept, so each index resolves; `format()` prints each sailing's notes, resolved to text, under it. `VesselPositionNum` (undocumented) and `Routes` (always the one route containing the pair) are not mapped; `AnnotationsIVR` is a plain-text twin of `Annotations` that drops link destinations.
+- **Error mapping:** the service classifies WSF's `TripDate … is not valid` rejection (a date before WSF's Pacific service day or past its posted schedule) as `invalid_date` whatever the status, and an unregistered access code as `invalid_access_code`; the tool's catch passes both through. Every other rejection — a 200 with a `{"Message"}` body or a real 4xx — means no schedule for the pair on that date: when `routes/{TripDate}` is `[]` (an in-window date whose season has no sailings loaded, where WSF rejects every pair in the same words) it is `invalid_date`, and otherwise `invalid_terminal_pair`, whose recovery hint points at `terminalPairs` on `wsdot_get_ferry_routes` for the same date. That routes check runs only on a call that is already failing.
 
 ### `wsdot_get_vessel_locations`
 
@@ -242,6 +246,10 @@ Every tool declares the same two error reasons unless noted: `api_unavailable` (
 
 Or in a single step for known IDs:
 1. `wsdot_get_ferry_schedule` directly if agent already has terminal IDs
+
+### "Which crossings run from Anacortes on Saturday?"
+1. `wsdot_get_ferry_routes` (tripDate=Saturday) — the Anacortes / San Juan route's `terminalPairs` list every departing → arriving pair with service that day
+2. `wsdot_get_ferry_schedule` for the chosen pair — each sailing's annotations say whether it takes vehicles
 
 ### "Will I make the 3pm Bainbridge sailing?"
 1. `wsdot_get_terminal_space` — check `driveUpSpaceCount` for the 3pm departure from terminal 3
@@ -299,18 +307,24 @@ Eleven WA/Canada border crossing lanes. No filter needed — return all and let 
 Each of the three sketched resources duplicated a tool over a live feed, where the injectable-context case for a resource doesn't hold. See [Resources](#resources).
 
 **12. `format()` parity covers every value, not every field.**
-Rendering a field only when its value is populated leaves `content[]` silent about `false`, `[]`, and the populated half of a one-sided pair, all of which `structuredContent` still carries. Clients read one surface or the other, so a value-conditional render makes them disagree. The linter checks that each field appears somewhere; it cannot check that each *value* does, which is why the rule is written down here.
+Rendering a field only when its value is populated leaves `content[]` silent about `false`, `[]`, and the populated half of a one-sided pair, all of which `structuredContent` still carries. Clients read one surface or the other, so a value-conditional render makes them disagree. The linter checks that each field appears somewhere; it cannot check that each *value* does, which is why the rule is written down here. A blank string is a fourth case, settled at the service boundary instead of in `format()`: `""` carries nothing beyond absence (WSDOT says "no current information" in prose where it means it), so the services drop it — whitespace-only and markup-only values with it — rather than every `format()` growing a branch to render it. It is the same rule the tools apply to a blank optional filter input.
+
+**13. Route terminal pairs cached in memory, keyed to WSF's flush stamp.**
+`wsdot_get_ferry_routes` needs one `terminalsandmatesbyroute` request per route (about ten), so the pairs are cached per trip date and route in a `Map` on the service instance. WSF lists the operation as cacheable until `Schedule/rest/cacheflushdate` changes, so every call reads that stamp (one small request) and a new stamp empties the cache. A lookup is cached only if the stamp it was fetched under is still the current one when it lands, so a call that straddles a flush cannot store pre-flush pairs under the new stamp. The data is public and identical for every caller, which is why it lives in process memory rather than tenant-scoped `ctx.state`. `terminalsandmates/{TripDate}` would answer in one request but carries no `RouteID`, so its pairs could not be attached to a route.
+
+**14. Trip dates are judged by WSF's rejection, not a `validdaterange` pre-check.**
+WSF answers a date outside its window with a message stating the range it accepts, measured from its own Pacific service day, so the service classifies that message as `invalid_date` instead of fetching `validdaterange` before every call. A window check would also miss the other case: an in-window date whose season has no sailings loaded, which WSF answers on the schedule endpoint with the same words it uses for a pair that never runs. The schedule tool separates those two by asking `routes/{TripDate}`, only on a call that is already failing.
 
 ---
 
 ## Known Limitations
 
 - **Access code required for most endpoints.** The ferry schedule endpoint (`scheduletoday`) validates terminal pair integrity even before auth — unknown terminal ID combos return a JSON error message (`{"Message":"..."}`) — HTTP 400 today, HTTP 200 historically — so the service layer parses the body rather than relying on the status alone.
-- **Mountain pass field nullability.** `TemperatureInFahrenheit` is explicitly nullable (`int?`). `RestrictionOne`/`RestrictionTwo` may be null or empty. The Zod schema reflects this — every pass field but the ID and name is optional.
+- **Mountain pass field nullability.** `TemperatureInFahrenheit` is explicitly nullable (`int?`). `RestrictionOne`/`RestrictionTwo` may be null or empty. The Zod schema reflects this — every pass field is optional, the ID and name included, and a missing one is left absent rather than filled in. `WeatherCondition` arrives as `""` on most passes and is dropped as blank.
 - **Toll rate route designation.** `StateRoute` is a bare, zero-padded route number carrying no route type, so the value alone cannot say whether a row is an Interstate or a state route. `format()` resolves it against Washington's fixed set of Interstate numbers.
 - **Ferry time zones.** Ferry `DateTime` values arrive as ISO 8601 UTC. Because WSF publishes schedules in Pacific time, a sailing late in the service day carries the following UTC calendar date and will not match the `tripDate` of the same response. Schema descriptions say so on every affected field; nothing converts the values.
 - **No rate-limit documentation.** WSDOT doesn't publish rate limits. If transient 429s appear, add configurable request throttling.
-- **`wsdot_get_ferry_routes` date format.** Ferry API uses `M/D/YYYY` in URL paths (e.g., `5/23/2026`). The service layer converts from ISO 8601 input.
+- **Ferry trip-date window.** WSF accepts a `TripDate` from its current Pacific service day through the end of the most recently posted schedule, and a registered season can sit inside that window with no sailings loaded. The first case is recognized from WSF's rejection message, which is undocumented; if its wording changes, such a date still fails, but as `api_unavailable` from the routes tool and `invalid_terminal_pair` from the schedule tool. The trip date goes into URL paths as `YYYY-MM-DD` unchanged.
 - **Camera response size.** `GetCamerasAsJson` (all cameras) returns roughly 1,700 rows. `offset`/`limit` paging in the tool handler bounds this, and both response surfaces carry the same page — `format()` does not cap independently, which would put `content[]` and `structuredContent` out of step. A full walk takes about twenty calls, because the page budget below holds a camera page to under a hundred rows even at `limit: 500`.
 - **Page byte budget.** The four paged traffic tools (alerts, cameras, travel times, toll rates) end a page at `limit` or at 24,000 bytes per surface — the serialized `structuredContent` and the joined `content[]` text, enrichment included — whichever comes first. A `limit` cannot hold that ceiling alone: an alert's size follows `extendedDescription`, a field with no documented length. Rows are admitted in order and each is charged at the larger of its JSON and its rendered block (one renderer serves `format()` and the charge, so the two cannot drift), against the budget less a fixed 1,000-byte reserve for the wrapper, counters, notice, and trailer, less the bytes of the caller's echoed filters. The first row is always kept, so a row larger than the whole budget comes back alone with `nextOffset` one past it. A budget-ended page says so in its notice; `wsdot_get_terminal_space` pages whole terminals and is not budgeted. The echoed filters are capped at 200 characters in the schema (the longest live value a filter matches against is a 73-character corridor name), so the caller's own input cannot push a response past the budget. The per-call echo charge stays: a capped filter can still escape to about 1,200 JSON bytes (a control character serializes as a six-byte `\u` escape), and a camera search echoes two, which a fixed reserve would take from every page.
 
@@ -331,9 +345,9 @@ Rendering a field only when its value is populated leaves `content[]` silent abo
 - Base: `https://www.wsdot.wa.gov/Ferries/API/`
 - Auth: `?apiaccesscode={CODE}` query param (note: different param name from traffic)
 - Format: JSON natively (no suffix needed on REST endpoints)
-- Error shape (invalid params): `{"Message":"..."}` JSON with descriptive message — no 4xx status code
+- Error shape (invalid params): `{"Message":"..."}` JSON with descriptive message — served with HTTP 400 today, HTTP 200 historically
 - No pagination; all list endpoints return complete datasets
-- Date format in path segments: `M/D/YYYY` (no leading zeros)
+- Date format in path segments: `YYYY-MM-DD`; error messages echo dates as `M/D/YYYY`
 
 ---
 
@@ -352,4 +366,6 @@ Rendering a field only when its value is populated leaves `content[]` silent abo
 | 9 | No geographic radius filter | Upstream API doesn't support lat/lng queries; milepost-range is the server's filter idiom |
 | 10 | Border crossings: return all | 11 crossing lanes; no filter needed |
 | 11 | Resources dropped | Each duplicated a tool over a live feed; nothing to inject as static context |
-| 12 | `format()` parity covers values, not just fields | `false`, `[]`, and one-sided pairs are data too; the linter only checks fields appear |
+| 12 | `format()` parity covers values, not just fields | `false`, `[]`, and one-sided pairs are data too; the linter only checks fields appear. A blank string is dropped at the service boundary instead — it carries nothing beyond absence |
+| 13 | Route terminal pairs cached in memory until `cacheflushdate` changes | One lookup per route; public data shared by every caller; `terminalsandmates` carries no `RouteID` |
+| 14 | Trip dates judged by WSF's rejection, not a `validdaterange` pre-check | The rejection already states the window; a pre-check costs a request per call and misses in-window dates with no sailings loaded |

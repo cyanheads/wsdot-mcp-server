@@ -37,9 +37,9 @@ Washington State transportation data from the WSDOT Traveler API and the WSF Fer
 | `wsdot_get_toll_rates` | Dynamic toll rates for WA express lanes and tolled facilities — SR 99, SR 167 HOT, I-405 Express, SR 509, SR 520 — filterable by route. |
 | `wsdot_get_border_waits` | Current vehicle wait times at all WA/Canada land border crossings. |
 | `wsdot_search_cameras` | Highway camera metadata and image URLs, filterable by state route, region, milepost range, and title words. |
-| `wsdot_get_ferry_terminals` | All WSF ferry terminals with numeric IDs needed for schedule and space lookups. |
-| `wsdot_get_ferry_routes` | WSF routes operating on a given date — route ID, abbreviation, and description for each, for route discovery and ferry-alert cross-reference. |
-| `wsdot_get_ferry_schedule` | Departure times for a specific WSF route — today-remaining or full-day future mode. |
+| `wsdot_get_ferry_terminals` | All WSF ferry terminals with numeric IDs needed for schedule and space lookups, plus coordinates. |
+| `wsdot_get_ferry_routes` | WSF routes operating on a given date — route ID, abbreviation, description, and the terminal pairs each serves, for route discovery, schedule lookups, and ferry-alert cross-reference. |
+| `wsdot_get_ferry_schedule` | Departure times for a specific WSF route — today-remaining or full-day future mode — with each sailing's vessel, loading rule, and notes. |
 | `wsdot_get_vessel_locations` | Real-time AIS positions, speed, heading, ETA, and dock status for all active WSF vessels. |
 | `wsdot_get_terminal_space` | Drive-up and reservable vehicle space available at WSF terminals for upcoming sailings. |
 | `wsdot_get_ferry_alerts` | Active WSF service disruptions and bulletins with impacted route IDs. |
@@ -112,27 +112,31 @@ Washington State transportation data from the WSDOT Traveler API and the WSF Fer
 
 - No input parameters — returns all 20 WSF ferry terminals; the list rarely changes
 - Call this first to resolve human-readable names (e.g. "Bainbridge Island", "Seattle", "Kingston") to the numeric IDs required by `wsdot_get_ferry_schedule` and `wsdot_get_terminal_space`
-- Each terminal also carries an abbreviation and coordinates when reported
+- Each terminal also carries its abbreviation and latitude/longitude
 
 ---
 
 ### `wsdot_get_ferry_routes` <sub>tool</sub>
 
 - Optional `tripDate` (ISO 8601 `YYYY-MM-DD`); defaults to today
-- Returns each route's ID, abbreviation, and description
+- Returns each route's ID, abbreviation, and description, plus `terminalPairs`: the directed departing → arriving terminal pairs (IDs and names) the route serves that day. These are exactly the pairs `wsdot_get_ferry_schedule` accepts for that date; a route serving none carries an empty list
 - Route IDs correspond to `impactedRouteIds` in `wsdot_get_ferry_alerts` — use this tool to resolve alert route IDs to route names
-- Use to discover which routes are running; for the numeric terminal IDs that schedule and space lookups need, call `wsdot_get_ferry_terminals`
+- A date outside the range WSF has published (before today, or past the posted schedule) returns a typed `invalid_date` error stating WSF's range. A date inside that range with no sailings loaded yet returns an empty list and a notice
+- The pairs cost one lookup per route, cached per date until WSF signals a schedule change; if any lookup fails, the whole call fails
 
 ---
 
 ### `wsdot_get_ferry_schedule` <sub>tool</sub>
 
-- Requires `departingTerminalId` and `arrivingTerminalId`, both positive integers — use `wsdot_get_ferry_terminals` first
-- Optional `tripDate` (defaults to today) and `remainingOnly: true` (only future departures for today; ignored for future dates)
+- Requires `departingTerminalId` and `arrivingTerminalId`, both positive integers — use `wsdot_get_ferry_terminals` first, or pick a pair from `terminalPairs` on `wsdot_get_ferry_routes`
+- Optional `tripDate` (defaults to today) and `remainingOnly: true` (only future departures for today; ignored for any other date, and the response then reports `remainingOnly: false`)
+- Each sailing carries `vesselId` (the ID `wsdot_get_vessel_locations` reports), `loadingRule`, `vesselHandicapAccessible`, and `annotationIndexes` into the pair's `annotations`, notes such as "No interisland vehicles. Foot passenger and bikes okay." The rendered text lists each sailing's notes under it. WSF does not document `loadingRule`: 3 appears on nearly every sailing and 1 only on vehicle-restricted ones, so read the notes for the restriction itself
+- `annotations` and the pair-wide `sailingNotes` arrive from WSF as HTML and are returned as plain text, with links kept as `link text (url)`
 - `departureTime` and `arrivalTime` are ISO 8601 **UTC**, while `tripDate` is the Pacific service day — an evening sailing therefore carries the following UTC calendar date and will not match `tripDate`. Convert to `America/Los_Angeles` before quoting a clock time
 - `arrivalTime` is populated on some routes and absent on others
 - No cancellation status — WSF drops a cancelled sailing from the schedule rather than flagging it, so a listed sailing is not confirmation it will run; check `wsdot_get_ferry_alerts`, which reports disruptions at route level
-- An invalid or non-through terminal pair returns a typed `invalid_terminal_pair` error rather than an empty schedule
+- An invalid or non-through terminal pair returns a typed `invalid_terminal_pair` error rather than an empty schedule; its recovery hint points at `terminalPairs` on `wsdot_get_ferry_routes` for the same date
+- A date WSF has no schedule for returns `invalid_date` instead — whether it falls outside WSF's published range or inside it with no routes loaded
 
 ---
 
@@ -179,7 +183,7 @@ Agent-friendly output:
 - Typed failure — `invalid_access_code` and `api_unavailable` errors carry an explicit recovery hint distinguishing configuration faults from transient upstream ones
 - `driveUpSpaceCount: 0` and congestion delta fields (`delayInMinutes`) give agents actionable signal without string parsing
 - Partial data preserved — sparse upstream payloads surface `null`/`undefined` rather than synthetic defaults (e.g. an omitted `waitTimeInMinutes`, an absent `arrivalTime`)
-- `content[]` and `structuredContent` carry the same values, not just the same fields — a `false` flag, an empty list, and one populated half of a coordinate pair all render rather than dropping out of the markdown surface that some clients read
+- `content[]` and `structuredContent` carry the same values, not just the same fields — a `false` flag, an empty list, and one populated half of a coordinate pair all render rather than dropping out of the markdown surface that some clients read; a blank or whitespace-only upstream string is absent from both, and a populated one arrives trimmed
 
 ## Getting started
 
