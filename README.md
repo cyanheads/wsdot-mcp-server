@@ -34,9 +34,9 @@ Washington State transportation data from the WSDOT Traveler API and the WSF Fer
 | `wsdot_get_mountain_passes` | Current conditions for all WA mountain passes: status, road condition, traction laws, temperature, elevation. |
 | `wsdot_search_alerts` | Active highway alerts — incidents, construction, closures — filterable by state route, WSDOT region, and milepost range. |
 | `wsdot_get_travel_times` | Current vs. average travel times for named WA highway corridors (I-5, I-90, SR 520, etc.) with congestion delay. |
-| `wsdot_get_toll_rates` | Dynamic toll rates for WA express lanes and tolled facilities: SR 99, SR 167 HOT, I-405 Express, SR 509, SR 520. |
+| `wsdot_get_toll_rates` | Dynamic toll rates for WA express lanes and tolled facilities — SR 99, SR 167 HOT, I-405 Express, SR 509, SR 520 — filterable by route. |
 | `wsdot_get_border_waits` | Current vehicle wait times at all WA/Canada land border crossings. |
-| `wsdot_search_cameras` | Highway camera metadata and image URLs, filterable by state route, region, and milepost range. |
+| `wsdot_search_cameras` | Highway camera metadata and image URLs, filterable by state route, region, milepost range, and title words. |
 | `wsdot_get_ferry_terminals` | All WSF ferry terminals with numeric IDs needed for schedule and space lookups. |
 | `wsdot_get_ferry_routes` | WSF routes operating on a given date — route ID, abbreviation, and description for each, for route discovery and ferry-alert cross-reference. |
 | `wsdot_get_ferry_schedule` | Departure times for a specific WSF route — today-remaining or full-day future mode. |
@@ -57,21 +57,21 @@ Washington State transportation data from the WSDOT Traveler API and the WSF Fer
 ### `wsdot_search_alerts` <sub>tool</sub>
 
 - Filter by state route — natural forms all work: `"I-90"`, `"90"`, `"090"`, or `"SR 520"` / `"520"`
-- Filter by WSDOT region: Northwest, Olympic, Southwest, South Central, North Central, Eastern
-- Filter by milepost range to scope to a corridor — an alert matches when its extent overlaps the range, so a closure that spans the boundary is returned
-- Omit all filters to return all current statewide alerts
+- Filter by WSDOT region name: Northwest, Olympic, Southwest, South Central, North Central, Eastern (case-insensitive; any other value is rejected with `invalid_region`)
+- Filter by milepost range to scope to a corridor — an alert matches when its extent overlaps the range, so a closure that spans the boundary is returned. Either bound may be given alone; a start above the end is rejected with `invalid_milepost_range`
+- Omit all filters to return all current statewide alerts; `stateRoute` and `region` accept at most 200 characters
 - Descriptions are normalized to plain text; a link renders inline as `link text (url)`
-- Results ordered by `alertId` and paged (default 50, max 500) — pass `offset`/`limit`; the notice reports the next offset
+- Results ordered by `alertId` and paged (default 20, max 500) — pass `offset`/`limit`; a page also ends early at a 24,000-byte response budget, and the notice reports the next offset
 
 ---
 
 ### `wsdot_get_travel_times` <sub>tool</sub>
 
 - Covers I-5, I-90, SR 520, SR 99, I-405, SR 167, and others
-- Filter by route (`"I-5"`, `"5"`, `"SR 520"`) to get every corridor measured on it, or by any text to match corridor names (`"Everett"`)
+- Filter by route (`"I-5"`, `"5"`, `"SR 520"`) to get every corridor measured on it, or by any text to match corridor names (`"Everett"`); `route` accepts at most 200 characters
 - When current time exceeds average, the corridor is congested; the delta is the delay
 - Reversible express-lane corridors report no travel time while closed in the queried direction — those figures are omitted rather than reported as zero minutes
-- Results are paged (default 50, max 500) — pass `offset`/`limit`; the notice reports the next offset
+- Results are paged (default 50, max 500) — pass `offset`/`limit`; a page also ends early at a 24,000-byte response budget, and the notice reports the next offset
 
 ---
 
@@ -79,9 +79,11 @@ Washington State transportation data from the WSDOT Traveler API and the WSF Fer
 
 - Covers SR 99 (WSDOT Tunnel), SR 167 HOT Lanes, I-405 Express Lanes, the SR 509 tolled segment, and the SR 520 Bridge
 - Rates are time-banded and change dynamically based on traffic conditions
-- `stateRoute` is a bare, zero-padded route number (`"099"`, `"405"`) with no route type; the rendered text resolves the posted designation, so I-405 reads as `I-405` rather than `SR 405`
+- Filter to one facility with `stateRoute` — `"SR 520"`, `"520"`, `"0520"`, `"I-405"`, and `"405"` all work, matched against the posted designation, so `"SR 405"` matches nothing. A route with no tolled facility returns an empty page whose notice names the tolled routes; the filter (at most 200 characters) is applied before paging and echoed in `appliedFilters`
+- Each row's `stateRoute` is the bare, zero-padded route number the feed carries (`"099"`, `"405"`) with no route type; the rendered text resolves the posted designation, so I-405 reads as `I-405` rather than `SR 405`
+- `travelDirection` is the feed's code, not the direction of travel: SR 99, SR 509, and SR 520 carry one fixed code per facility although trips run both ways — read direction from the segment's start and end
 - Each entry leads with its readable `startLocationName → endLocationName` segment; the opaque upstream trip key stays available as `tripName`
-- Results are paged (default 50, max 500) — pass `offset`/`limit`; the notice reports the next offset
+- Results are paged (default 50, max 500) — pass `offset`/`limit`; a page also ends early at a 24,000-byte response budget, and the notice reports the next offset
 
 ---
 
@@ -96,10 +98,13 @@ Washington State transportation data from the WSDOT Traveler API and the WSF Fer
 
 ### `wsdot_search_cameras` <sub>tool</sub>
 
-- Filter by state route (`"I-90"`, `"90"`, `"SR 520"`, or `"520"` all work), WSDOT region, or milepost range
+- Filter by state route (`"I-90"`, `"90"`, `"SR 520"`, or `"520"` all work), WSDOT region code, milepost range, or words in the camera title; `stateRoute`, `region`, and `titleContains` accept at most 200 characters
 - Camera road names carry a route-type prefix, so `"SR 26"` excludes US 26 and `"US 97"` excludes US 97A; a bare `"26"` returns both
+- Region codes: `NW`, `SW`, `OL`, `ER`, `SC`, `NC`, `OS` (Oregon — the TripCheck cameras around Portland), and `WA` (airport cameras plus a few ferry-terminal cameras — most ferry-terminal cameras sit in `NW` and `OL`). Case-insensitive; any other value is rejected with `invalid_region`
+- `titleContains` matches the title as WSDOT wrote it — case-insensitive, every word must appear in any order — so `"Snoqualmie"` returns Snoqualmie Summit and East Snoqualmie Summit but not Hyak. Titles lead with route and milepost, so filter a route with `stateRoute`
+- Either milepost bound may be given alone; a start above the end is rejected with `invalid_milepost_range`
 - Returns metadata and image URLs — camera images are copyright WSDOT, not fetched as bytes
-- Results are ordered by `cameraId` and paged (default 50, max 500) — pass `offset`/`limit`; the notice reports the next offset
+- Results are ordered by `cameraId` and paged (default 50, max 500) — pass `offset`/`limit`; a page also ends early at a 24,000-byte response budget, and the notice reports the next offset
 
 ---
 
@@ -122,7 +127,7 @@ Washington State transportation data from the WSDOT Traveler API and the WSF Fer
 
 ### `wsdot_get_ferry_schedule` <sub>tool</sub>
 
-- Requires numeric `departingTerminalId` and `arrivingTerminalId` — use `wsdot_get_ferry_terminals` first
+- Requires `departingTerminalId` and `arrivingTerminalId`, both positive integers — use `wsdot_get_ferry_terminals` first
 - Optional `tripDate` (defaults to today) and `remainingOnly: true` (only future departures for today; ignored for future dates)
 - `departureTime` and `arrivalTime` are ISO 8601 **UTC**, while `tripDate` is the Pacific service day — an evening sailing therefore carries the following UTC calendar date and will not match `tripDate`. Convert to `America/Los_Angeles` before quoting a clock time
 - `arrivalTime` is populated on some routes and absent on others

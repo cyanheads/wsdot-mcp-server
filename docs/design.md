@@ -9,9 +9,9 @@
 | `wsdot_get_mountain_passes` | All WA mountain pass conditions: road status, restrictions, weather, traction laws, temp, elevation | (none — returns all 16 passes) | `readOnlyHint: true` |
 | `wsdot_search_alerts` | Highway incidents, construction, and closures filtered by route, region, or milepost range | `stateRoute?`, `region?`, `startMilepost?`, `endMilepost?`, `offset?`, `limit?` | `readOnlyHint: true` |
 | `wsdot_get_travel_times` | Named corridor travel times (current vs. average) for all tracked I-5/I-90/SR-520/etc. routes | `route?`, `offset?`, `limit?` | `readOnlyHint: true` |
-| `wsdot_get_toll_rates` | Current dynamic toll rates on SR 99, SR 167, I-405, SR 509, SR 520 | `offset?`, `limit?` | `readOnlyHint: true` |
+| `wsdot_get_toll_rates` | Current dynamic toll rates on SR 99, SR 167, I-405, SR 509, SR 520, optionally filtered to one route | `stateRoute?`, `offset?`, `limit?` | `readOnlyHint: true` |
 | `wsdot_get_border_waits` | Canada border crossing wait times for all WA crossings (I-5 Peace Arch, SR 543 Pacific Highway, SR 539 Lynden, SR 9 Sumas) | (none — returns all crossings) | `readOnlyHint: true` |
-| `wsdot_search_cameras` | Highway camera locations and metadata URLs (no image bytes — WSDOT copyright) filtered by route or region | `stateRoute?`, `region?`, `startMilepost?`, `endMilepost?`, `offset?`, `limit?` | `readOnlyHint: true` |
+| `wsdot_search_cameras` | Highway camera locations and metadata URLs (no image bytes — WSDOT copyright) filtered by route, region, milepost range, or title words | `stateRoute?`, `region?`, `startMilepost?`, `endMilepost?`, `titleContains?`, `offset?`, `limit?` | `readOnlyHint: true` |
 | `wsdot_get_ferry_routes` | All WSF ferry routes operating on a given date — route ID, abbreviation, and description for each, for route discovery and ferry-alert cross-reference (numeric terminal IDs come from `wsdot_get_ferry_terminals`) | `tripDate?` (defaults to today) | `readOnlyHint: true` |
 | `wsdot_get_ferry_schedule` | Departure times for a specific ferry route on a given date, optionally filtered to remaining sailings only | `departingTerminalId`, `arrivingTerminalId`, `tripDate?`, `remainingOnly?` | `readOnlyHint: true` |
 | `wsdot_get_vessel_locations` | Real-time AIS positions, speed, heading, ETA, and dock status for all active WSF vessels — use for "where is the ferry now?" or tracking a named vessel | (none — returns all vessels) | `readOnlyHint: true` |
@@ -71,7 +71,7 @@ Both services are read-only HTTP clients — no shared state beyond the access c
 **API quirks each service must handle:**
 
 - `TrafficApiService` — auth failure returns an HTML page (`Content-Type: text/html`, body `The supplied access code was missing or invalid.`) instead of a JSON error. The fetch layer must check `Content-Type` before attempting JSON parse; an HTML body should throw `ServiceUnavailable` with a message directing the user to verify `WSDOT_ACCESS_CODE`.
-- `FerryApiService` — invalid terminal ID pairs return HTTP 200 with a JSON body `{"Message":"<human-readable error>"}` instead of a 4xx. Response handler must check for the presence of a top-level `Message` field and throw `InvalidParams` with the message text. This pattern applies to schedule endpoints; other endpoints may also use it.
+- `FerryApiService` — schedule endpoints report an invalid terminal ID pair as a JSON body `{"Message":"<human-readable error>"}`, served as HTTP 400 today and historically as HTTP 200. The response handler checks both the status and a top-level `Message` field, and the schedule tool maps the rejection to `invalid_terminal_pair`.
 
 ---
 
@@ -146,25 +146,26 @@ Every tool declares the same two error reasons unless noted: `api_unavailable` (
 
 ### `wsdot_search_alerts`
 
-- **Input:** `stateRoute?` (natural forms `"I-90"`/`"90"`/`"090"`/`"SR 520"`/`"520"`, matched on the route number; a route-type prefix is compared only when both sides carry one), `region?` (`Northwest`, `Olympic`, `Southwest`, `South Central`, `North Central`, `Eastern`; case-insensitive), `startMilepost?`, `endMilepost?`, `offset?`, `limit?` (default 50, max 500)
-- **Routing:** `SearchAlertsAsJson` when `stateRoute` or `region` is given, `GetAlertsAsJson` otherwise. `SearchTimeStart`/`SearchTimeEnd` are available upstream but not exposed.
+- **Input:** `stateRoute?` (natural forms `"I-90"`/`"90"`/`"090"`/`"SR 520"`/`"520"`, matched on the route number; a route-type prefix is compared only when both sides carry one), `region?` (`Northwest`, `Olympic`, `Southwest`, `South Central`, `North Central`, `Eastern`; trimmed and case-insensitive, checked in the handler rather than by a `z.enum` so `"northwest"` stays accepted), `startMilepost?`, `endMilepost?` (either alone; start must not exceed end), `offset?`, `limit?` (default 20, max 500; a page also ends at the 24,000-byte response budget). `stateRoute` and `region` accept at most 200 characters; a blank or whitespace-only string input is treated as omitted.
+- **Errors:** the two shared reasons, plus `invalid_region` (a non-blank region outside the set; recovery lists the names) and `invalid_milepost_range` (`startMilepost > endMilepost`), both `ValidationError` and raised before the upstream fetch
+- **Routing:** always `GetAlertsAsJson`; `stateRoute`, `region`, and the milepost bounds filter the fetched set client-side. `SearchAlertsAsJson` (with `SearchTimeStart`/`SearchTimeEnd`) is available upstream but not used.
 - **Output:** `alerts[]` — `alertId?`, `headlineDescription?`, `extendedDescription?`, `eventCategory?`, `eventStatus?`, `priority?`, `region?`, `county?`, `startRoadwayLocation?` (`roadName?`, `direction?`, `milePost?`, `latitude?`, `longitude?`), `endRoadwayLocation?` (same shape), `startTime?`, `endTime?`, `lastUpdatedTime?`
 - **Enrichment:** `totalCount`, `nextOffset` (nullable), `hasMore`, `appliedFilters` (`stateRoute?`, `region?`, `startMilepost?`, `endMilepost?`), `notice?` — `appliedFilters` also renders through an `enrichmentTrailer`
 - **Notes:** Milepost filtering matches by extent overlap, so an alert spanning the boundary is returned; alerts reporting no milepost are always included. Descriptions arrive as rich text upstream and are normalized to plain text with links inlined as `link text (url)`. Rows are sorted by `alertId` before paging — the feed serves one alert set in more than one row order, so an offset is only reproducible once ordering is imposed.
 
 ### `wsdot_get_travel_times`
 
-- **Input:** `route?` (route designation matched against corridor start/end road names, plus a case-insensitive substring match on the corridor name), `offset?`, `limit?` (default 50, max 500)
+- **Input:** `route?` (route designation matched against corridor start/end road names, plus a case-insensitive substring match on the corridor name; at most 200 characters), `offset?`, `limit?` (default 50, max 500; a page also ends at the 24,000-byte response budget)
 - **Output:** `corridors[]` — `travelTimeId?`, `name?`, `description?`, `currentTimeInMinutes?`, `averageTimeInMinutes?`, `delayInMinutes?`, `timeUpdated?`, `distanceInMiles?`, `startPoint?` (`roadName?`, `direction?`, `milePost?`), `endPoint?` (same shape)
 - **Enrichment:** `totalCount`, `nextOffset` (nullable), `hasMore`, `routeFilter?`, `notice?`
 - **Notes:** `delayInMinutes` is computed in the handler as current minus average, and is absent when either input is. A reversible express lane closed in the queried direction reports no measurement at all — those figures are omitted rather than reported as zero. Paging is applied after the route filter, so `totalCount` counts matches rather than the whole feed.
 
 ### `wsdot_get_toll_rates`
 
-- **Input:** `offset?`, `limit?` (default 50, max 500)
+- **Input:** `stateRoute?` (natural forms `"SR 520"`/`"520"`/`"0520"`/`"I-405"`/`"405"`, matched with `routeMatches` against each row's posted designation; at most 200 characters), `offset?`, `limit?` (default 50, max 500; a page also ends at the 24,000-byte response budget)
 - **Output:** `rates[]` — `tripName?`, `stateRoute?`, `travelDirection?`, `startMilepost?`, `endMilepost?`, `tollRateInDollars?`, `message?`, `startLocationName?`, `endLocationName?`, `startLatitude?`, `startLongitude?`, `endLatitude?`, `endLongitude?`, `timeUpdated?`
-- **Enrichment:** `totalCount`, `nextOffset` (nullable), `hasMore`, `notice?`
-- **Notes:** The live feed carries SR 99, SR 167, I-405, SR 509, and SR 520; there are no I-90 rows. `stateRoute` is a bare zero-padded route number with no route type (`"099"`, `"405"`), so `format()` resolves the posted designation — Washington's Interstate numbers are a fixed set and everything else is a state route. `tripName` is an opaque upstream key (`"099tp03268"`), so the rendered heading leads with `startLocationName → endLocationName` instead.
+- **Enrichment:** `totalCount`, `nextOffset` (nullable), `hasMore`, `appliedFilters?` (`stateRoute?`; present only when a filter applied), `notice?` — `appliedFilters` also renders through an `enrichmentTrailer`
+- **Notes:** The live feed carries SR 99, SR 167, I-405, SR 509, and SR 520; there are no I-90 rows. `stateRoute` is a bare zero-padded route number with no route type (`"099"`, `"405"`), so `format()` resolves the posted designation — Washington's Interstate numbers are a fixed set and everything else is a state route. The `stateRoute` filter matches that designation rather than the bare value, so `"SR 405"` does not return the I-405 Express Lanes; it runs in the handler before paging, and a route with no tolled facility returns an empty page whose notice names the routes the feed carries. `travelDirection` is one fixed code per facility on SR 99 (`S`), SR 509 (`S`), and SR 520 (`E`) although each carries trips both ways, so it is not filterable and the direction of travel is read from the segment ends. `tripName` is an opaque upstream key (`"099tp03268"`), so the rendered heading leads with `startLocationName → endLocationName` instead.
 
 ### `wsdot_get_border_waits`
 
@@ -175,10 +176,12 @@ Every tool declares the same two error reasons unless noted: `api_unavailable` (
 
 ### `wsdot_search_cameras`
 
-- **Input:** `stateRoute?` (natural route forms, normalized like alerts), `region?` (`NW`, `SW`, `OL`, `ER`, `SC`, `OS`, `NC`, `WA`), `startMilepost?`, `endMilepost?`, `offset?`, `limit?` (default 50, max 500)
-- **Routing:** `SearchCamerasAsJson` when any filter is given, `GetCamerasAsJson` otherwise. The full filtered set is paged in the tool handler so `structuredContent` and `content[]` carry the identical page.
+- **Input:** `stateRoute?` (natural route forms, normalized like alerts), `region?` (`NW`, `SW`, `OL`, `ER`, `SC`, `NC`, `OS` — the Oregon TripCheck cameras around Portland — and `WA` — the airport cameras plus 8 ferry-terminal cameras, while the other ~50 ferry-terminal cameras sit in `NW` and `OL`; trimmed and case-insensitive, checked in the handler), `startMilepost?`, `endMilepost?` (either alone; start must not exceed end), `titleContains?` (case-folded strict token match over the title: every whitespace-separated word must appear), `offset?`, `limit?` (default 50, max 500; a page also ends at the 24,000-byte response budget). `stateRoute`, `region`, and `titleContains` accept at most 200 characters; a blank or whitespace-only string input is treated as omitted.
+- **Routing:** always `GetCamerasAsJson`; `stateRoute`, `region`, and the milepost bounds filter the fetched set in the service, `titleContains` in the handler, and the combined set is paged in the tool handler so `structuredContent` and `content[]` carry the identical page.
 - **Output:** `cameras[]` — `cameraId?`, `title?`, `description?`, `imageUrl?`, `imageWidth?`, `imageHeight?`, `roadName?`, `direction?`, `milePost?`, `region?`, `latitude?`, `longitude?`
-- **Enrichment:** `totalCount`, `nextOffset` (nullable), `hasMore`, `appliedFilters` (`stateRoute?`, `region?`, `startMilepost?`, `endMilepost?`), `notice?` — `appliedFilters` also renders through an `enrichmentTrailer`
+- **Enrichment:** `totalCount`, `nextOffset` (nullable), `hasMore`, `appliedFilters` (`stateRoute?`, `region?`, `startMilepost?`, `endMilepost?`, `titleContains?`), `notice?` — `appliedFilters` also renders through an `enrichmentTrailer`
+- **Errors:** the two shared reasons, plus `invalid_region` (recovery lists the codes) and `invalid_milepost_range`, both `ValidationError`
+- **Title match:** `titleContains` reads the title as WSDOT wrote it, not a landmark — `"Snoqualmie"` returns Snoqualmie Summit and East Snoqualmie Summit, not Hyak in the same milepost window — and a camera with no title never matches. It covers the title only: `description` is null on nearly every camera, so matching it would add almost nothing.
 - **Notes:** Image URLs point to WSDOT-hosted JPEGs; the server surfaces URLs only and never proxies bytes, and the description states the WSDOT copyright. Rows are sorted by `cameraId` before paging, for the same reproducibility reason as alerts.
 
 ### `wsdot_get_ferry_terminals`
@@ -198,7 +201,7 @@ Every tool declares the same two error reasons unless noted: `api_unavailable` (
 
 ### `wsdot_get_ferry_schedule`
 
-- **Input:** `departingTerminalId`, `arrivingTerminalId`, `tripDate?` (defaults to today), `remainingOnly?` (default false)
+- **Input:** `departingTerminalId`, `arrivingTerminalId` (both positive integers — WSF IDs run 1–22 — so a zero, negative, or fractional ID is an argument rejection that never reaches the upstream), `tripDate?` (defaults to today), `remainingOnly?` (default false)
 - **Routing:** `GET Schedule/rest/scheduletoday/{DepartingTerminalID}/{ArrivingTerminalID}/{OnlyRemainingTimes}` for today, `GET Schedule/rest/schedule/{TripDate}/{DepartingTerminalID}/{ArrivingTerminalID}` for a future date.
 - **Output:** `departingTerminalName?`, `arrivingTerminalName?`, `sailings[]` (`departureTime?`, `arrivalTime?`, `vesselName?`)
 - **Enrichment:** `tripDate`, `remainingOnly`, `totalSailings`, `notice?`
@@ -214,7 +217,7 @@ Every tool declares the same two error reasons unless noted: `api_unavailable` (
 
 ### `wsdot_get_terminal_space`
 
-- **Input:** `departingTerminalId?`, `offset?`, `limit?` (default 5, max 20)
+- **Input:** `departingTerminalId?` (positive integer; an unknown positive ID returns an empty page with a notice), `offset?`, `limit?` (default 5, max 20)
 - **Output:** `terminals[]` — `terminalId?`, `terminalName?`, `departingSpaces[]` (`departure?`, `isCancelled?`, `vesselName?`, `arrivingTerminalIds?`, `itineraryLabel?`, `displayDriveUpSpace?`, `displayReservableSpace?`, `driveUpSpaceCount?`, `reservableSpaceCount?`, `maxSpaceCount?`, `driveUpSpaceHexColor?`)
 - **Enrichment:** `totalCount`, `nextOffset` (nullable), `hasMore`, `terminalFilter?`, `notice?`
 - **Notes:** The "will I make the ferry?" tool. `driveUpSpaceCount` is the key field, floored at zero — an oversubscribed sailing reports a negative count upstream. Destinations come from the upstream `ArrivalTerminalIDs` (surfaced as `arrivingTerminalIds`), not from the sibling `TerminalName`/`TerminalID`, which on multi-stop San Juan itineraries are an itinerary string and the *departing* terminal. The paging unit is the terminal, not the sailing: `offset`/`limit` select whole terminals and `totalCount` counts terminals, so page size varies with how many departures each carries. A display flag and the count it describes are independently optional — nothing guarantees a cleared flag arrives with a null count — so `format()` renders each on its own terms.
@@ -247,7 +250,7 @@ Or in a single step for known IDs:
 1. `wsdot_search_alerts` (stateRoute="005", region="Northwest")
 
 ### "What's the toll on SR 520 right now?"
-1. `wsdot_get_toll_rates` — filter result to SR 520
+1. `wsdot_get_toll_rates` (stateRoute="SR 520") — the SR 520 rows on one page
 
 ### "How long is the I-5 commute from Northgate to downtown?"
 1. `wsdot_get_travel_times` (route="I-5") — filter for corridor matching Northgate → downtown
@@ -302,13 +305,14 @@ Rendering a field only when its value is populated leaves `content[]` silent abo
 
 ## Known Limitations
 
-- **Access code required for most endpoints.** The ferry schedule endpoint (`scheduletoday`) validates terminal pair integrity even before auth — unknown terminal ID combos return a 200 with a JSON error message (`{"Message":"..."}`), not a 4xx. The service layer must parse this pattern.
+- **Access code required for most endpoints.** The ferry schedule endpoint (`scheduletoday`) validates terminal pair integrity even before auth — unknown terminal ID combos return a JSON error message (`{"Message":"..."}`) — HTTP 400 today, HTTP 200 historically — so the service layer parses the body rather than relying on the status alone.
 - **Mountain pass field nullability.** `TemperatureInFahrenheit` is explicitly nullable (`int?`). `RestrictionOne`/`RestrictionTwo` may be null or empty. The Zod schema reflects this — every pass field but the ID and name is optional.
 - **Toll rate route designation.** `StateRoute` is a bare, zero-padded route number carrying no route type, so the value alone cannot say whether a row is an Interstate or a state route. `format()` resolves it against Washington's fixed set of Interstate numbers.
 - **Ferry time zones.** Ferry `DateTime` values arrive as ISO 8601 UTC. Because WSF publishes schedules in Pacific time, a sailing late in the service day carries the following UTC calendar date and will not match the `tripDate` of the same response. Schema descriptions say so on every affected field; nothing converts the values.
 - **No rate-limit documentation.** WSDOT doesn't publish rate limits. If transient 429s appear, add configurable request throttling.
 - **`wsdot_get_ferry_routes` date format.** Ferry API uses `M/D/YYYY` in URL paths (e.g., `5/23/2026`). The service layer converts from ISO 8601 input.
-- **Camera response size.** `GetCamerasAsJson` (all cameras) returns roughly 1,700 rows. `offset`/`limit` paging in the tool handler bounds this, and both response surfaces carry the same page — `format()` does not cap independently, which would put `content[]` and `structuredContent` out of step.
+- **Camera response size.** `GetCamerasAsJson` (all cameras) returns roughly 1,700 rows. `offset`/`limit` paging in the tool handler bounds this, and both response surfaces carry the same page — `format()` does not cap independently, which would put `content[]` and `structuredContent` out of step. A full walk takes about twenty calls, because the page budget below holds a camera page to under a hundred rows even at `limit: 500`.
+- **Page byte budget.** The four paged traffic tools (alerts, cameras, travel times, toll rates) end a page at `limit` or at 24,000 bytes per surface — the serialized `structuredContent` and the joined `content[]` text, enrichment included — whichever comes first. A `limit` cannot hold that ceiling alone: an alert's size follows `extendedDescription`, a field with no documented length. Rows are admitted in order and each is charged at the larger of its JSON and its rendered block (one renderer serves `format()` and the charge, so the two cannot drift), against the budget less a fixed 1,000-byte reserve for the wrapper, counters, notice, and trailer, less the bytes of the caller's echoed filters. The first row is always kept, so a row larger than the whole budget comes back alone with `nextOffset` one past it. A budget-ended page says so in its notice; `wsdot_get_terminal_space` pages whole terminals and is not budgeted. The echoed filters are capped at 200 characters in the schema (the longest live value a filter matches against is a 73-character corridor name), so the caller's own input cannot push a response past the budget. The per-call echo charge stays: a capped filter can still escape to about 1,200 JSON bytes (a control character serializes as a six-byte `\u` escape), and a camera search echoes two, which a fixed reserve would take from every page.
 
 ---
 
