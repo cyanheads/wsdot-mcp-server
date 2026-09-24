@@ -1,6 +1,6 @@
 # wsdot-mcp-server - Directory Structure
 
-Generated on: 2026-09-24 21:04:43
+Generated on: 2026-09-24 22:36:30
 
 ```text
 wsdot-mcp-server/
@@ -27,6 +27,7 @@ wsdot-mcp-server/
 │   ├── 0.1.x/
 │   ├── 0.2.x/
 │   ├── 0.3.x/
+│   ├── 0.4.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -170,6 +171,7 @@ wsdot-mcp-server/
 │   │   │   ├── traffic-service.ts
 │   │   │   └── types.ts
 │   │   ├── html-text.ts
+│   │   ├── text-field.ts
 │   │   ├── wcf-date.ts
 │   │   └── wsdot-http.ts
 │   └── index.ts
@@ -186,11 +188,14 @@ wsdot-mcp-server/
 │   │   ├── html-text.test.ts
 │   │   ├── route-match.test.ts
 │   │   ├── stable-order.test.ts
+│   │   ├── text-field.test.ts
 │   │   ├── traffic-service.test.ts
 │   │   └── wcf-date.test.ts
 │   └── tools/
+│       ├── blank-string-wire.test.ts
 │       ├── coordinate-pair.test.ts
 │       ├── ferry-tools.test.ts
+│       ├── ferry-wire.test.ts
 │       ├── input-strictness.test.ts
 │       ├── page-budget.test.ts
 │       ├── traffic-filters-upstream.test.ts
