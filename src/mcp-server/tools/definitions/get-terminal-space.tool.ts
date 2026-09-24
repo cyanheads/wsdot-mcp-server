@@ -31,6 +31,8 @@ export const getTerminalSpace = tool('wsdot_get_terminal_space', {
   input: z.object({
     departingTerminalId: z
       .number()
+      .int()
+      .positive()
       .optional()
       .describe('Filter to a specific terminal by numeric ID. Omit to return all terminals.'),
     offset: z

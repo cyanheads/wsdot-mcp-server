@@ -24,10 +24,16 @@ export const getFerrySchedule = tool('wsdot_get_ferry_schedule', {
   input: z.object({
     departingTerminalId: z
       .number()
+      .int()
+      .positive()
       .describe(
         'Numeric ID of the departing terminal. Use wsdot_get_ferry_terminals to look up terminal IDs.',
       ),
-    arrivingTerminalId: z.number().describe('Numeric ID of the arriving terminal.'),
+    arrivingTerminalId: z
+      .number()
+      .int()
+      .positive()
+      .describe('Numeric ID of the arriving terminal.'),
     tripDate: z
       .string()
       .optional()

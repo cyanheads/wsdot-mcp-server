@@ -12,7 +12,7 @@ import {
   McpError,
   serviceUnavailable,
 } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // --- Mocks (hoisted so vi.mock factory runs before imports) ---
@@ -1249,4 +1249,92 @@ describe('ferry format() parity — false, empty, and one-sided values', () => {
       expect(sailingShape.arrivalTime.description).toContain('UTC');
     });
   });
+});
+
+// ---------------------------------------------------------------------------
+// Terminal IDs — what reaches the handler, checked on the wire through runToolContract
+// ---------------------------------------------------------------------------
+
+describe('terminal ID inputs', () => {
+  const seattle = {
+    terminalId: 7,
+    terminalName: 'Seattle',
+    departingSpaces: [{ departure: '2026-09-24T22:00:00.000Z', arrivingTerminalIds: [3] }],
+  };
+
+  it('wsdot_get_terminal_space accepts terminal 7 and filters to it', async () => {
+    mockService.getTerminalSailingSpace.mockResolvedValue([seattle]);
+    const result = await runToolContract(getTerminalSpace, { departingTerminalId: 7 });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({ terminalFilter: 7, totalCount: 1 });
+  });
+
+  it('wsdot_get_terminal_space answers an unknown positive ID with an empty page and a notice', async () => {
+    mockService.getTerminalSailingSpace.mockResolvedValue([seattle]);
+    const result = await runToolContract(getTerminalSpace, { departingTerminalId: 999 });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({ terminalFilter: 999, totalCount: 0 });
+    expect((result.structuredContent as { notice?: string }).notice).toContain(
+      'wsdot_get_ferry_terminals',
+    );
+  });
+
+  it('wsdot_get_ferry_schedule accepts terminals 7 → 3 and forwards them', async () => {
+    mockService.getSchedule.mockResolvedValue({
+      departingTerminalName: 'Seattle',
+      arrivingTerminalName: 'Bainbridge Island',
+      sailings: [{ departureTime: '2026-09-24T22:00:00.000Z', vesselName: 'Wenatchee' }],
+    });
+    const result = await runToolContract(getFerrySchedule, {
+      departingTerminalId: 7,
+      arrivingTerminalId: 3,
+    });
+    expect(result.isError).toBeFalsy();
+    expect(mockService.getSchedule).toHaveBeenCalledWith(
+      7,
+      3,
+      '2026-05-23',
+      false,
+      expect.anything(),
+    );
+  });
+});
+
+describe('terminal IDs that are not positive integers are rejected before the handler runs', () => {
+  interface WireError {
+    code: number;
+    data?: Record<string, unknown>;
+    message: string;
+  }
+  const wireError = (result: Awaited<ReturnType<typeof runToolContract>>): WireError => {
+    expect(result.isError).toBe(true);
+    const error = (result.structuredContent as { error?: WireError } | undefined)?.error;
+    if (!error) throw new Error('Expected structuredContent.error on a failed call.');
+    return error;
+  };
+
+  it.each([0, -3, 7.5])('wsdot_get_terminal_space rejects departingTerminalId %j', async (id) => {
+    mockService.getTerminalSailingSpace.mockResolvedValue([]);
+    const error = wireError(await runToolContract(getTerminalSpace, { departingTerminalId: id }));
+    expect(error.code).toBe(JsonRpcErrorCode.InvalidParams);
+    expect(error.data?.reason).toBe('invalid_arguments');
+    expect(error.message).toContain('departingTerminalId');
+    expect(mockService.getTerminalSailingSpace).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { departingTerminalId: 7.5, arrivingTerminalId: 3, field: 'departingTerminalId' },
+    { departingTerminalId: 0, arrivingTerminalId: 3, field: 'departingTerminalId' },
+    { departingTerminalId: 7, arrivingTerminalId: -1, field: 'arrivingTerminalId' },
+    { departingTerminalId: 7, arrivingTerminalId: 3.25, field: 'arrivingTerminalId' },
+  ])(
+    'wsdot_get_ferry_schedule rejects $departingTerminalId → $arrivingTerminalId as invalid_arguments, not invalid_terminal_pair',
+    async ({ field, ...ids }) => {
+      const error = wireError(await runToolContract(getFerrySchedule, ids));
+      expect(error.code).toBe(JsonRpcErrorCode.InvalidParams);
+      expect(error.data?.reason).toBe('invalid_arguments');
+      expect(error.message).toContain(field);
+      expect(mockService.getSchedule).not.toHaveBeenCalled();
+    },
+  );
 });
