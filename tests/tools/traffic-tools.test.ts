@@ -1189,6 +1189,25 @@ describe('traffic format() parity — one-sided and partial values', () => {
       );
       expect(text).toContain('**Coords:** 47.4273, longitude not reported');
     });
+
+    it('renders a pass with no ID or name under a generic heading, keeping its other fields', () => {
+      const text = render(
+        getMountainPasses.format!({
+          passes: [{ roadCondition: 'Bare and dry', weatherCondition: 'Clear' }],
+        }),
+      );
+      expect(text).toContain('### Mountain pass\n');
+      expect(text).toContain('**Road:** Bare and dry');
+      expect(text).toContain('**Weather:** Clear');
+      expect(text).not.toContain('**ID:**');
+      expect(text).not.toContain('undefined');
+    });
+
+    it('headings a pass with an ID but no name by the generic label, keeping the ID line', () => {
+      const text = render(getMountainPasses.format!({ passes: [{ mountainPassId: 7 }] }));
+      expect(text).toContain('### Mountain pass\n');
+      expect(text).toContain('**ID:** 7');
+    });
   });
 
   describe('getTollRates', () => {

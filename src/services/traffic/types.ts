@@ -32,14 +32,14 @@ export interface TravelRestriction {
   travelDirection?: string;
 }
 
-/** Normalized mountain pass condition. */
+/** Normalized mountain pass condition. Identity is optional too — never fabricated when absent. */
 export interface MountainPass {
   dateUpdated?: string;
   elevation?: number;
   latitude?: number;
   longitude?: number;
-  mountainPassId: number;
-  mountainPassName: string;
+  mountainPassId?: number;
+  mountainPassName?: string;
   restrictionOne?: TravelRestriction;
   restrictionTwo?: TravelRestriction;
   roadCondition?: string;

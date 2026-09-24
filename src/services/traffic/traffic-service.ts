@@ -9,7 +9,7 @@ import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
-import { htmlToText } from '@/services/html-text.js';
+import { htmlTextField, textField } from '@/services/text-field.js';
 import { wcfDateField } from '@/services/wcf-date.js';
 import { assertUpstreamJson, fetchUpstream, redactUrl } from '@/services/wsdot-http.js';
 import { routeMatches } from './route-match.js';
@@ -24,9 +24,11 @@ import type {
   RawMountainPass,
   RawRoadwayLocation,
   RawTollRate,
+  RawTravelRestriction,
   RawTravelTime,
   RoadwayLocation,
   TollRate,
+  TravelRestriction,
   TravelTime,
 } from './types.js';
 
@@ -83,46 +85,28 @@ export class TrafficApiService {
       'MountainPassConditions/MountainPassConditionsREST.svc/GetMountainPassConditionsAsJson',
       ctx,
     );
-    return passes.map((p) => ({
-      mountainPassId: p.MountainPassId ?? 0,
-      mountainPassName: p.MountainPassName ?? 'Unknown',
-      ...(p.ElevationInFeet != null && { elevation: p.ElevationInFeet }),
-      ...(p.TemperatureInFahrenheit != null && {
-        temperatureInFahrenheit: p.TemperatureInFahrenheit,
-      }),
-      ...(p.WeatherCondition != null && { weatherCondition: p.WeatherCondition }),
-      ...(p.RoadCondition != null && { roadCondition: p.RoadCondition }),
-      ...(typeof p.TravelAdvisoryActive === 'boolean' && {
-        travelAdvisoryActive: p.TravelAdvisoryActive,
-      }),
-      ...(p.RestrictionOne?.RestrictionText || p.RestrictionOne?.TravelDirection
-        ? {
-            restrictionOne: {
-              ...(p.RestrictionOne.RestrictionText != null && {
-                text: p.RestrictionOne.RestrictionText,
-              }),
-              ...(p.RestrictionOne.TravelDirection != null && {
-                travelDirection: p.RestrictionOne.TravelDirection,
-              }),
-            },
-          }
-        : {}),
-      ...(p.RestrictionTwo?.RestrictionText || p.RestrictionTwo?.TravelDirection
-        ? {
-            restrictionTwo: {
-              ...(p.RestrictionTwo.RestrictionText != null && {
-                text: p.RestrictionTwo.RestrictionText,
-              }),
-              ...(p.RestrictionTwo.TravelDirection != null && {
-                travelDirection: p.RestrictionTwo.TravelDirection,
-              }),
-            },
-          }
-        : {}),
-      ...wcfDateField('dateUpdated', p.DateUpdated),
-      ...(p.Latitude != null && { latitude: p.Latitude }),
-      ...(p.Longitude != null && { longitude: p.Longitude }),
-    }));
+    return passes.map((p) => {
+      const restrictionOne = normalizeRestriction(p.RestrictionOne);
+      const restrictionTwo = normalizeRestriction(p.RestrictionTwo);
+      return {
+        ...(p.MountainPassId != null && { mountainPassId: p.MountainPassId }),
+        ...textField('mountainPassName', p.MountainPassName),
+        ...(p.ElevationInFeet != null && { elevation: p.ElevationInFeet }),
+        ...(p.TemperatureInFahrenheit != null && {
+          temperatureInFahrenheit: p.TemperatureInFahrenheit,
+        }),
+        ...textField('weatherCondition', p.WeatherCondition),
+        ...textField('roadCondition', p.RoadCondition),
+        ...(typeof p.TravelAdvisoryActive === 'boolean' && {
+          travelAdvisoryActive: p.TravelAdvisoryActive,
+        }),
+        ...(restrictionOne && { restrictionOne }),
+        ...(restrictionTwo && { restrictionTwo }),
+        ...wcfDateField('dateUpdated', p.DateUpdated),
+        ...(p.Latitude != null && { latitude: p.Latitude }),
+        ...(p.Longitude != null && { longitude: p.Longitude }),
+      };
+    });
   }
 
   async searchAlerts(params: AlertSearchParams, ctx: Context): Promise<HighwayAlert[]> {
@@ -176,23 +160,23 @@ export class TrafficApiService {
     );
     return times.map((t) => ({
       ...(t.TravelTimeID != null && { travelTimeId: t.TravelTimeID }),
-      ...(t.Name != null && { name: t.Name }),
-      ...(t.Description != null && { description: t.Description }),
+      ...textField('name', t.Name),
+      ...textField('description', t.Description),
       ...(isMeasuredDuration(t.CurrentTime, t.Distance) && { currentTimeInMinutes: t.CurrentTime }),
       ...(isMeasuredDuration(t.AverageTime, t.Distance) && { averageTimeInMinutes: t.AverageTime }),
       ...wcfDateField('timeUpdated', t.TimeUpdated),
       ...(t.Distance != null && { distanceInMiles: t.Distance }),
       ...(t.StartPoint != null && {
         startPoint: {
-          ...(t.StartPoint.RoadName != null && { roadName: t.StartPoint.RoadName }),
-          ...(t.StartPoint.Direction != null && { direction: t.StartPoint.Direction }),
+          ...textField('roadName', t.StartPoint.RoadName),
+          ...textField('direction', t.StartPoint.Direction),
           ...(t.StartPoint.MilePost != null && { milePost: t.StartPoint.MilePost }),
         },
       }),
       ...(t.EndPoint != null && {
         endPoint: {
-          ...(t.EndPoint.RoadName != null && { roadName: t.EndPoint.RoadName }),
-          ...(t.EndPoint.Direction != null && { direction: t.EndPoint.Direction }),
+          ...textField('roadName', t.EndPoint.RoadName),
+          ...textField('direction', t.EndPoint.Direction),
           ...(t.EndPoint.MilePost != null && { milePost: t.EndPoint.MilePost }),
         },
       }),
@@ -206,15 +190,15 @@ export class TrafficApiService {
       ctx,
     );
     return rates.map((r) => ({
-      ...(r.TripName != null && { tripName: r.TripName }),
-      ...(r.StateRoute != null && { stateRoute: r.StateRoute }),
-      ...(r.TravelDirection != null && { travelDirection: r.TravelDirection }),
+      ...textField('tripName', r.TripName),
+      ...textField('stateRoute', r.StateRoute),
+      ...textField('travelDirection', r.TravelDirection),
       ...(r.StartMilepost != null && { startMilepost: r.StartMilepost }),
       ...(r.EndMilepost != null && { endMilepost: r.EndMilepost }),
       ...(r.CurrentToll != null && { tollRateInDollars: r.CurrentToll / 100 }),
-      ...(r.CurrentMessage != null && { message: r.CurrentMessage }),
-      ...(r.StartLocationName != null && { startLocationName: r.StartLocationName }),
-      ...(r.EndLocationName != null && { endLocationName: r.EndLocationName }),
+      ...textField('message', r.CurrentMessage),
+      ...textField('startLocationName', r.StartLocationName),
+      ...textField('endLocationName', r.EndLocationName),
       ...(r.StartLatitude != null && { startLatitude: r.StartLatitude }),
       ...(r.StartLongitude != null && { startLongitude: r.StartLongitude }),
       ...(r.EndLatitude != null && { endLatitude: r.EndLatitude }),
@@ -230,21 +214,15 @@ export class TrafficApiService {
       ctx,
     );
     return crossings.map((c) => ({
-      ...(c.CrossingName != null && { crossingName: c.CrossingName }),
+      ...textField('crossingName', c.CrossingName),
       // WSDOT emits -1 when a crossing has no current reading — drop it rather than surface a bogus wait.
       ...(c.WaitTime != null && c.WaitTime >= 0 && { waitTimeInMinutes: c.WaitTime }),
       ...wcfDateField('updateTime', c.Time),
       ...(c.BorderCrossingLocation != null && {
         location: {
-          ...(c.BorderCrossingLocation.Description != null && {
-            description: c.BorderCrossingLocation.Description,
-          }),
-          ...(c.BorderCrossingLocation.RoadName != null && {
-            roadName: c.BorderCrossingLocation.RoadName,
-          }),
-          ...(c.BorderCrossingLocation.Direction != null && {
-            direction: c.BorderCrossingLocation.Direction,
-          }),
+          ...textField('description', c.BorderCrossingLocation.Description),
+          ...textField('roadName', c.BorderCrossingLocation.RoadName),
+          ...textField('direction', c.BorderCrossingLocation.Direction),
           ...(c.BorderCrossingLocation.MilePost != null && {
             milePost: c.BorderCrossingLocation.MilePost,
           }),
@@ -316,8 +294,8 @@ function isMeasuredDuration(
 function normalizeRoadwayLocation(loc: RawRoadwayLocation): RoadwayLocation {
   const unpopulated = loc.MilePost === 0 && loc.Latitude === 0 && loc.Longitude === 0;
   return {
-    ...(loc.RoadName != null && { roadName: loc.RoadName }),
-    ...(loc.Direction != null && { direction: loc.Direction }),
+    ...textField('roadName', loc.RoadName),
+    ...textField('direction', loc.Direction),
     ...(!unpopulated && loc.MilePost != null && { milePost: loc.MilePost }),
     ...(!unpopulated && loc.Latitude != null && { latitude: loc.Latitude }),
     ...(!unpopulated && loc.Longitude != null && { longitude: loc.Longitude }),
@@ -325,29 +303,36 @@ function normalizeRoadwayLocation(loc: RawRoadwayLocation): RoadwayLocation {
 }
 
 /**
+ * A pass restriction, or `undefined` when neither its text nor its direction carries a value —
+ * the gate reads the normalized strings, so a whitespace-only pair leaves no empty object behind.
+ */
+function normalizeRestriction(
+  raw: RawTravelRestriction | null | undefined,
+): TravelRestriction | undefined {
+  const restriction = {
+    ...textField('text', raw?.RestrictionText),
+    ...textField('travelDirection', raw?.TravelDirection),
+  };
+  return Object.keys(restriction).length > 0 ? restriction : undefined;
+}
+
+/**
  * WSDOT authors alert descriptions in a rich-text editor and ships the markup through — a
  * "read the advisory" link arrives as a raw `<a href=…>` anchor. Both descriptions are rendered
  * to plain text here, before either response path reads them, so `structuredContent` and the
  * `format()` markdown carry the same normalized string. A description that held nothing but
- * markup normalizes to an empty string and is dropped rather than surfaced as a blank field.
+ * markup or whitespace is dropped rather than surfaced as a blank field.
  */
-function alertDescription(raw: string | null | undefined): string | undefined {
-  if (raw == null) return;
-  return htmlToText(raw) || undefined;
-}
-
 function normalizeAlert(a: RawHighwayAlert): HighwayAlert {
-  const headline = alertDescription(a.HeadlineDescription);
-  const extended = alertDescription(a.ExtendedDescription);
   return {
     ...(a.AlertID != null && { alertId: a.AlertID }),
-    ...(headline != null && { headlineDescription: headline }),
-    ...(extended != null && { extendedDescription: extended }),
-    ...(a.EventCategory != null && { eventCategory: a.EventCategory }),
-    ...(a.EventStatus != null && { eventStatus: a.EventStatus }),
-    ...(a.Priority != null && { priority: a.Priority }),
-    ...(a.Region != null && { region: a.Region }),
-    ...(a.County != null && { county: a.County }),
+    ...htmlTextField('headlineDescription', a.HeadlineDescription),
+    ...htmlTextField('extendedDescription', a.ExtendedDescription),
+    ...textField('eventCategory', a.EventCategory),
+    ...textField('eventStatus', a.EventStatus),
+    ...textField('priority', a.Priority),
+    ...textField('region', a.Region),
+    ...textField('county', a.County),
     ...(a.StartRoadwayLocation != null && {
       startRoadwayLocation: normalizeRoadwayLocation(a.StartRoadwayLocation),
     }),
@@ -364,15 +349,15 @@ function normalizeCamera(c: RawCamera): Camera {
   const loc = c.CameraLocation;
   return {
     ...(c.CameraID != null && { cameraId: c.CameraID }),
-    ...(c.Title != null && { title: c.Title }),
-    ...(c.Description != null && { description: c.Description }),
-    ...(c.ImageURL != null && { imageUrl: c.ImageURL }),
+    ...textField('title', c.Title),
+    ...textField('description', c.Description),
+    ...textField('imageUrl', c.ImageURL),
     ...(c.ImageWidth != null && { imageWidth: c.ImageWidth }),
     ...(c.ImageHeight != null && { imageHeight: c.ImageHeight }),
-    ...(loc?.RoadName != null && { roadName: loc.RoadName }),
-    ...(loc?.Direction != null && { direction: loc.Direction }),
+    ...textField('roadName', loc?.RoadName),
+    ...textField('direction', loc?.Direction),
     ...(loc?.MilePost != null && { milePost: loc.MilePost }),
-    ...(c.Region != null && { region: c.Region }),
+    ...textField('region', c.Region),
     ...(loc?.Latitude != null && { latitude: loc.Latitude }),
     ...(loc?.Longitude != null && { longitude: loc.Longitude }),
   };

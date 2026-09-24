@@ -22,10 +22,16 @@ export const getMountainPasses = tool('wsdot_get_mountain_passes', {
       .array(
         z
           .object({
-            mountainPassId: z.number().describe('Numeric identifier for the pass.'),
+            mountainPassId: z
+              .number()
+              .optional()
+              .describe('Numeric identifier for the pass. Absent when upstream omits it.'),
             mountainPassName: z
               .string()
-              .describe('Human-readable pass name (e.g. "Snoqualmie Pass").'),
+              .optional()
+              .describe(
+                'Human-readable pass name (e.g. "Snoqualmie Pass"). Absent when upstream omits it.',
+              ),
             elevation: z.number().optional().describe('Pass summit elevation in feet.'),
             temperatureInFahrenheit: z
               .number()
@@ -141,7 +147,7 @@ export const getMountainPasses = tool('wsdot_get_mountain_passes', {
     }
     const lines: string[] = [];
     for (const p of result.passes) {
-      lines.push(`### ${p.mountainPassName}`);
+      lines.push(`### ${p.mountainPassName ?? 'Mountain pass'}`);
       if (p.elevation != null) lines.push(`**Elevation:** ${p.elevation} ft`);
       if (p.temperatureInFahrenheit != null)
         lines.push(`**Temperature:** ${p.temperatureInFahrenheit}°F`);
@@ -163,7 +169,7 @@ export const getMountainPasses = tool('wsdot_get_mountain_passes', {
         lines.push(`**Restriction 2:** ${r}`);
       }
       if (p.dateUpdated) lines.push(`**Updated:** ${p.dateUpdated}`);
-      lines.push(`**ID:** ${p.mountainPassId}`);
+      if (p.mountainPassId != null) lines.push(`**ID:** ${p.mountainPassId}`);
       const coords = coordinatePair(p.latitude, p.longitude);
       if (coords) lines.push(`**Coords:** ${coords}`);
       lines.push('');

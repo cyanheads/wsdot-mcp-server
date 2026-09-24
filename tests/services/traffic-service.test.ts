@@ -35,8 +35,19 @@ import { nth } from '../helpers/assertions.js';
  */
 const ACCESS_CODE = 'test-access-code';
 
-const mockFetch = vi.fn();
+/**
+ * A request no test stubbed rejects, naming the endpoint (query string dropped, so the credential
+ * never enters the message). The file-level reset below restores this default before every test,
+ * so one test's `mockResolvedValue` cannot answer a later test's request.
+ */
+const mockFetch = vi.fn<(url: string | URL | Request) => Promise<unknown>>((url) =>
+  Promise.reject(new Error(`Unstubbed fetch: ${String(url).split('?')[0]}`)),
+);
 vi.stubGlobal('fetch', mockFetch);
+
+beforeEach(() => {
+  mockFetch.mockReset();
+});
 
 // Helper to build a Response-like object
 function makeResponse(body: unknown, status = 200, contentType = 'application/json') {
@@ -132,13 +143,20 @@ describe('TrafficApiService — mountain pass normalization', () => {
     expect('longitude' in p).toBe(false);
   });
 
-  it('falls back to defaults when MountainPassId/Name are null', async () => {
-    const raw = [{ MountainPassId: null, MountainPassName: null }];
+  it('keeps a pass with no ID or name without fabricating either', async () => {
+    const raw = [
+      { MountainPassId: null, MountainPassName: null, RoadCondition: 'Bare and dry' },
+      { RoadCondition: 'Wet' },
+      { MountainPassName: '', WeatherCondition: 'Rain' },
+    ];
     mockFetch.mockResolvedValue(makeResponse(raw));
     const ctx = createMockContext();
     const passes = await svc.getMountainPasses(ctx);
-    expect(nth(passes).mountainPassId).toBe(0);
-    expect(nth(passes).mountainPassName).toBe('Unknown');
+    expect(passes).toEqual([
+      { roadCondition: 'Bare and dry' },
+      { roadCondition: 'Wet' },
+      { weatherCondition: 'Rain' },
+    ]);
   });
 
   it('omits restrictionOne when both text and travelDirection are absent', async () => {
@@ -943,6 +961,228 @@ describe('TrafficApiService — camera normalization', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Blank and padded upstream strings — a blank or whitespace-only string is absent from the
+// normalized record; a populated one is kept with its ends trimmed.
+// ---------------------------------------------------------------------------
+
+describe('TrafficApiService — blank and padded upstream strings', () => {
+  let svc: TrafficApiService;
+
+  beforeEach(() => {
+    svc = new TrafficApiService({} as never, {} as never);
+  });
+
+  /** Every optional upstream string each traffic feed maps, set to `blank`. */
+  function blankFeeds(blank: string) {
+    const location = { RoadName: blank, Direction: blank };
+    return {
+      passes: [
+        {
+          MountainPassId: 1,
+          MountainPassName: blank,
+          WeatherCondition: blank,
+          RoadCondition: blank,
+          RestrictionOne: { RestrictionText: blank, TravelDirection: blank },
+          RestrictionTwo: { RestrictionText: blank, TravelDirection: blank },
+          DateUpdated: blank,
+        },
+      ],
+      alerts: [
+        {
+          AlertID: 1,
+          HeadlineDescription: blank,
+          ExtendedDescription: blank,
+          EventCategory: blank,
+          EventStatus: blank,
+          Priority: blank,
+          Region: blank,
+          County: blank,
+          StartRoadwayLocation: { ...location, MilePost: 5 },
+          EndRoadwayLocation: { ...location, MilePost: 9 },
+          StartTime: blank,
+          EndTime: blank,
+          LastUpdatedTime: blank,
+        },
+      ],
+      travelTimes: [
+        {
+          TravelTimeID: 1,
+          Name: blank,
+          Description: blank,
+          TimeUpdated: blank,
+          StartPoint: { ...location, MilePost: 1 },
+          EndPoint: { ...location, MilePost: 2 },
+        },
+      ],
+      tolls: [
+        {
+          TripName: blank,
+          StateRoute: blank,
+          TravelDirection: blank,
+          CurrentToll: 100,
+          CurrentMessage: blank,
+          StartLocationName: blank,
+          EndLocationName: blank,
+          TimeUpdated: blank,
+        },
+      ],
+      crossings: [
+        {
+          CrossingName: blank,
+          Time: blank,
+          BorderCrossingLocation: { Description: blank, ...location, MilePost: 0 },
+        },
+      ],
+      cameras: [
+        {
+          CameraID: 1,
+          Title: blank,
+          Description: blank,
+          ImageURL: blank,
+          Region: blank,
+          CameraLocation: { ...location, MilePost: 3 },
+        },
+      ],
+    };
+  }
+
+  describe.each([
+    ['empty', ''],
+    ['whitespace-only', ' \t\r\n   '],
+  ])('an all-%s fixture yields no string field from any mapper', (_label, blank) => {
+    const feeds = blankFeeds(blank);
+
+    it('mountain passes', async () => {
+      mockFetch.mockResolvedValue(makeResponse(feeds.passes));
+      expect(await svc.getMountainPasses(createMockContext())).toEqual([{ mountainPassId: 1 }]);
+    });
+
+    it('highway alerts, roadway locations included', async () => {
+      mockFetch.mockResolvedValue(makeResponse(feeds.alerts));
+      expect(await svc.searchAlerts({}, createMockContext())).toEqual([
+        {
+          alertId: 1,
+          startRoadwayLocation: { milePost: 5 },
+          endRoadwayLocation: { milePost: 9 },
+        },
+      ]);
+    });
+
+    it('travel times, start and end points included', async () => {
+      mockFetch.mockResolvedValue(makeResponse(feeds.travelTimes));
+      expect(await svc.getTravelTimes(createMockContext())).toEqual([
+        { travelTimeId: 1, startPoint: { milePost: 1 }, endPoint: { milePost: 2 } },
+      ]);
+    });
+
+    it('toll rates', async () => {
+      mockFetch.mockResolvedValue(makeResponse(feeds.tolls));
+      expect(await svc.getTollRates(createMockContext())).toEqual([{ tollRateInDollars: 1 }]);
+    });
+
+    it('border crossings, the nested location included', async () => {
+      mockFetch.mockResolvedValue(makeResponse(feeds.crossings));
+      expect(await svc.getBorderCrossings(createMockContext())).toEqual([
+        { location: { milePost: 0 } },
+      ]);
+    });
+
+    it('cameras', async () => {
+      mockFetch.mockResolvedValue(makeResponse(feeds.cameras));
+      expect(await svc.searchCameras({}, createMockContext())).toEqual([
+        { cameraId: 1, milePost: 3 },
+      ]);
+    });
+  });
+
+  it('keeps a restriction whose direction is populated and whose text is blank', async () => {
+    const raw = [
+      {
+        MountainPassId: 2,
+        MountainPassName: 'Stevens Pass',
+        RestrictionOne: { RestrictionText: '  ', TravelDirection: 'Eastbound ' },
+        RestrictionTwo: { RestrictionText: ' No restrictions', TravelDirection: '' },
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const p = nth(await svc.getMountainPasses(createMockContext()));
+    expect(p.restrictionOne).toEqual({ travelDirection: 'Eastbound' });
+    expect(p.restrictionTwo).toEqual({ text: 'No restrictions' });
+  });
+
+  it('drops a blank WeatherCondition — the live shape on most passes', async () => {
+    const raw = [
+      { MountainPassId: 11, MountainPassName: 'Snoqualmie Pass', WeatherCondition: '' },
+      { MountainPassId: 12, MountainPassName: 'Stevens Pass', WeatherCondition: 'Snowing' },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const passes = await svc.getMountainPasses(createMockContext());
+    expect('weatherCondition' in nth(passes)).toBe(false);
+    expect(nth(passes, 1).weatherCondition).toBe('Snowing');
+  });
+
+  it('drops an alert description holding only markup', async () => {
+    const raw = [
+      { AlertID: 3, HeadlineDescription: '<p> </p><br />', ExtendedDescription: '&nbsp;' },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    expect(await svc.searchAlerts({}, createMockContext())).toEqual([{ alertId: 3 }]);
+  });
+
+  it('trims padded values at the ends, keeping internal whitespace and line breaks', async () => {
+    mockFetch.mockResolvedValue(
+      makeResponse([
+        {
+          MountainPassId: 1,
+          MountainPassName: 'Snoqualmie Pass ',
+          WeatherCondition: '  Light snow  ',
+        },
+      ]),
+    );
+    const pass = nth(await svc.getMountainPasses(createMockContext()));
+    expect(pass.mountainPassName).toBe('Snoqualmie Pass');
+    expect(pass.weatherCondition).toBe('Light snow');
+
+    mockFetch.mockResolvedValue(
+      makeResponse([
+        {
+          AlertID: 4,
+          HeadlineDescription: '  Lane closed.\n  Expect  delays.  ',
+          StartRoadwayLocation: { RoadName: '005 ', Direction: ' N' },
+        },
+      ]),
+    );
+    const alert = nth(await svc.searchAlerts({}, createMockContext()));
+    expect(alert.headlineDescription).toBe('Lane closed.\n  Expect  delays.');
+    expect(alert.startRoadwayLocation).toEqual({ roadName: '005', direction: 'N' });
+
+    mockFetch.mockResolvedValue(
+      makeResponse([
+        {
+          CameraID: 7,
+          Title: 'I-405 at MP 27.8: 210th St SE, SB ',
+          CameraLocation: { RoadName: 'ORE217 ' },
+        },
+      ]),
+    );
+    const camera = nth(await svc.searchCameras({}, createMockContext()));
+    expect(camera.title).toBe('I-405 at MP 27.8: 210th St SE, SB');
+    expect(camera.roadName).toBe('ORE217');
+  });
+
+  it('matches a padded upstream route name against a stateRoute filter', async () => {
+    mockFetch.mockResolvedValue(
+      makeResponse([
+        { CameraID: 1, CameraLocation: { RoadName: 'ORE217 ' } },
+        { CameraID: 2, CameraLocation: { RoadName: 'I-5' } },
+      ]),
+    );
+    const cameras = await svc.searchCameras({ stateRoute: '217' }, createMockContext());
+    expect(cameras.map((c) => c.cameraId)).toEqual([1]);
+  });
+});
+
 describe('TrafficApiService — HTTP error handling', () => {
   let svc: TrafficApiService;
 
@@ -1157,5 +1397,17 @@ describe('TrafficApiService — access code never reaches the error payload', ()
     const err = await svc.getMountainPasses(createMockContext()).catch((e) => e);
     expect((err as McpError).code).toBe(JsonRpcErrorCode.Timeout);
     expect(wirePayload(err)).not.toContain(ACCESS_CODE);
+  });
+});
+
+describe('TrafficApiService — the fetch stub', () => {
+  it('rejects a request no test stubbed, naming the endpoint without the credential', async () => {
+    const svc = new TrafficApiService({} as never, {} as never);
+    const err = await svc.getMountainPasses(createMockContext()).catch((e) => e);
+    expect(err).toBeInstanceOf(McpError);
+    expect((err as McpError).message).toContain(
+      'Unstubbed fetch: https://www.wsdot.wa.gov/Traffic/api/MountainPassConditions/MountainPassConditionsREST.svc/GetMountainPassConditionsAsJson',
+    );
+    expect((err as McpError).message).not.toContain(ACCESS_CODE);
   });
 });

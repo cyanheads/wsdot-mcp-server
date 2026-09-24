@@ -28,6 +28,14 @@ describe('decodeWcfDate', () => {
   it('passes through a value that is not WCF-shaped (already ISO)', () => {
     expect(decodeWcfDate('2026-05-23T10:00:00.000Z')).toBe('2026-05-23T10:00:00.000Z');
   });
+
+  it.each(['', '   ', '\t\n'])('returns undefined for the blank value %j', (blank) => {
+    expect(decodeWcfDate(blank)).toBeUndefined();
+  });
+
+  it('decodes a WCF date that arrives with surrounding whitespace', () => {
+    expect(decodeWcfDate(' /Date(1700000000000-0800)/ ')).toBe('2023-11-14T22:13:20.000Z');
+  });
 });
 
 describe('wcfDateField', () => {
@@ -39,6 +47,11 @@ describe('wcfDateField', () => {
 
   it('returns an empty object for null input (field omitted)', () => {
     expect(wcfDateField('dateUpdated', null)).toEqual({});
+  });
+
+  it('returns an empty object for a blank date (field omitted)', () => {
+    expect(wcfDateField('dateUpdated', '')).toEqual({});
+    expect(wcfDateField('dateUpdated', '  ')).toEqual({});
   });
 
   it('returns an empty object for the MinValue sentinel (field omitted)', () => {
