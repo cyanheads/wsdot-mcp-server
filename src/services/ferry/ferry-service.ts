@@ -67,7 +67,6 @@ function assertTripDateAccepted(
   message: string | undefined,
   endpoint: string,
   status: number,
-  ctx: Context,
 ): void {
   if (message === undefined || !TRIP_DATE_REJECTED.test(message)) return;
   throw validationError(`WSF has no schedule for the requested trip date. ${message}`, {
@@ -75,7 +74,6 @@ function assertTripDateAccepted(
     status,
     reason: 'invalid_date',
     retryable: false,
-    ...ctx.recoveryFor('invalid_date'),
   });
 }
 
@@ -128,8 +126,8 @@ export class FerryApiService {
         const body = await response.text();
         // A trip date outside WSF's window is an input error whatever the status it arrives with,
         // so it is classified before a non-2xx falls through to api_unavailable.
-        if (!response.ok) assertTripDateAccepted(wsfMessage(body), endpoint, response.status, ctx);
-        assertUpstreamJson({ body, endpoint, response, service: SERVICE }, ctx);
+        if (!response.ok) assertTripDateAccepted(wsfMessage(body), endpoint, response.status);
+        assertUpstreamJson({ body, endpoint, response, service: SERVICE });
 
         const parsed = JSON.parse(body) as T;
         // Ferry API returns HTTP 200 with {"Message":"..."} for validation errors
@@ -140,7 +138,7 @@ export class FerryApiService {
           'Message' in (parsed as Record<string, unknown>)
         ) {
           const msg = (parsed as Record<string, unknown>).Message as string;
-          assertTripDateAccepted(msg, endpoint, response.status, ctx);
+          assertTripDateAccepted(msg, endpoint, response.status);
           throw validationError(`WSF Ferry API error: ${msg}`, { url: endpoint });
         }
         return parsed;

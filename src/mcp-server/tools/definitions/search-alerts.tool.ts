@@ -223,7 +223,6 @@ export const searchAlerts = tool('wsdot_search_alerts', {
       throw ctx.fail(
         'invalid_region',
         `Unknown region "${region}" — wsdot_search_alerts takes a WSDOT region name.`,
-        { ...ctx.recoveryFor('invalid_region') },
       );
     }
     if (
@@ -234,7 +233,6 @@ export const searchAlerts = tool('wsdot_search_alerts', {
       throw ctx.fail(
         'invalid_milepost_range',
         `startMilepost ${input.startMilepost} is greater than endMilepost ${input.endMilepost}.`,
-        { ...ctx.recoveryFor('invalid_milepost_range') },
       );
     }
     const fetched = await getTrafficApiService().searchAlerts(

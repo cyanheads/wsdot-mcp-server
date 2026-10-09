@@ -4,7 +4,6 @@
  * @module tests/tools/ferry-tools.test
  */
 
-import type { Context } from '@cyanheads/mcp-ts-core';
 import {
   configurationError,
   type ErrorContract,
@@ -45,7 +44,7 @@ import { getFerrySchedule } from '@/mcp-server/tools/definitions/get-ferry-sched
 import { getFerryTerminals } from '@/mcp-server/tools/definitions/get-ferry-terminals.tool.js';
 import { getTerminalSpace } from '@/mcp-server/tools/definitions/get-terminal-space.tool.js';
 import { getVesselLocations } from '@/mcp-server/tools/definitions/get-vessel-locations.tool.js';
-import { formattedText, nth, rejection } from '../helpers/assertions.js';
+import { formattedText, nth, rejection, wireError } from '../helpers/assertions.js';
 import { describePaginationContract } from '../helpers/pagination.js';
 
 beforeEach(() => {
@@ -84,42 +83,32 @@ describe('ferry tools — upstream failure contract', () => {
   }
 
   it('surfaces api_unavailable with its recovery hint when the service reports an outage', async () => {
-    // Mirrors what FerryApiService.fetchJson throws for a non-2xx.
-    mockService.getTerminals.mockImplementation((c: Context) => {
+    // Mirrors what FerryApiService.fetchJson throws for a non-2xx: the reason only. The hint
+    // comes from the tool's errors[] entry on the way out.
+    mockService.getTerminals.mockImplementation(() => {
       throw serviceUnavailable('WSF Ferry API returned HTTP 503.', {
         status: 503,
         reason: 'api_unavailable',
-        ...c.recoveryFor('api_unavailable'),
       });
     });
-    const ctx = createMockContext({ errors: getFerryTerminals.errors });
-    const err = await rejection(() =>
-      getFerryTerminals.handler(getFerryTerminals.input.parse({}), ctx),
-    );
-    expect(err).toBeInstanceOf(McpError);
-    expect((err as McpError).data).toMatchObject({
+    const error = wireError(await runToolContract(getFerryTerminals, {}));
+    expect(error.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+    expect(error.data).toMatchObject({
       reason: 'api_unavailable',
       recovery: { hint: expect.stringContaining('Retry in 30 seconds') },
     });
   });
 
   it('surfaces invalid_access_code with a configuration-repair recovery hint', async () => {
-    mockService.getTerminals.mockImplementation((c: Context) => {
+    mockService.getTerminals.mockImplementation(() => {
       throw configurationError(
         'WSF Ferry API rejected the request with HTTP 400 — WSDOT_ACCESS_CODE is missing, invalid, or not registered.',
-        {
-          status: 400,
-          reason: 'invalid_access_code',
-          ...c.recoveryFor('invalid_access_code'),
-        },
+        { status: 400, reason: 'invalid_access_code' },
       );
     });
-    const ctx = createMockContext({ errors: getFerryTerminals.errors });
-    const err = await rejection(() =>
-      getFerryTerminals.handler(getFerryTerminals.input.parse({}), ctx),
-    );
-    expect((err as McpError).code).toBe(JsonRpcErrorCode.ConfigurationError);
-    expect((err as McpError).data).toMatchObject({
+    const error = wireError(await runToolContract(getFerryTerminals, {}));
+    expect(error.code).toBe(JsonRpcErrorCode.ConfigurationError);
+    expect(error.data).toMatchObject({
       reason: 'invalid_access_code',
       recovery: { hint: expect.stringContaining('WSDOT_ACCESS_CODE') },
     });
@@ -324,11 +313,9 @@ describe('getFerryRoutes', () => {
     mockToFerryDate.mockImplementation(() => {
       throw new Error('Invalid date');
     });
-    const ctx = createMockContext({ errors: getFerryRoutes.errors });
-    const input = getFerryRoutes.input.parse({ tripDate: 'not-a-date' });
-    const err = await rejection(() => getFerryRoutes.handler(input, ctx));
-    expect(err).toBeInstanceOf(McpError);
-    expect((err as McpError).data).toMatchObject({
+    const error = wireError(await runToolContract(getFerryRoutes, { tripDate: 'not-a-date' }));
+    expect(error.code).toBe(JsonRpcErrorCode.ValidationError);
+    expect(error.data).toMatchObject({
       reason: 'invalid_date',
       recovery: { hint: expect.stringContaining('YYYY-MM-DD') },
     });
@@ -490,15 +477,15 @@ describe('getFerrySchedule', () => {
     mockToFerryDate.mockImplementation(() => {
       throw new Error('Invalid date');
     });
-    const ctx = createMockContext({ errors: getFerrySchedule.errors });
-    const input = getFerrySchedule.input.parse({
-      departingTerminalId: 7,
-      arrivingTerminalId: 3,
-      tripDate: 'not-a-date',
-    });
-    const err = await rejection(() => getFerrySchedule.handler(input, ctx));
-    expect(err).toBeInstanceOf(McpError);
-    expect((err as McpError).data).toMatchObject({
+    const error = wireError(
+      await runToolContract(getFerrySchedule, {
+        departingTerminalId: 7,
+        arrivingTerminalId: 3,
+        tripDate: 'not-a-date',
+      }),
+    );
+    expect(error.code).toBe(JsonRpcErrorCode.ValidationError);
+    expect(error.data).toMatchObject({
       reason: 'invalid_date',
       recovery: { hint: expect.stringContaining('YYYY-MM-DD') },
     });
@@ -508,14 +495,14 @@ describe('getFerrySchedule', () => {
     mockService.getSchedule.mockRejectedValue(
       new McpError(JsonRpcErrorCode.ValidationError, 'WSF Ferry API error: Invalid terminal pair'),
     );
-    const ctx = createMockContext({ errors: getFerrySchedule.errors });
-    const input = getFerrySchedule.input.parse({
-      departingTerminalId: 9999,
-      arrivingTerminalId: 9998,
-    });
-    const err = await rejection(() => getFerrySchedule.handler(input, ctx));
-    expect(err).toBeInstanceOf(McpError);
-    expect((err as McpError).data).toMatchObject({
+    const error = wireError(
+      await runToolContract(getFerrySchedule, {
+        departingTerminalId: 9999,
+        arrivingTerminalId: 9998,
+      }),
+    );
+    expect(error.code).toBe(JsonRpcErrorCode.ValidationError);
+    expect(error.data).toMatchObject({
       reason: 'invalid_terminal_pair',
       recovery: {
         hint: expect.stringMatching(
@@ -533,14 +520,14 @@ describe('getFerrySchedule', () => {
         retryable: false,
       }),
     );
-    const ctx = createMockContext({ errors: getFerrySchedule.errors });
-    const input = getFerrySchedule.input.parse({
-      departingTerminalId: 999,
-      arrivingTerminalId: 3,
-    });
-    const err = await rejection(() => getFerrySchedule.handler(input, ctx));
-    expect(err).toBeInstanceOf(McpError);
-    expect((err as McpError).data).toMatchObject({
+    const error = wireError(
+      await runToolContract(getFerrySchedule, {
+        departingTerminalId: 999,
+        arrivingTerminalId: 3,
+      }),
+    );
+    expect(error.code).toBe(JsonRpcErrorCode.ValidationError);
+    expect(error.data).toMatchObject({
       reason: 'invalid_terminal_pair',
       recovery: {
         hint: expect.stringMatching(
@@ -599,21 +586,21 @@ describe('getFerrySchedule', () => {
       }),
     );
     mockService.hasRoutes.mockResolvedValue(false);
-    const ctx = createMockContext({ errors: getFerrySchedule.errors });
-    const input = getFerrySchedule.input.parse({
-      departingTerminalId: 7,
-      arrivingTerminalId: 3,
-      tripDate: '2027-01-15',
-    });
-    const err = await rejection(() => getFerrySchedule.handler(input, ctx));
-    expect((err as McpError).code).toBe(JsonRpcErrorCode.ValidationError);
-    expect((err as McpError).message).toContain('2027-01-15');
-    expect((err as McpError).data).toMatchObject({
+    const error = wireError(
+      await runToolContract(getFerrySchedule, {
+        departingTerminalId: 7,
+        arrivingTerminalId: 3,
+        tripDate: '2027-01-15',
+      }),
+    );
+    expect(error.code).toBe(JsonRpcErrorCode.ValidationError);
+    expect(error.message).toContain('2027-01-15');
+    expect(error.data).toMatchObject({
       reason: 'invalid_date',
       retryable: false,
-      recovery: { hint: expect.any(String) },
+      recovery: { hint: expect.stringContaining('on which wsdot_get_ferry_routes lists routes') },
     });
-    expect(mockService.hasRoutes).toHaveBeenCalledWith('2027-01-15', ctx);
+    expect(mockService.hasRoutes).toHaveBeenCalledWith('2027-01-15', expect.anything());
   });
 
   it('keeps a schedule outage as api_unavailable without asking for routes', async () => {
@@ -1583,18 +1570,6 @@ describe('terminal ID inputs', () => {
 });
 
 describe('terminal IDs that are not positive integers are rejected before the handler runs', () => {
-  interface WireError {
-    code: number;
-    data?: Record<string, unknown>;
-    message: string;
-  }
-  const wireError = (result: Awaited<ReturnType<typeof runToolContract>>): WireError => {
-    expect(result.isError).toBe(true);
-    const error = (result.structuredContent as { error?: WireError } | undefined)?.error;
-    if (!error) throw new Error('Expected structuredContent.error on a failed call.');
-    return error;
-  };
-
   it.each([0, -3, 7.5])('wsdot_get_terminal_space rejects departingTerminalId %j', async (id) => {
     mockService.getTerminalSailingSpace.mockResolvedValue([]);
     const error = wireError(await runToolContract(getTerminalSpace, { departingTerminalId: id }));

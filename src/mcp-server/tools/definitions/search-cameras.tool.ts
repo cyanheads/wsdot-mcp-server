@@ -192,7 +192,6 @@ export const searchCameras = tool('wsdot_search_cameras', {
       throw ctx.fail(
         'invalid_region',
         `Unknown region "${region}" — wsdot_search_cameras takes a WSDOT region code.`,
-        { ...ctx.recoveryFor('invalid_region') },
       );
     }
     if (
@@ -203,7 +202,6 @@ export const searchCameras = tool('wsdot_search_cameras', {
       throw ctx.fail(
         'invalid_milepost_range',
         `startMilepost ${input.startMilepost} is greater than endMilepost ${input.endMilepost}.`,
-        { ...ctx.recoveryFor('invalid_milepost_range') },
       );
     }
     const fetched = await getTrafficApiService().searchCameras(

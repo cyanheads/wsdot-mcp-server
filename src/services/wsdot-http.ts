@@ -119,7 +119,6 @@ export async function fetchUpstream(
     throw serviceUnavailable(`${service} request failed: ${detail}`, {
       url: endpoint,
       reason: 'api_unavailable',
-      ...ctx.recoveryFor('api_unavailable'),
     });
   }
 }
@@ -132,10 +131,7 @@ export async function fetchUpstream(
  * `Bad Request`, WSF answers JSON naming the access code. Those become `invalid_access_code`
  * (a server configuration fault, non-retryable); every other non-2xx becomes `api_unavailable`.
  */
-export function assertUpstreamJson(
-  { body, endpoint, response, service }: UpstreamCheck,
-  ctx: Context,
-): void {
+export function assertUpstreamJson({ body, endpoint, response, service }: UpstreamCheck): void {
   const contentType = response.headers.get('content-type') ?? '';
   const htmlPage = contentType.includes('text/html');
   const htmlBody = HTML_DOCUMENT.test(body);
@@ -164,7 +160,6 @@ export function assertUpstreamJson(
         status: response.status,
         body: snippet,
         reason: 'invalid_access_code',
-        ...ctx.recoveryFor('invalid_access_code'),
       },
     );
   }
@@ -175,7 +170,6 @@ export function assertUpstreamJson(
       status: response.status,
       body: snippet,
       reason: 'api_unavailable',
-      ...ctx.recoveryFor('api_unavailable'),
       // 4xx is a client error that won't succeed on retry — mark non-retryable so withRetry
       // fails fast instead of burning all attempts (the data.retryable === false opt-out).
       ...(response.status >= 400 && response.status < 500 && { retryable: false }),

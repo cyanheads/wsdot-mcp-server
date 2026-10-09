@@ -3,10 +3,12 @@
  * raw upstream JSON through normalization, the service-side route/region/milepost filters, the
  * handler-side title and toll-route filters, paging, and the wire envelope. The tool tests stub
  * the service module; these stub only `fetch`, so the composition the service and handler share
- * is exercised as it runs in production.
+ * is exercised as it runs in production. The same path carries upstream failures: the service
+ * names the reason, and the tool's declared recovery hint reaches the client.
  * @module tests/tools/traffic-filters-upstream.test
  */
 
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createFetchMock, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -17,6 +19,7 @@ vi.mock('@/config/server-config.js', () => ({
 import { getTollRates } from '@/mcp-server/tools/definitions/get-toll-rates.tool.js';
 import { searchCameras } from '@/mcp-server/tools/definitions/search-cameras.tool.js';
 import { initTrafficApiService } from '@/services/traffic/traffic-service.js';
+import { wireError } from '../helpers/assertions.js';
 
 const CAMERAS_URL = /\/HighwayCameras\/HighwayCamerasREST\.svc\/GetCamerasAsJson\?/;
 const TOLLS_URL = /\/TollRates\/TollRatesREST\.svc\/GetTollRatesAsJson\?/;
@@ -134,5 +137,41 @@ describe('wsdot_get_toll_rates over the real service', () => {
     expect((result.structuredContent as { notice: string }).notice).toContain(
       'SR 99, SR 167, I-405, SR 520',
     );
+  });
+});
+
+describe('upstream failures over the real service', () => {
+  /** Swap the stubbed toll feed for a single failing response. */
+  function serveTolls(response: Response) {
+    http.restore();
+    http = createFetchMock([{ method: 'GET', match: TOLLS_URL, respond: response }]);
+    http.install();
+  }
+
+  it('fills the declared api_unavailable hint on a non-2xx', async () => {
+    // A 4xx that does not name the access code: api_unavailable, and non-retryable, so one request.
+    serveTolls(
+      new Response('Bad Request', { status: 400, headers: { 'content-type': 'text/plain' } }),
+    );
+    const error = wireError(await runToolContract(getTollRates, {}));
+    expect(error.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+    expect(error.data).toMatchObject({
+      reason: 'api_unavailable',
+      status: 400,
+      recovery: { hint: expect.stringContaining('Retry in 30 seconds') },
+    });
+  });
+
+  it('fills the declared invalid_access_code hint on a 401', async () => {
+    serveTolls(
+      new Response('Unauthorized', { status: 401, headers: { 'content-type': 'text/plain' } }),
+    );
+    const error = wireError(await runToolContract(getTollRates, {}));
+    expect(error.code).toBe(JsonRpcErrorCode.ConfigurationError);
+    expect(error.data).toMatchObject({
+      reason: 'invalid_access_code',
+      status: 401,
+      recovery: { hint: expect.stringContaining('WSDOT_ACCESS_CODE') },
+    });
   });
 });

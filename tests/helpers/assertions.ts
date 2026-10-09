@@ -54,3 +54,29 @@ export async function rejection(call: () => unknown): Promise<unknown> {
   }
   throw new Error('Expected the call to fail, but it returned a value.');
 }
+
+/** The JSON-RPC error a failed tool call carries in `structuredContent.error`. */
+export interface WireError {
+  code: number;
+  data?: { reason?: string; recovery?: { hint?: string } } & Record<string, unknown>;
+  message: string;
+}
+
+/**
+ * Returns the error envelope of a failed `runToolContract` call — the shape a client receives,
+ * with the declared recovery hint filled in. Throws when the call succeeded or carries no envelope.
+ * Typed structurally for the same reason as {@link formattedText}.
+ *
+ * @param result - A `runToolContract` result.
+ */
+export function wireError(result: {
+  isError?: boolean | undefined;
+  structuredContent?: unknown;
+}): WireError {
+  if (result.isError !== true) {
+    throw new Error('Expected the call to fail, but it succeeded.');
+  }
+  const error = (result.structuredContent as { error?: WireError } | undefined)?.error;
+  if (!error) throw new Error('Expected structuredContent.error on a failed call.');
+  return error;
+}

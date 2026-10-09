@@ -633,10 +633,12 @@ describe('API key non-leak — thrown upstream errors carry no credential', () =
       headers: { get: (h: string) => (h === 'content-type' ? contentType : null) },
     } as unknown as Response;
     try {
-      assertUpstreamJson(
-        { body, endpoint: redactUrl(REQUEST_URL), response, service: 'WSDOT Traffic API' },
-        createMockContext(),
-      );
+      assertUpstreamJson({
+        body,
+        endpoint: redactUrl(REQUEST_URL),
+        response,
+        service: 'WSDOT Traffic API',
+      });
     } catch (err) {
       return err as McpError;
     }

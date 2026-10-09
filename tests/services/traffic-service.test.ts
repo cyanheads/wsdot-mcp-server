@@ -25,7 +25,6 @@ vi.mock('@cyanheads/mcp-ts-core/utils', () => ({
   withRetry: (fn: () => Promise<unknown>) => fn(),
 }));
 
-import { getMountainPasses } from '@/mcp-server/tools/definitions/get-mountain-passes.tool.js';
 import { TrafficApiService } from '@/services/traffic/traffic-service.js';
 import { nth } from '../helpers/assertions.js';
 
@@ -1199,17 +1198,14 @@ describe('TrafficApiService — HTTP error handling', () => {
     await expect(svc.getMountainPasses(ctx)).rejects.toThrow(/503/);
   });
 
-  it('resolves the api_unavailable contract on a non-2xx (reason + recovery hint)', async () => {
+  it('names the api_unavailable reason on a non-2xx and leaves the hint to the tool contract', async () => {
     mockFetch.mockResolvedValue(makeResponse('Service Unavailable', 503, 'text/plain'));
-    const ctx = createMockContext({ errors: getMountainPasses.errors });
+    const ctx = createMockContext();
     const err = await svc.getMountainPasses(ctx).catch((e) => e);
     expect(err).toBeInstanceOf(McpError);
     expect((err as McpError).code).toBe(JsonRpcErrorCode.ServiceUnavailable);
-    expect((err as McpError).data).toMatchObject({
-      reason: 'api_unavailable',
-      status: 503,
-      recovery: { hint: expect.stringContaining('Retry in 30 seconds') },
-    });
+    expect((err as McpError).data).toMatchObject({ reason: 'api_unavailable', status: 503 });
+    expect((err as McpError).data).not.toHaveProperty('recovery');
   });
 
   it('surfaces the upstream body on a non-2xx instead of discarding it', async () => {
@@ -1222,23 +1218,19 @@ describe('TrafficApiService — HTTP error handling', () => {
 
   it('classifies HTTP 401 as invalid_access_code naming WSDOT_ACCESS_CODE', async () => {
     mockFetch.mockResolvedValue(makeResponse('Unauthorized', 401, 'text/plain'));
-    const ctx = createMockContext({ errors: getMountainPasses.errors });
+    const ctx = createMockContext();
     const err = await svc.getMountainPasses(ctx).catch((e) => e);
     expect((err as McpError).code).toBe(JsonRpcErrorCode.ConfigurationError);
     expect((err as McpError).message).toMatch(/401/);
     expect((err as McpError).message).toContain('WSDOT_ACCESS_CODE');
-    expect((err as McpError).data).toMatchObject({
-      reason: 'invalid_access_code',
-      status: 401,
-      recovery: { hint: expect.stringContaining('WSDOT_ACCESS_CODE') },
-    });
+    expect((err as McpError).data).toMatchObject({ reason: 'invalid_access_code', status: 401 });
   });
 
   it('reads the 400 body an unregistered access code produces (text/html "Bad Request")', async () => {
     // WSDOT answers an unregistered code with HTTP 400 + Content-Type text/html + body "Bad Request".
     // Before the fix the status check threw first and the body was never read.
     mockFetch.mockResolvedValue(makeResponse('Bad Request', 400, 'text/html'));
-    const ctx = createMockContext({ errors: getMountainPasses.errors });
+    const ctx = createMockContext();
     const err = await svc.getMountainPasses(ctx).catch((e) => e);
     expect((err as McpError).code).toBe(JsonRpcErrorCode.ConfigurationError);
     expect((err as McpError).message).toContain('WSDOT_ACCESS_CODE');
@@ -1292,7 +1284,7 @@ describe('TrafficApiService — HTTP error handling', () => {
     mockFetch.mockResolvedValue(
       makeResponse('<html><body>503 Service Unavailable</body></html>', 503, 'text/html'),
     );
-    const ctx = createMockContext({ errors: getMountainPasses.errors });
+    const ctx = createMockContext();
     const err = await svc.getMountainPasses(ctx).catch((e) => e);
     expect((err as McpError).code).toBe(JsonRpcErrorCode.ServiceUnavailable);
     expect((err as McpError).message).not.toContain('WSDOT_ACCESS_CODE');

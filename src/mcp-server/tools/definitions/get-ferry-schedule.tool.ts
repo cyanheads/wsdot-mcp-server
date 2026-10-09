@@ -181,7 +181,6 @@ export const getFerrySchedule = tool('wsdot_get_ferry_schedule', {
       throw ctx.fail(
         'invalid_date',
         `Invalid date: "${input.tripDate}". Expected YYYY-MM-DD format (e.g. 2026-05-23).`,
-        { ...ctx.recoveryFor('invalid_date') },
       );
     }
     const service = getFerryApiService();
@@ -213,14 +212,14 @@ export const getFerrySchedule = tool('wsdot_get_ferry_schedule', {
         throw ctx.fail(
           'invalid_date',
           `WSF lists no routes on ${tripDate}, so no terminal pair has a schedule that day. The date is inside the window WSF accepts, but no sailings are loaded for it yet.`,
-          { ...ctx.recoveryFor('invalid_date') },
+          undefined,
           { cause: err },
         );
       }
       throw ctx.fail(
         'invalid_terminal_pair',
         `No ferry schedule for terminal ${input.departingTerminalId} → ${input.arrivingTerminalId} on ${tripDate}. These terminals may not have direct service, or a terminal ID may be invalid.`,
-        { ...ctx.recoveryFor('invalid_terminal_pair') },
+        undefined,
         { cause: err },
       );
     }

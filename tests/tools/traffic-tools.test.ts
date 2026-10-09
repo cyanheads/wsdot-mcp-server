@@ -4,12 +4,10 @@
  * @module tests/tools/traffic-tools.test
  */
 
-import type { Context } from '@cyanheads/mcp-ts-core';
 import {
   configurationError,
   type ErrorContract,
   JsonRpcErrorCode,
-  McpError,
   serviceUnavailable,
 } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
@@ -38,7 +36,7 @@ import { getTollRates } from '@/mcp-server/tools/definitions/get-toll-rates.tool
 import { getTravelTimes } from '@/mcp-server/tools/definitions/get-travel-times.tool.js';
 import { searchAlerts } from '@/mcp-server/tools/definitions/search-alerts.tool.js';
 import { searchCameras } from '@/mcp-server/tools/definitions/search-cameras.tool.js';
-import { formattedText, nth, rejection } from '../helpers/assertions.js';
+import { formattedText, nth, wireError } from '../helpers/assertions.js';
 import { describePaginationContract } from '../helpers/pagination.js';
 
 beforeEach(() => {
@@ -75,42 +73,32 @@ describe('traffic tools — upstream failure contract', () => {
   }
 
   it('surfaces api_unavailable with its recovery hint when the service reports an outage', async () => {
-    // Mirrors what TrafficApiService.fetchJson throws for a non-2xx.
-    mockService.getMountainPasses.mockImplementation((c: Context) => {
+    // Mirrors what TrafficApiService.fetchJson throws for a non-2xx: the reason only. The hint
+    // comes from the tool's errors[] entry on the way out.
+    mockService.getMountainPasses.mockImplementation(() => {
       throw serviceUnavailable('WSDOT Traffic API returned HTTP 503.', {
         status: 503,
         reason: 'api_unavailable',
-        ...c.recoveryFor('api_unavailable'),
       });
     });
-    const ctx = createMockContext({ errors: getMountainPasses.errors });
-    const err = await rejection(() =>
-      getMountainPasses.handler(getMountainPasses.input.parse({}), ctx),
-    );
-    expect(err).toBeInstanceOf(McpError);
-    expect((err as McpError).data).toMatchObject({
+    const error = wireError(await runToolContract(getMountainPasses, {}));
+    expect(error.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+    expect(error.data).toMatchObject({
       reason: 'api_unavailable',
       recovery: { hint: expect.stringContaining('Retry in 30 seconds') },
     });
   });
 
   it('surfaces invalid_access_code with a configuration-repair recovery hint', async () => {
-    mockService.getMountainPasses.mockImplementation((c: Context) => {
+    mockService.getMountainPasses.mockImplementation(() => {
       throw configurationError(
         'WSDOT Traffic API returned an HTML page instead of JSON — WSDOT_ACCESS_CODE is missing, invalid, or not registered.',
-        {
-          status: 400,
-          reason: 'invalid_access_code',
-          ...c.recoveryFor('invalid_access_code'),
-        },
+        { status: 400, reason: 'invalid_access_code' },
       );
     });
-    const ctx = createMockContext({ errors: getMountainPasses.errors });
-    const err = await rejection(() =>
-      getMountainPasses.handler(getMountainPasses.input.parse({}), ctx),
-    );
-    expect((err as McpError).code).toBe(JsonRpcErrorCode.ConfigurationError);
-    expect((err as McpError).data).toMatchObject({
+    const error = wireError(await runToolContract(getMountainPasses, {}));
+    expect(error.code).toBe(JsonRpcErrorCode.ConfigurationError);
+    expect(error.data).toMatchObject({
       reason: 'invalid_access_code',
       recovery: { hint: expect.stringContaining('WSDOT_ACCESS_CODE') },
     });
@@ -2083,20 +2071,6 @@ describe('filter inputs the tools accept today', () => {
     });
   });
 });
-
-interface WireError {
-  code: number;
-  data?: { reason?: string; recovery?: { hint?: string } } & Record<string, unknown>;
-  message: string;
-}
-
-/** The error a contract result carries, failing when the call succeeded instead. */
-function wireError(result: Awaited<ReturnType<typeof runToolContract>>): WireError {
-  expect(result.isError).toBe(true);
-  const error = (result.structuredContent as { error?: WireError } | undefined)?.error;
-  if (!error) throw new Error('Expected structuredContent.error on a failed call.');
-  return error;
-}
 
 // ---------------------------------------------------------------------------
 // Region vocabulary and milepost order are checked before any upstream call

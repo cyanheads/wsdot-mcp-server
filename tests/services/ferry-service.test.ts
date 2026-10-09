@@ -18,8 +18,6 @@ vi.mock('@cyanheads/mcp-ts-core/utils', () => ({
   withRetry: (fn: () => Promise<unknown>) => fn(),
 }));
 
-import { getFerryRoutes } from '@/mcp-server/tools/definitions/get-ferry-routes.tool.js';
-import { getFerryTerminals } from '@/mcp-server/tools/definitions/get-ferry-terminals.tool.js';
 import { FerryApiService } from '@/services/ferry/ferry-service.js';
 import { nth } from '../helpers/assertions.js';
 
@@ -476,8 +474,9 @@ describe('FerryApiService.getRoutes — terminal pairs', () => {
       }
       return Promise.resolve(makeResponse([]));
     });
-    const ctx = createMockContext({ errors: getFerryRoutes.errors });
-    const err = (await svc.getRoutes('2026-09-25', ctx).catch((e) => e)) as McpError;
+    const err = (await svc
+      .getRoutes('2026-09-25', createMockContext())
+      .catch((e) => e)) as McpError;
     expect(err).toBeInstanceOf(McpError);
     expect(err.data).toMatchObject({
       reason: 'api_unavailable',
@@ -1764,32 +1763,25 @@ describe('FerryApiService — HTTP error handling', () => {
     await expect(svc.getTerminals(ctx)).rejects.toThrow(/503/);
   });
 
-  it('resolves the api_unavailable contract on a non-2xx (reason + recovery hint)', async () => {
+  it('names the api_unavailable reason on a non-2xx and leaves the hint to the tool contract', async () => {
     mockFetch.mockResolvedValue(makeResponse('Service Unavailable', 503, 'text/plain'));
-    const ctx = createMockContext({ errors: getFerryTerminals.errors });
+    const ctx = createMockContext();
     const err = await svc.getTerminals(ctx).catch((e) => e);
     expect(err).toBeInstanceOf(McpError);
     expect((err as McpError).code).toBe(JsonRpcErrorCode.ServiceUnavailable);
-    expect((err as McpError).data).toMatchObject({
-      reason: 'api_unavailable',
-      status: 503,
-      recovery: { hint: expect.stringContaining('Retry in 30 seconds') },
-    });
+    expect((err as McpError).data).toMatchObject({ reason: 'api_unavailable', status: 503 });
+    expect((err as McpError).data).not.toHaveProperty('recovery');
   });
 
   it('reads the WSF explanation on a 400 from an unregistered access code', async () => {
     // Before the fix the status check threw first and this body was discarded unread.
     mockFetch.mockResolvedValue(makeResponse(UNREGISTERED_CODE_BODY, 400));
-    const ctx = createMockContext({ errors: getFerryTerminals.errors });
+    const ctx = createMockContext();
     const err = await svc.getTerminals(ctx).catch((e) => e);
     expect((err as McpError).code).toBe(JsonRpcErrorCode.ConfigurationError);
     expect((err as McpError).message).toContain('WSDOT_ACCESS_CODE');
     expect((err as McpError).message).toContain('Use of WSDOT Traveler API failed');
-    expect((err as McpError).data).toMatchObject({
-      reason: 'invalid_access_code',
-      status: 400,
-      recovery: { hint: expect.stringContaining('WSDOT_ACCESS_CODE') },
-    });
+    expect((err as McpError).data).toMatchObject({ reason: 'invalid_access_code', status: 400 });
   });
 
   it('classifies HTTP 401 as invalid_access_code naming WSDOT_ACCESS_CODE', async () => {
@@ -1890,8 +1882,7 @@ describe('FerryApiService — trip dates WSF has no schedule for', () => {
     'classifies an HTTP 400 TripDate rejection %s as non-retryable invalid_date',
     async (_label, iso, wsf) => {
       mockFetch.mockResolvedValue(makeResponse(tripDateRejection(wsf), 400));
-      const ctx = createMockContext({ errors: getFerryRoutes.errors });
-      const err = (await svc.getRoutes(iso, ctx).catch((e) => e)) as McpError;
+      const err = (await svc.getRoutes(iso, createMockContext()).catch((e) => e)) as McpError;
       expect(err).toBeInstanceOf(McpError);
       expect(err.code).toBe(JsonRpcErrorCode.ValidationError);
       expect(err.message).toContain(`The TripDate ${wsf} is not valid`);
@@ -1901,8 +1892,9 @@ describe('FerryApiService — trip dates WSF has no schedule for', () => {
         retryable: false,
         status: 400,
         url: `https://www.wsdot.wa.gov/Ferries/API/Schedule/rest/routes/${iso}`,
-        recovery: { hint: expect.stringContaining('YYYY-MM-DD') },
       });
+      // The hint is the routes tool's declared one, filled in on the wire (ferry-wire.test.ts).
+      expect(err.data).not.toHaveProperty('recovery');
       expect(JSON.stringify(err.data)).not.toContain(ACCESS_CODE);
     },
   );

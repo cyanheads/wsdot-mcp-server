@@ -68,7 +68,7 @@ export class TrafficApiService {
         // The body is read before any status check: an unregistered access code comes back as a
         // 400 whose body carries WSDOT's own explanation, which a status-first throw discards.
         const body = await response.text();
-        assertUpstreamJson({ body, endpoint, response, service: SERVICE }, ctx);
+        assertUpstreamJson({ body, endpoint, response, service: SERVICE });
         return JSON.parse(body) as T;
       },
       {

@@ -18,6 +18,7 @@ import { getFerryRoutes } from '@/mcp-server/tools/definitions/get-ferry-routes.
 import { getFerrySchedule } from '@/mcp-server/tools/definitions/get-ferry-schedule.tool.js';
 import { getFerryTerminals } from '@/mcp-server/tools/definitions/get-ferry-terminals.tool.js';
 import { initFerryApiService } from '@/services/ferry/ferry-service.js';
+import { wireError } from '../helpers/assertions.js';
 
 const API = 'https://www.wsdot.wa.gov/Ferries/API';
 
@@ -137,20 +138,6 @@ function wireText(result: ContractResult): string {
   return result.content
     .map((block) => ('text' in block && typeof block.text === 'string' ? block.text : ''))
     .join('\n');
-}
-
-interface WireError {
-  code: number;
-  data?: Record<string, unknown>;
-  message: string;
-}
-
-/** The error envelope of a failed call, from `structuredContent.error`. */
-function wireError(result: ContractResult): WireError {
-  expect(result.isError).toBe(true);
-  const error = (result.structuredContent as { error?: WireError } | undefined)?.error;
-  if (!error) throw new Error('Expected structuredContent.error on a failed call.');
-  return error;
 }
 
 /** Paths of every upstream request, credential query string dropped. */

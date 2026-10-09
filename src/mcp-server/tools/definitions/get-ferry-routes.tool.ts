@@ -133,7 +133,6 @@ export const getFerryRoutes = tool('wsdot_get_ferry_routes', {
       throw ctx.fail(
         'invalid_date',
         `Invalid date: "${input.tripDate}". Expected YYYY-MM-DD format (e.g. 2026-05-23).`,
-        { ...ctx.recoveryFor('invalid_date') },
       );
     }
 
