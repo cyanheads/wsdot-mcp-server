@@ -18,18 +18,8 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/wsdot-mcp-server",
-      "runtimeHint": "node",
+      "runtimeHint": "npx",
       "version": "0.4.0",
-      "packageArguments": [
-        {
-          "type": "positional",
-          "value": "run"
-        },
-        {
-          "type": "positional",
-          "value": "start:stdio"
-        }
-      ],
       "environmentVariables": [
         {
           "name": "WSDOT_ACCESS_CODE",
@@ -53,19 +43,15 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/wsdot-mcp-server",
-      "runtimeHint": "node",
+      "runtimeHint": "npx",
       "version": "0.4.0",
-      "packageArguments": [
-        {
-          "type": "positional",
-          "value": "run"
-        },
-        {
-          "type": "positional",
-          "value": "start:http"
-        }
-      ],
       "environmentVariables": [
+        {
+          "name": "MCP_TRANSPORT_TYPE",
+          "description": "Selects the HTTP transport.",
+          "format": "string",
+          "value": "http"
+        },
         {
           "name": "WSDOT_ACCESS_CODE",
           "description": "WSDOT Traveler API access code. Register at wsdot.wa.gov/Traffic/api/.",
