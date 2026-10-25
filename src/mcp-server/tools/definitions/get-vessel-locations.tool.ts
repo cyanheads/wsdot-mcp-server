@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { coordinatePair } from '@/mcp-server/tools/coordinate-pair.js';
 import { getFerryApiService } from '@/services/ferry/ferry-service.js';
 
@@ -117,18 +118,18 @@ export const getVesselLocations = tool('wsdot_get_vessel_locations', {
     const lines: string[] = [];
     for (const v of result.vessels) {
       const name = v.vesselName ?? `Vessel ${v.vesselId ?? '?'}`;
-      lines.push(`### ${name}`);
+      lines.push(`### ${escapeMarkdownInline(name)}`);
       if (typeof v.inService === 'boolean')
         lines.push(`**In Service:** ${v.inService ? 'Yes' : 'No'}`);
       if (typeof v.atDock === 'boolean') lines.push(`**At Dock:** ${v.atDock ? 'Yes' : 'No'}`);
       if (v.departingTerminalId != null || v.departingTerminalName) {
         lines.push(
-          `**Departing:** ${v.departingTerminalName ?? ''}${v.departingTerminalId != null ? ` (ID: ${v.departingTerminalId})` : ''}`,
+          `**Departing:** ${escapeMarkdownInline(v.departingTerminalName ?? '')}${v.departingTerminalId != null ? ` (ID: ${v.departingTerminalId})` : ''}`,
         );
       }
       if (v.arrivingTerminalId != null || v.arrivingTerminalName) {
         lines.push(
-          `**Arriving:** ${v.arrivingTerminalName ?? ''}${v.arrivingTerminalId != null ? ` (ID: ${v.arrivingTerminalId})` : ''}`,
+          `**Arriving:** ${escapeMarkdownInline(v.arrivingTerminalName ?? '')}${v.arrivingTerminalId != null ? ` (ID: ${v.arrivingTerminalId})` : ''}`,
         );
       }
       // Render full upstream precision so content[] matches structuredContent — rounding here
@@ -137,17 +138,18 @@ export const getVesselLocations = tool('wsdot_get_vessel_locations', {
       if (position) lines.push(`**Position:** ${position}`);
       if (v.speed != null) lines.push(`**Speed:** ${v.speed} knots`);
       if (v.heading != null) lines.push(`**Heading:** ${v.heading}°`);
-      if (v.leftDock) lines.push(`**Left Dock:** ${v.leftDock}`);
-      if (v.eta) lines.push(`**ETA:** ${v.eta}`);
-      if (v.scheduledDeparture) lines.push(`**Scheduled Departure:** ${v.scheduledDeparture}`);
+      if (v.leftDock) lines.push(`**Left Dock:** ${escapeMarkdownInline(v.leftDock)}`);
+      if (v.eta) lines.push(`**ETA:** ${escapeMarkdownInline(v.eta)}`);
+      if (v.scheduledDeparture)
+        lines.push(`**Scheduled Departure:** ${escapeMarkdownInline(v.scheduledDeparture)}`);
       // A vessel between assignments reports an empty route list; that is a fact structuredContent
       // states, so content[] says it rather than omitting the field.
       lines.push(
         v.opRouteAbbrev.length > 0
-          ? `**Routes:** ${v.opRouteAbbrev.join(', ')}`
+          ? `**Routes:** ${escapeMarkdownInline(v.opRouteAbbrev.join(', '))}`
           : '**Routes:** none reported',
       );
-      if (v.timestamp) lines.push(`**Position Timestamp:** ${v.timestamp}`);
+      if (v.timestamp) lines.push(`**Position Timestamp:** ${escapeMarkdownInline(v.timestamp)}`);
       if (v.vesselId != null) lines.push(`**Vessel ID:** ${v.vesselId}`);
       lines.push('');
     }

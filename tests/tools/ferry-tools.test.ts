@@ -1502,7 +1502,7 @@ describe('ferry format() parity — false, empty, and one-sided values', () => {
           sailings: [{ departureTime: 'T1', vesselId: 25, annotationIndexes: [0, 4] }],
         }),
       );
-      expect(text).toContain('- T1 | (vesselId 25)\n  - [0] Line one.\n    Line two.');
+      expect(text).toContain('- T1 | (vesselId 25)\n  - [0] Line one.\\\n    Line two.');
       // An index format() is handed directly that points past the list is named, not dropped.
       expect(text).toContain('  - [4] not listed in annotations');
     });

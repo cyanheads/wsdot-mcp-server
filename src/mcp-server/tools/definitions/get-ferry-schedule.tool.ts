@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { FerryApiService, getFerryApiService } from '@/services/ferry/ferry-service.js';
 import type { FerrySchedule } from '@/services/ferry/types.js';
 
@@ -257,12 +258,15 @@ export const getFerrySchedule = tool('wsdot_get_ferry_schedule', {
         : 'Ferry Schedule';
     /** A note on a list item's own line, with any line breaks it holds kept under that item. */
     const note = (index: number, indent: string) =>
-      `${indent}- [${index}] ${(result.annotations?.[index] ?? 'not listed in annotations').replaceAll('\n', `\n${indent}  `)}`;
+      `${indent}- [${index}] ${escapeMarkdownInline(result.annotations?.[index] ?? 'not listed in annotations').replaceAll('\n', `\n${indent}  `)}`;
 
-    const lines: string[] = [`## Ferry Schedule — ${route}`];
-    if (result.departingTerminalName) lines.push(`**From:** ${result.departingTerminalName}`);
-    if (result.arrivingTerminalName) lines.push(`**To:** ${result.arrivingTerminalName}`);
-    if (result.sailingNotes) lines.push(`**Sailing notes:** ${result.sailingNotes}`);
+    const lines: string[] = [`## Ferry Schedule — ${escapeMarkdownInline(route)}`];
+    if (result.departingTerminalName)
+      lines.push(`**From:** ${escapeMarkdownInline(result.departingTerminalName)}`);
+    if (result.arrivingTerminalName)
+      lines.push(`**To:** ${escapeMarkdownInline(result.arrivingTerminalName)}`);
+    if (result.sailingNotes)
+      lines.push(`**Sailing notes:** ${escapeMarkdownInline(result.sailingNotes)}`);
     if (result.annotations?.length === 0) {
       lines.push('**Annotations:** none');
     } else if (result.annotations) {
@@ -275,13 +279,13 @@ export const getFerrySchedule = tool('wsdot_get_ferry_schedule', {
       lines.push('No sailings found for this route and date.');
     } else {
       for (const s of result.sailings) {
-        const dep = s.departureTime ?? 'Unknown';
-        const arr = s.arrivalTime ? ` → ${s.arrivalTime}` : '';
+        const dep = escapeMarkdownInline(s.departureTime ?? 'Unknown');
+        const arr = s.arrivalTime ? ` → ${escapeMarkdownInline(s.arrivalTime)}` : '';
         const vessel = [s.vesselName, s.vesselId != null ? `(vesselId ${s.vesselId})` : undefined]
           .filter(Boolean)
           .join(' ');
         const details = [
-          vessel,
+          escapeMarkdownInline(vessel),
           s.loadingRule != null ? `loadingRule ${s.loadingRule}` : undefined,
           s.vesselHandicapAccessible != null
             ? `vesselHandicapAccessible: ${s.vesselHandicapAccessible}`

@@ -1796,7 +1796,7 @@ describe('unfiltered calls — pinned wire output', () => {
       **Region:** WA
       **ID:** 9818
 
-      ### I-90 at MP 55.2: 
+      ### I-90 at MP 55.2:&#32;
       **Location:** I-90 MP 55.2
       **Region:** SC
       **ID:** 10070
@@ -1978,8 +1978,8 @@ describe('format() — pinned multi-row layout', () => {
         '**Coords:** 47.5, -121.7',
         '**End Location:** 090 E MP 54',
         '**End Coords:** 47.6, longitude not reported',
-        'Para A',
-        '',
+        'Para A\\',
+        '\\',
         'Para B',
         '**Start:** 2026-09-01T08:00:00.000Z',
         '**End:** 2026-09-30T08:00:00.000Z',

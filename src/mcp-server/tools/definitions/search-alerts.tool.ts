@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { coordinatePair } from '@/mcp-server/tools/coordinate-pair.js';
 import {
   continuationNotice,
@@ -171,8 +172,9 @@ export const searchAlerts = tool('wsdot_search_alerts', {
     appliedFilters: {
       render: (filters) => {
         const parts: string[] = [];
-        if (filters.stateRoute) parts.push(`- **Route:** ${filters.stateRoute}`);
-        if (filters.region) parts.push(`- **Region:** ${filters.region}`);
+        if (filters.stateRoute)
+          parts.push(`- **Route:** ${escapeMarkdownInline(filters.stateRoute)}`);
+        if (filters.region) parts.push(`- **Region:** ${escapeMarkdownInline(filters.region)}`);
         if (filters.startMilepost != null) parts.push(`- **Start MP:** ${filters.startMilepost}`);
         if (filters.endMilepost != null) parts.push(`- **End MP:** ${filters.endMilepost}`);
         return parts.length > 0
@@ -309,13 +311,13 @@ function renderAlert(a: z.infer<typeof AlertSchema>): string {
   // A headline can run to several paragraphs; only its first line belongs in the heading,
   // otherwise the trailing alert ID lands at the end of the last paragraph.
   const [heading, ...restOfHeadline] = (a.headlineDescription ?? '').split('\n');
-  lines.push(`### ${heading || 'Alert'}${id}`);
-  if (restOfHeadline.length > 0) lines.push(restOfHeadline.join('\n'));
-  if (a.eventCategory) lines.push(`**Category:** ${a.eventCategory}`);
-  if (a.eventStatus) lines.push(`**Status:** ${a.eventStatus}`);
-  if (a.priority) lines.push(`**Priority:** ${a.priority}`);
-  if (a.region) lines.push(`**Region:** ${a.region}`);
-  if (a.county) lines.push(`**County:** ${a.county}`);
+  lines.push(`### ${escapeMarkdownInline(heading || 'Alert')}${id}`);
+  if (restOfHeadline.length > 0) lines.push(escapeMarkdownInline(restOfHeadline.join('\n')));
+  if (a.eventCategory) lines.push(`**Category:** ${escapeMarkdownInline(a.eventCategory)}`);
+  if (a.eventStatus) lines.push(`**Status:** ${escapeMarkdownInline(a.eventStatus)}`);
+  if (a.priority) lines.push(`**Priority:** ${escapeMarkdownInline(a.priority)}`);
+  if (a.region) lines.push(`**Region:** ${escapeMarkdownInline(a.region)}`);
+  if (a.county) lines.push(`**County:** ${escapeMarkdownInline(a.county)}`);
   if (a.startRoadwayLocation) {
     const loc = a.startRoadwayLocation;
     const parts = [
@@ -325,7 +327,7 @@ function renderAlert(a: z.infer<typeof AlertSchema>): string {
     ]
       .filter(Boolean)
       .join(' ');
-    if (parts) lines.push(`**Location:** ${parts}`);
+    if (parts) lines.push(`**Location:** ${escapeMarkdownInline(parts)}`);
     const coords = coordinatePair(loc.latitude, loc.longitude);
     if (coords) lines.push(`**Coords:** ${coords}`);
   }
@@ -338,13 +340,13 @@ function renderAlert(a: z.infer<typeof AlertSchema>): string {
     ]
       .filter(Boolean)
       .join(' ');
-    if (endParts) lines.push(`**End Location:** ${endParts}`);
+    if (endParts) lines.push(`**End Location:** ${escapeMarkdownInline(endParts)}`);
     const endCoords = coordinatePair(end.latitude, end.longitude);
     if (endCoords) lines.push(`**End Coords:** ${endCoords}`);
   }
-  if (a.extendedDescription) lines.push(a.extendedDescription);
-  if (a.startTime) lines.push(`**Start:** ${a.startTime}`);
-  if (a.endTime) lines.push(`**End:** ${a.endTime}`);
-  if (a.lastUpdatedTime) lines.push(`**Updated:** ${a.lastUpdatedTime}`);
+  if (a.extendedDescription) lines.push(escapeMarkdownInline(a.extendedDescription));
+  if (a.startTime) lines.push(`**Start:** ${escapeMarkdownInline(a.startTime)}`);
+  if (a.endTime) lines.push(`**End:** ${escapeMarkdownInline(a.endTime)}`);
+  if (a.lastUpdatedTime) lines.push(`**Updated:** ${escapeMarkdownInline(a.lastUpdatedTime)}`);
   return lines.join('\n');
 }

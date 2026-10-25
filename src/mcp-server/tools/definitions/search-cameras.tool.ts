@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline, markdownImage } from '@cyanheads/mcp-ts-core/utils';
 import { coordinatePair } from '@/mcp-server/tools/coordinate-pair.js';
 import {
   continuationNotice,
@@ -138,11 +139,13 @@ export const searchCameras = tool('wsdot_search_cameras', {
     appliedFilters: {
       render: (filters) => {
         const parts: string[] = [];
-        if (filters.stateRoute) parts.push(`- **Route:** ${filters.stateRoute}`);
-        if (filters.region) parts.push(`- **Region:** ${filters.region}`);
+        if (filters.stateRoute)
+          parts.push(`- **Route:** ${escapeMarkdownInline(filters.stateRoute)}`);
+        if (filters.region) parts.push(`- **Region:** ${escapeMarkdownInline(filters.region)}`);
         if (filters.startMilepost != null) parts.push(`- **Start MP:** ${filters.startMilepost}`);
         if (filters.endMilepost != null) parts.push(`- **End MP:** ${filters.endMilepost}`);
-        if (filters.titleContains) parts.push(`- **Title contains:** ${filters.titleContains}`);
+        if (filters.titleContains)
+          parts.push(`- **Title contains:** ${escapeMarkdownInline(filters.titleContains)}`);
         return parts.length > 0
           ? `**Applied Filters:**\n${parts.join('\n')}`
           : '**Applied Filters:** none';
@@ -283,16 +286,16 @@ export const searchCameras = tool('wsdot_search_cameras', {
 
 /** One camera's `content[]` block — shared by `format()` and the page-budget charge. */
 function renderCamera(c: z.infer<typeof CameraSchema>): string {
-  const lines = [`### ${c.title ?? `Camera ${c.cameraId ?? ''}`}`];
-  if (c.description) lines.push(c.description);
+  const lines = [`### ${escapeMarkdownInline(c.title ?? `Camera ${c.cameraId ?? ''}`)}`];
+  if (c.description) lines.push(escapeMarkdownInline(c.description));
   // Direction and milepost stand on their own — gating the whole line on roadName drops
   // them from content[] for a camera that reports a position but no road name.
   const loc = [c.roadName, c.direction, c.milePost != null ? `MP ${c.milePost}` : undefined]
     .filter(Boolean)
     .join(' ');
-  if (loc) lines.push(`**Location:** ${loc}`);
-  if (c.region) lines.push(`**Region:** ${c.region}`);
-  if (c.imageUrl) lines.push(`**Image:** ${c.imageUrl}`);
+  if (loc) lines.push(`**Location:** ${escapeMarkdownInline(loc)}`);
+  if (c.region) lines.push(`**Region:** ${escapeMarkdownInline(c.region)}`);
+  if (c.imageUrl) lines.push(`**Image:** ${markdownImage('Camera image', c.imageUrl)}`);
   if (c.imageWidth != null && c.imageHeight != null) {
     lines.push(`**Size:** ${c.imageWidth}×${c.imageHeight}px`);
   } else if (c.imageWidth != null) {

@@ -65,7 +65,7 @@ import { searchCameras } from '@/mcp-server/tools/definitions/search-cameras.too
 import { FerryApiService } from '@/services/ferry/ferry-service.js';
 import { htmlToText } from '@/services/html-text.js';
 import { assertUpstreamJson, redactUrl } from '@/services/wsdot-http.js';
-import { formattedText, nth, rejection } from '../helpers/assertions.js';
+import { formattedText, markdownText, nth, rejection } from '../helpers/assertions.js';
 
 beforeEach(() => vi.clearAllMocks());
 afterEach(() => vi.clearAllMocks());
@@ -216,7 +216,7 @@ describe('Input validation — type coercion', () => {
 
 describe('Injection attempts — payloads stay inert on both response paths', () => {
   /**
-   * Carries the payload in `extendedDescription`, which `format()` renders verbatim on its own
+   * Carries the payload in `extendedDescription`, which `format()` escapes on its own
    * line, so a payload holding newlines or control characters reaches `content[]` whole rather
    * than being split across the alert heading.
    */
@@ -242,11 +242,12 @@ describe('Injection attempts — payloads stay inert on both response paths', ()
         ctx,
       );
 
-      // Both response paths carry the payload byte for byte: nothing evaluated it, re-parsed it
-      // as markup, or rewrote it on the way through.
+      // Structured values stay raw; CommonMark decodes the text surface, normalizing CR to LF.
       const text = formattedText(searchAlerts.format!(result));
       expect(nth(result.alerts).extendedDescription).toBe(injection);
-      expect(text).toContain(injection);
+      expect(markdownText(text)).toContain(
+        injection.replaceAll('\r', '\n').replaceAll('\x00', '\uFFFD'),
+      );
       checkOutputForSecrets(result);
       checkOutputForSecrets(text);
     });
@@ -263,7 +264,7 @@ describe('Injection attempts — payloads stay inert on both response paths', ()
     const result = await searchAlerts.handler(searchAlerts.input.parse({}), ctx);
     const text = formattedText(searchAlerts.format!(result));
 
-    for (const surface of [JSON.stringify(result), text]) {
+    for (const surface of [JSON.stringify(result), markdownText(text)]) {
       expect(surface).toContain(template);
       expect(surface).toContain(expression);
       expect(surface).not.toContain('49');

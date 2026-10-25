@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { coordinatePair } from '@/mcp-server/tools/coordinate-pair.js';
 import { getFerryApiService } from '@/services/ferry/ferry-service.js';
 
@@ -92,13 +93,13 @@ export const getFerryTerminals = tool('wsdot_get_ferry_terminals', {
     }
     const lines: string[] = [];
     for (const t of result.terminals) {
-      const abbrev = t.terminalAbbrev ? ` (${t.terminalAbbrev})` : '';
+      const abbrev = t.terminalAbbrev ? ` (${escapeMarkdownInline(t.terminalAbbrev)})` : '';
       const details = [
         t.terminalId != null ? `ID: ${t.terminalId}` : undefined,
         coordinatePair(t.latitude, t.longitude),
       ].filter(Boolean);
       lines.push(
-        `- **${t.terminalName ?? 'Terminal'}**${abbrev}${details.length > 0 ? ` — ${details.join(' | ')}` : ''}`,
+        `- **${escapeMarkdownInline(t.terminalName ?? 'Terminal')}**${abbrev}${details.length > 0 ? ` — ${details.join(' | ')}` : ''}`,
       );
     }
     return [{ type: 'text', text: lines.join('\n') }];

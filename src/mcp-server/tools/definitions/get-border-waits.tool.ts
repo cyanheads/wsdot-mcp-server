@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { coordinatePair } from '@/mcp-server/tools/coordinate-pair.js';
 import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
 
@@ -121,19 +122,22 @@ export const getBorderWaits = tool('wsdot_get_border_waits', {
     const lines: string[] = [];
     for (const c of result.crossings) {
       const heading = c.location?.description ?? c.crossingName ?? 'Border Crossing';
-      lines.push(`### ${heading}`);
-      if (c.crossingName && c.crossingName !== heading) lines.push(`**Code:** ${c.crossingName}`);
+      lines.push(`### ${escapeMarkdownInline(heading)}`);
+      if (c.crossingName && c.crossingName !== heading)
+        lines.push(`**Code:** ${escapeMarkdownInline(c.crossingName)}`);
       if (c.waitTimeInMinutes != null) {
         lines.push(`**Wait:** ${c.waitTimeInMinutes} min`);
       } else {
         lines.push('**Wait:** Not available');
       }
-      if (c.location?.roadName) lines.push(`**Road:** ${c.location.roadName}`);
-      if (c.location?.direction) lines.push(`**Direction:** ${c.location.direction}`);
+      if (c.location?.roadName)
+        lines.push(`**Road:** ${escapeMarkdownInline(c.location.roadName)}`);
+      if (c.location?.direction)
+        lines.push(`**Direction:** ${escapeMarkdownInline(c.location.direction)}`);
       if (c.location?.milePost != null) lines.push(`**Milepost:** ${c.location.milePost}`);
       const coords = coordinatePair(c.location?.latitude, c.location?.longitude);
       if (coords) lines.push(`**Coords:** ${coords}`);
-      if (c.updateTime) lines.push(`**Updated:** ${c.updateTime}`);
+      if (c.updateTime) lines.push(`**Updated:** ${escapeMarkdownInline(c.updateTime)}`);
       lines.push('');
     }
     return [{ type: 'text', text: lines.join('\n') }];

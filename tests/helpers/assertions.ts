@@ -8,6 +8,27 @@
  * @module tests/helpers/assertions
  */
 
+import MarkdownIt from 'markdown-it';
+
+/** Reads text after CommonMark decoding, including hard and soft line breaks. */
+export function markdownText(source: string): string {
+  return new MarkdownIt('commonmark')
+    .parse(source, {})
+    .flatMap(
+      (token) =>
+        token.children
+          ?.map((child) =>
+            child.type === 'softbreak' || child.type === 'hardbreak'
+              ? '\n'
+              : child.type === 'text' || child.type === 'code_inline'
+                ? child.content
+                : '',
+          )
+          .join('') ?? [],
+    )
+    .join('\n');
+}
+
 /**
  * Returns `items[index]`, throwing when the element is absent.
  *

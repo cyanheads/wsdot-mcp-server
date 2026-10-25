@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { coordinatePair } from '@/mcp-server/tools/coordinate-pair.js';
 import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
 
@@ -147,12 +148,13 @@ export const getMountainPasses = tool('wsdot_get_mountain_passes', {
     }
     const lines: string[] = [];
     for (const p of result.passes) {
-      lines.push(`### ${p.mountainPassName ?? 'Mountain pass'}`);
+      lines.push(`### ${escapeMarkdownInline(p.mountainPassName ?? 'Mountain pass')}`);
       if (p.elevation != null) lines.push(`**Elevation:** ${p.elevation} ft`);
       if (p.temperatureInFahrenheit != null)
         lines.push(`**Temperature:** ${p.temperatureInFahrenheit}°F`);
-      if (p.weatherCondition) lines.push(`**Weather:** ${p.weatherCondition}`);
-      if (p.roadCondition) lines.push(`**Road:** ${p.roadCondition}`);
+      if (p.weatherCondition)
+        lines.push(`**Weather:** ${escapeMarkdownInline(p.weatherCondition)}`);
+      if (p.roadCondition) lines.push(`**Road:** ${escapeMarkdownInline(p.roadCondition)}`);
       if (typeof p.travelAdvisoryActive === 'boolean') {
         lines.push(`**Travel Advisory:** ${p.travelAdvisoryActive ? 'ACTIVE' : 'None'}`);
       }
@@ -160,15 +162,15 @@ export const getMountainPasses = tool('wsdot_get_mountain_passes', {
         const r = [p.restrictionOne.travelDirection, p.restrictionOne.text]
           .filter(Boolean)
           .join(': ');
-        lines.push(`**Restriction 1:** ${r}`);
+        lines.push(`**Restriction 1:** ${escapeMarkdownInline(r)}`);
       }
       if (p.restrictionTwo?.text || p.restrictionTwo?.travelDirection) {
         const r = [p.restrictionTwo.travelDirection, p.restrictionTwo.text]
           .filter(Boolean)
           .join(': ');
-        lines.push(`**Restriction 2:** ${r}`);
+        lines.push(`**Restriction 2:** ${escapeMarkdownInline(r)}`);
       }
-      if (p.dateUpdated) lines.push(`**Updated:** ${p.dateUpdated}`);
+      if (p.dateUpdated) lines.push(`**Updated:** ${escapeMarkdownInline(p.dateUpdated)}`);
       if (p.mountainPassId != null) lines.push(`**ID:** ${p.mountainPassId}`);
       const coords = coordinatePair(p.latitude, p.longitude);
       if (coords) lines.push(`**Coords:** ${coords}`);

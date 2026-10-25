@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { FerryApiService, getFerryApiService } from '@/services/ferry/ferry-service.js';
 
 export const getFerryRoutes = tool('wsdot_get_ferry_routes', {
@@ -154,12 +155,12 @@ export const getFerryRoutes = tool('wsdot_get_ferry_routes', {
       return [{ type: 'text', text: 'No ferry routes found for this date.' }];
     }
     const terminal = (id: number, name: string | undefined) =>
-      name ? `${name} (${id})` : `terminal ${id}`;
+      name ? `${escapeMarkdownInline(name)} (${id})` : `terminal ${id}`;
     const lines: string[] = [];
     for (const r of result.routes) {
       const name = r.description ?? r.routeAbbrev ?? 'Unknown route';
-      lines.push(`### ${name}`);
-      if (r.routeAbbrev != null) lines.push(`**Abbrev:** ${r.routeAbbrev}`);
+      lines.push(`### ${escapeMarkdownInline(name)}`);
+      if (r.routeAbbrev != null) lines.push(`**Abbrev:** ${escapeMarkdownInline(r.routeAbbrev)}`);
       if (r.routeId != null) lines.push(`**Route ID:** ${r.routeId}`);
       if (r.terminalPairs?.length === 0) {
         lines.push('**Terminal pairs:** none served on this date');

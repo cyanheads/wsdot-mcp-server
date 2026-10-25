@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getFerryApiService } from '@/services/ferry/ferry-service.js';
 
 export const getFerryAlerts = tool('wsdot_get_ferry_alerts', {
@@ -109,10 +110,10 @@ export const getFerryAlerts = tool('wsdot_get_ferry_alerts', {
     const lines: string[] = [];
     for (const a of result.alerts) {
       const id = a.alertId != null ? ` #${a.alertId}` : '';
-      lines.push(`### ${a.alertTitle ?? 'Alert'}${id}`);
-      if (a.alertType) lines.push(`**Type:** ${a.alertType}`);
-      if (a.alertDescription) lines.push(a.alertDescription);
-      if (a.bulletinText) lines.push(a.bulletinText);
+      lines.push(`### ${escapeMarkdownInline(a.alertTitle ?? 'Alert')}${id}`);
+      if (a.alertType) lines.push(`**Type:** ${escapeMarkdownInline(a.alertType)}`);
+      if (a.alertDescription) lines.push(escapeMarkdownInline(a.alertDescription));
+      if (a.bulletinText) lines.push(escapeMarkdownInline(a.bulletinText));
       lines.push(
         a.impactedRouteIds.length > 0
           ? `**Impacted Route IDs:** ${a.impactedRouteIds.join(', ')} (use wsdot_get_ferry_routes to look up names)`
@@ -130,7 +131,7 @@ export const getFerryAlerts = tool('wsdot_get_ferry_alerts', {
             : '**Impacted Routes:** none listed — this alert names no specific route.',
         );
       }
-      if (a.publishDate) lines.push(`**Published:** ${a.publishDate}`);
+      if (a.publishDate) lines.push(`**Published:** ${escapeMarkdownInline(a.publishDate)}`);
       lines.push('');
     }
     return [{ type: 'text', text: lines.join('\n') }];

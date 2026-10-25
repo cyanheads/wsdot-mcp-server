@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import {
   continuationNotice,
   fitPageToBudget,
@@ -136,6 +137,10 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
       ),
   },
 
+  enrichmentTrailer: {
+    notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
+  },
+
   errors: [
     {
       reason: 'api_unavailable',
@@ -232,8 +237,8 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
 
 /** One corridor's `content[]` block — shared by `format()` and the page-budget charge. */
 function renderCorridor(c: Corridor): string {
-  const lines = [`### ${c.name ?? 'Corridor'}`];
-  if (c.description) lines.push(c.description);
+  const lines = [`### ${escapeMarkdownInline(c.name ?? 'Corridor')}`];
+  if (c.description) lines.push(escapeMarkdownInline(c.description));
   lines.push(
     c.currentTimeInMinutes != null
       ? `**Current:** ${c.currentTimeInMinutes} min`
@@ -255,7 +260,7 @@ function renderCorridor(c: Corridor): string {
     ]
       .filter(Boolean)
       .join(' ');
-    if (sp) lines.push(`**From:** ${sp}`);
+    if (sp) lines.push(`**From:** ${escapeMarkdownInline(sp)}`);
   }
   if (c.endPoint) {
     const ep = [
@@ -265,9 +270,9 @@ function renderCorridor(c: Corridor): string {
     ]
       .filter(Boolean)
       .join(' ');
-    if (ep) lines.push(`**To:** ${ep}`);
+    if (ep) lines.push(`**To:** ${escapeMarkdownInline(ep)}`);
   }
-  if (c.timeUpdated) lines.push(`**Updated:** ${c.timeUpdated}`);
+  if (c.timeUpdated) lines.push(`**Updated:** ${escapeMarkdownInline(c.timeUpdated)}`);
   if (c.travelTimeId != null) lines.push(`**ID:** ${c.travelTimeId}`);
   return lines.join('\n');
 }

@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getFerryApiService } from '@/services/ferry/ferry-service.js';
 
 /**
@@ -228,7 +229,7 @@ export const getTerminalSpace = tool('wsdot_get_terminal_space', {
     const lines: string[] = [];
     for (const t of result.terminals) {
       const tId = t.terminalId != null ? ` (ID: ${t.terminalId})` : '';
-      lines.push(`### ${t.terminalName ?? 'Terminal'}${tId}`);
+      lines.push(`### ${escapeMarkdownInline(t.terminalName ?? 'Terminal')}${tId}`);
       if (t.departingSpaces.length === 0) {
         lines.push('No upcoming sailings.');
       } else {
@@ -244,9 +245,11 @@ export const getTerminalSpace = tool('wsdot_get_terminal_space', {
               : s.isCancelled === false
                 ? ' [not cancelled]'
                 : '';
-          const itinerary = s.itineraryLabel ? ` → ${s.itineraryLabel}` : '';
-          const vessel = s.vesselName ? ` | ${s.vesselName}` : '';
-          lines.push(`**${s.departure ?? 'Unknown'}**${itinerary}${vessel}${cancelled}`);
+          const itinerary = s.itineraryLabel ? ` → ${escapeMarkdownInline(s.itineraryLabel)}` : '';
+          const vessel = s.vesselName ? ` | ${escapeMarkdownInline(s.vesselName)}` : '';
+          lines.push(
+            `**${escapeMarkdownInline(s.departure ?? 'Unknown')}**${itinerary}${vessel}${cancelled}`,
+          );
           if (s.arrivingTerminalIds) {
             lines.push(
               s.arrivingTerminalIds.length > 0
@@ -291,7 +294,7 @@ export const getTerminalSpace = tool('wsdot_get_terminal_space', {
             lines.push(`  Reservable: ${s.reservableSpaceCount} spaces${full}`);
           }
           if (s.driveUpSpaceHexColor) {
-            lines.push(`  Space color indicator: ${s.driveUpSpaceHexColor}`);
+            lines.push(`  Space color indicator: ${escapeMarkdownInline(s.driveUpSpaceHexColor)}`);
           }
         }
       }

@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { coordinatePair } from '@/mcp-server/tools/coordinate-pair.js';
 import {
   continuationNotice,
@@ -129,10 +130,11 @@ export const getTollRates = tool('wsdot_get_toll_rates', {
   },
 
   enrichmentTrailer: {
+    notice: { render: (notice) => (notice ? `> ${escapeMarkdownInline(notice)}` : '') },
     appliedFilters: {
       render: (filters) =>
         filters?.stateRoute
-          ? `**Applied Filters:**\n- **Route:** ${filters.stateRoute}`
+          ? `**Applied Filters:**\n- **Route:** ${escapeMarkdownInline(filters.stateRoute)}`
           : '**Applied Filters:** none',
     },
   },
@@ -236,20 +238,21 @@ function renderTollRate(r: z.infer<typeof TollRateSchema>): string {
   // so they lead. A segment whose ends carry the same name collapses to one.
   const ends = [r.startLocationName, r.endLocationName].filter(Boolean);
   const segment = [...new Set(ends)].join(' → ');
-  const lines = [`### ${segment || r.tripName || 'Toll segment'}`];
-  if (r.tripName) lines.push(`**Trip:** ${r.tripName}`);
-  if (r.stateRoute) lines.push(`**Route:** ${routeDesignation(r.stateRoute)}`);
-  if (r.travelDirection) lines.push(`**Direction:** ${r.travelDirection}`);
-  if (r.startLocationName) lines.push(`**From:** ${r.startLocationName}`);
-  if (r.endLocationName) lines.push(`**To:** ${r.endLocationName}`);
+  const lines = [`### ${escapeMarkdownInline(segment || r.tripName || 'Toll segment')}`];
+  if (r.tripName) lines.push(`**Trip:** ${escapeMarkdownInline(r.tripName)}`);
+  if (r.stateRoute)
+    lines.push(`**Route:** ${escapeMarkdownInline(routeDesignation(r.stateRoute))}`);
+  if (r.travelDirection) lines.push(`**Direction:** ${escapeMarkdownInline(r.travelDirection)}`);
+  if (r.startLocationName) lines.push(`**From:** ${escapeMarkdownInline(r.startLocationName)}`);
+  if (r.endLocationName) lines.push(`**To:** ${escapeMarkdownInline(r.endLocationName)}`);
   if (r.startMilepost != null) lines.push(`**Start MP:** ${r.startMilepost}`);
   if (r.endMilepost != null) lines.push(`**End MP:** ${r.endMilepost}`);
   if (r.tollRateInDollars != null) lines.push(`**Rate:** $${r.tollRateInDollars.toFixed(2)}`);
-  if (r.message) lines.push(`**Message:** ${r.message}`);
+  if (r.message) lines.push(`**Message:** ${escapeMarkdownInline(r.message)}`);
   const startCoords = coordinatePair(r.startLatitude, r.startLongitude);
   if (startCoords) lines.push(`**Start Coords:** ${startCoords}`);
   const endCoords = coordinatePair(r.endLatitude, r.endLongitude);
   if (endCoords) lines.push(`**End Coords:** ${endCoords}`);
-  if (r.timeUpdated) lines.push(`**Updated:** ${r.timeUpdated}`);
+  if (r.timeUpdated) lines.push(`**Updated:** ${escapeMarkdownInline(r.timeUpdated)}`);
   return lines.join('\n');
 }
