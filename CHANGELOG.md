@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.4.2](changelog/0.4.x/0.4.2.md) — 2026-10-25
+
+Upstream text renders literally in Markdown, and camera image URLs render as images with their original destinations.
+
 ## [0.4.1](changelog/0.4.x/0.4.1.md) — 2026-10-09
 
 Moves to mcp-ts-core 0.13.14: a number sent for a string field, a numeric or boolean string, and null for an optional field are repaired before validation, error results carry a request ID, and the registry's HTTP install entry starts the HTTP transport.
