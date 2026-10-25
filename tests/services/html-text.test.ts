@@ -237,8 +237,7 @@ describe('htmlToText — linear time', () => {
    * A prior release shipped a regex that backtracked quadratically and blocked the event loop for
    * 40 seconds on a 4 KB input, so linearity is measured rather than argued. Each shape below is
    * run at two sizes an order of magnitude apart; quadratic cost would show as a ~100x jump.
-   * The assertion is deliberately loose (25x) — it is a catastrophe detector, not a benchmark, and
-   * has to stay stable on a loaded CI machine.
+   * Thread CPU measures parser work without charging time waiting for another suite's worker.
    */
   const shapes: [string, (n: number) => string][] = [
     ['unterminated tag openers', (n) => '<'.repeat(n)],
@@ -257,16 +256,21 @@ describe('htmlToText — linear time', () => {
   ];
 
   /**
-   * Fastest of several runs. A single measurement picks up whatever GC pause or scheduler blip
-   * the rest of the suite happens to cause, which on a sub-millisecond sample swamps the signal
-   * being measured; the minimum is the run that got a clean slice of CPU.
+   * Fastest of several thread-CPU samples, each long enough to clear scheduler tick resolution.
    */
   function timeOf(input: string): number {
     let fastest = Number.POSITIVE_INFINITY;
-    for (let run = 0; run < 5; run++) {
-      const start = performance.now();
-      htmlToText(input);
-      fastest = Math.min(fastest, performance.now() - start);
+    for (let run = 0; run < 3; run++) {
+      const start = process.threadCpuUsage();
+      let elapsedMs = 0;
+      let calls = 0;
+      do {
+        htmlToText(input);
+        calls++;
+        const used = process.threadCpuUsage(start);
+        elapsedMs = (used.user + used.system) / 1_000;
+      } while (elapsedMs < 5);
+      fastest = Math.min(fastest, elapsedMs / calls);
     }
     return fastest;
   }
@@ -276,8 +280,8 @@ describe('htmlToText — linear time', () => {
       const small = build(50_000);
       const large = build(500_000);
       // Warm the JIT so compile cost is not charged to the small sample.
-      timeOf(small);
-      timeOf(large);
+      htmlToText(small);
+      htmlToText(large);
 
       // Sub-millisecond samples make a ratio meaningless; the absolute bound covers those.
       const smallMs = Math.max(timeOf(small), 1);
@@ -293,9 +297,10 @@ describe('htmlToText — linear time', () => {
 
   it('normalizes a 400 KB pathological fragment well inside a request budget', () => {
     const input = `${'<a href="https://example.com/x">link</a><p>&quot;text&quot;</p>'.repeat(6_000)}`;
-    const start = performance.now();
+    const start = process.threadCpuUsage();
     const out = htmlToText(input);
-    expect(performance.now() - start).toBeLessThan(1_000);
+    const used = process.threadCpuUsage(start);
+    expect((used.user + used.system) / 1_000).toBeLessThan(1_000);
     expect(out).toContain('link (https://example.com/x)');
   });
 });
