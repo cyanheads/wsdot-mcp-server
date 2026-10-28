@@ -21,9 +21,13 @@
 
 ### Resources
 
-None. `createApp()` registers an empty `resources` array.
+`skill://wsdot-guide/SKILL.md` serves the published ferry trip guide through `createApp({ skills: 'skills' })`. The explicit `resources` array stays empty; the framework's Skills extension registers this resource and its URI template.
 
 Three were sketched during design — `wsdot://passes`, `wsdot://alerts/{stateRoute}`, and `wsdot://ferry/terminals` — and none were built. Each would have mirrored a tool that already returns the same data on demand, and every one of the three underlying feeds is live rather than reference data, so the injectable-context framing that justifies a resource did not hold.
+
+### Published skill
+
+`skills/wsdot-guide/SKILL.md` covers ferry trip decisions that combine schedule, alert, live space, and vessel evidence. Its gates prevent treating a schedule as confirmation of operation, a loading-rule code as vehicle permission, an itinerary label as a destination, or missing space data as zero. It also preserves unresolved route-alert coverage and schedule publication limits. Tool descriptions retain the individual contracts and terminal-ID lookup requirements; the guide carries the cross-tool reasoning rather than duplicating those schemas.
 
 ### Prompts
 

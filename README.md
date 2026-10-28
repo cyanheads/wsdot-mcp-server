@@ -1,13 +1,13 @@
 <div align="center">
   <h1>@cyanheads/wsdot-mcp-server</h1>
   <p><b>Query WA highway conditions, ferry schedules, vessel locations, toll rates, border waits, and alerts via MCP. STDIO or Streamable HTTP.</b>
-  <div>12 Tools</div>
+  <div>12 Tools • 1 Skill Resource</div>
   </p>
 </div>
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.4.2-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/wsdot-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/wsdot-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/wsdot-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.4.2-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/wsdot-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.4.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/wsdot-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/wsdot-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -44,7 +44,17 @@ Washington State roads and ferries from WSDOT. Check mountain passes, travel tim
 | `wsdot_get_terminal_space` | Drive-up and reservable vehicle space available at WSF terminals for upcoming sailings. |
 | `wsdot_get_ferry_alerts` | Active WSF service disruptions and bulletins with impacted route IDs. |
 
+### Resources
+
+| Resource | Description |
+|:---|:---|
+| `skill://wsdot-guide/SKILL.md` | Ferry trip guidance for combining schedules, alerts, space, and vessel positions. |
+
 ## Capability reference
+
+### `skill://wsdot-guide/SKILL.md` <sub>resource</sub>
+
+- Ferry trip guidance for combining schedules, service alerts, live vehicle space, and vessel positions. Also included in plugin installs as `wsdot-guide`.
 
 ### `wsdot_get_mountain_passes` <sub>tool</sub>
 
@@ -152,76 +162,27 @@ Agent-friendly output:
 
 ## Getting started
 
-### Public Hosted Instance
-
-A public instance is available at `https://wsdot.caseyjhand.com/mcp` — no installation required. It serves Streamable HTTP; each client takes its own config shape.
-
-For Claude Code:
+Connect to the hosted instance, no install:
 
 ```sh
 claude mcp add --transport http wsdot-mcp-server https://wsdot.caseyjhand.com/mcp
 ```
 
-For Cline (`cline_mcp_settings.json`):
+Or run it locally:
 
-```json
-{
-  "mcpServers": {
-    "wsdot-mcp-server": {
-      "type": "streamableHttp",
-      "url": "https://wsdot.caseyjhand.com/mcp"
-    }
-  }
-}
+```sh
+claude mcp add wsdot-mcp-server -e WSDOT_ACCESS_CODE=your-access-code -- npx -y @cyanheads/wsdot-mcp-server
 ```
 
-For Cursor (`mcp.json`):
+For other clients, add this to the MCP config file:
 
 ```json
 {
   "mcpServers": {
     "wsdot-mcp-server": {
-      "url": "https://wsdot.caseyjhand.com/mcp"
-    }
-  }
-}
-```
-
-Claude Desktop adds remote servers under Settings → Connectors.
-
-### Self-Hosted / Local
-
-Add the following to your MCP client configuration file. You'll need a WSDOT Traveler API access code — register at [wsdot.wa.gov/Traffic/api/](https://wsdot.wa.gov/Traffic/api/).
-
-```json
-{
-  "mcpServers": {
-    "wsdot-mcp-server": {
-      "type": "stdio",
-      "command": "bunx",
-      "args": ["@cyanheads/wsdot-mcp-server@latest"],
-      "env": {
-        "MCP_TRANSPORT_TYPE": "stdio",
-        "MCP_LOG_LEVEL": "info",
-        "WSDOT_ACCESS_CODE": "your-access-code"
-      }
-    }
-  }
-}
-```
-
-Or with npx (no Bun required):
-
-```json
-{
-  "mcpServers": {
-    "wsdot-mcp-server": {
-      "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@cyanheads/wsdot-mcp-server@latest"],
+      "args": ["-y", "@cyanheads/wsdot-mcp-server"],
       "env": {
-        "MCP_TRANSPORT_TYPE": "stdio",
-        "MCP_LOG_LEVEL": "info",
         "WSDOT_ACCESS_CODE": "your-access-code"
       }
     }
@@ -229,63 +190,7 @@ Or with npx (no Bun required):
 }
 ```
 
-Or with Docker:
-
-```json
-{
-  "mcpServers": {
-    "wsdot-mcp-server": {
-      "type": "stdio",
-      "command": "docker",
-      "args": [
-        "run", "-i", "--rm",
-        "-e", "MCP_TRANSPORT_TYPE=stdio",
-        "-e", "WSDOT_ACCESS_CODE=your-access-code",
-        "ghcr.io/cyanheads/wsdot-mcp-server:latest"
-      ]
-    }
-  }
-}
-```
-
-For Streamable HTTP, set the transport and start the server:
-
-```sh
-MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 WSDOT_ACCESS_CODE=your-access-code bun run start:http
-# Server listens at http://localhost:3010/mcp
-```
-
-### Prerequisites
-
-- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
-- A WSDOT Traveler API access code. Register at [wsdot.wa.gov/Traffic/api/](https://wsdot.wa.gov/Traffic/api/) — registration is free.
-
-### Installation
-
-1. **Clone the repository:**
-
-```sh
-git clone https://github.com/cyanheads/wsdot-mcp-server.git
-```
-
-2. **Navigate into the directory:**
-
-```sh
-cd wsdot-mcp-server
-```
-
-3. **Install dependencies:**
-
-```sh
-bun install
-```
-
-4. **Configure environment:**
-
-```sh
-cp .env.example .env
-# edit .env and set WSDOT_ACCESS_CODE
-```
+Get a free access code at [wsdot.wa.gov/Traffic/api/](https://wsdot.wa.gov/Traffic/api/). For Docker or a source build, see [Running the server](#running-the-server).
 
 ## Configuration
 
@@ -315,6 +220,16 @@ See [`.env.example`](./.env.example) for the full list of optional overrides.
 
 ### Local development
 
+Requires [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
+
+- **Clone and install:**
+
+  ```sh
+  git clone https://github.com/cyanheads/wsdot-mcp-server.git
+  cd wsdot-mcp-server && bun install
+  cp .env.example .env   # set WSDOT_ACCESS_CODE
+  ```
+
 - **Build and run:**
 
   ```sh
@@ -338,11 +253,10 @@ See [`.env.example`](./.env.example) for the full list of optional overrides.
 ### Docker
 
 ```sh
-docker build -t wsdot-mcp-server .
-docker run --rm -e WSDOT_ACCESS_CODE=your-access-code -p 3010:3010 wsdot-mcp-server
+docker run --rm -e WSDOT_ACCESS_CODE=your-access-code -p 3010:3010 ghcr.io/cyanheads/wsdot-mcp-server:latest
 ```
 
-The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `/var/log/wsdot-mcp-server`. OpenTelemetry peer dependencies are installed by default — build with `--build-arg OTEL_ENABLED=false` to omit them.
+The image defaults to HTTP transport, stateless session mode, and logs to `/var/log/wsdot-mcp-server`. For stdio, use `docker run -i --rm -e MCP_TRANSPORT_TYPE=stdio -e WSDOT_ACCESS_CODE=your-access-code ghcr.io/cyanheads/wsdot-mcp-server:latest`. To build locally, run `docker build -t wsdot-mcp-server .`; OpenTelemetry peer dependencies are installed by default — build with `--build-arg OTEL_ENABLED=false` to omit them.
 
 ## Project structure
 
@@ -353,6 +267,7 @@ The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `
 | `src/mcp-server/tools` | Tool definitions (`*.tool.ts`) — 6 traffic tools, 6 ferry tools. |
 | `src/services/traffic` | WSDOT Traffic API service (mountain passes, alerts, travel times, toll rates, border waits, cameras). |
 | `src/services/ferry` | WSF Ferry API service (terminals, routes, schedule, vessel locations, space, alerts). |
+| `skills/` | Published ferry trip guide, also served as an MCP skill resource. |
 | `tests/` | Unit and integration tests, mirroring the `src/` structure. |
 
 ## Development guide
