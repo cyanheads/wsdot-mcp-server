@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.5.0](changelog/0.5.x/0.5.0.md) — 2026-10-28
+
+Ferry trip guidance is available as an MCP skill resource, with updated framework behavior and desktop bundle packaging.
+
 ## [0.4.2](changelog/0.4.x/0.4.2.md) — 2026-10-25
 
 Upstream text renders literally in Markdown, and camera image URLs render as images with their original destinations.

@@ -1,6 +1,6 @@
 # wsdot-mcp-server - Directory Structure
 
-Generated on: 2026-10-28 07:08:57
+Generated on: 2026-10-28 07:30:13
 
 ```text
 wsdot-mcp-server/
@@ -28,6 +28,7 @@ wsdot-mcp-server/
 │   ├── 0.2.x/
 │   ├── 0.3.x/
 │   ├── 0.4.x/
+│   ├── 0.5.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -188,6 +189,8 @@ wsdot-mcp-server/
 │   │   └── pagination.ts
 │   ├── prompts/
 │   ├── resources/
+│   ├── scripts/
+│   │   └── mcpb-runtime.test.ts
 │   ├── security/
 │   │   └── security.test.ts
 │   ├── services/
