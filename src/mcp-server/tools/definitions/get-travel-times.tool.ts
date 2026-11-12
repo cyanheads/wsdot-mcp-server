@@ -7,13 +7,20 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import {
-  continuationNotice,
-  fitPageToBudget,
+  clampPageLimit,
   MAX_FILTER_LENGTH,
-  PAGE_BYTE_BUDGET,
+  type PageLimitSpec,
+  pageLimitSchema,
   renderPage,
-} from '@/mcp-server/tools/page-budget.js';
-import { routeMatches } from '@/services/traffic/route-match.js';
+  slicePage,
+  withClampNotice,
+  withContinuation,
+} from '@/mcp-server/tools/paging.js';
+import {
+  designationsIn,
+  isRouteDesignation,
+  routeMatches,
+} from '@/services/traffic/route-match.js';
 import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
 
 const CorridorSchema = z
@@ -71,19 +78,16 @@ const CorridorSchema = z
 
 type Corridor = z.infer<typeof CorridorSchema>;
 
-const DEFAULT_LIMIT = 50;
-const MAX_LIMIT = 500;
+const LIMIT: PageLimitSpec = {
+  tool: 'wsdot_get_travel_times',
+  unit: 'corridors',
+  defaultLimit: 50,
+  maxLimit: 500,
+};
 
 export const getTravelTimes = tool('wsdot_get_travel_times', {
   title: 'Get Travel Times',
-  description:
-    'Returns current vs. average travel times for named WA highway corridors (I-5, I-90, SR 520, SR 99, ' +
-    'I-405, SR 167, etc.). Use for "how congested is I-5?" or commute time estimates. ' +
-    'The route filter matches two ways: a route designation ("I-5", "5", "SR 520") returns every ' +
-    'corridor measured on that route, and any text also matches corridor names ("Everett"). ' +
-    'When current time exceeds average, the corridor is congested. ' +
-    'Results are paged — pass offset/limit to page through the full set. ' +
-    `A page ends at limit or at a ${PAGE_BYTE_BUDGET.toLocaleString('en-US')}-byte response budget, whichever comes first; the notice reports the next offset.`,
+  description: `Returns current vs. average travel times for named WA highway corridors (I-5, I-405, I-90, SR 520, SR 167, and around Vancouver I-205 and SR 14). Use for "how congested is I-5?" or commute time estimates. A route designation filter ("I-5", "5", "SR 520") returns every corridor that starts or ends on that route or writes it in its name ("via 520"), never digits inside another number. Any other filter text matches corridor names ("Everett"), and the first number in it, read as a route, also matches every corridor that starts or ends on that route, in both directions — "I-405 southbound" returns northbound I-405 corridors too, since the direction word is not applied. When current time exceeds average, the corridor is congested. Results are paged — pass offset/limit to page through the full set.`,
   annotations: { readOnlyHint: true },
   input: z.object({
     route: z
@@ -91,10 +95,7 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
       .max(MAX_FILTER_LENGTH)
       .optional()
       .describe(
-        'Optional filter. A route designation — "I-5", "5", "005", "SR 520", "520" — matches every ' +
-          'corridor whose start or end point is on that route, whichever form the feed reports. ' +
-          'Any text also matches the corridor name as a case-insensitive substring, so "Everett" ' +
-          'finds the Seattle-Everett corridors. Omit to return all corridors.',
+        'Optional filter. A route designation — an optional route type (I, SR, US) and the route number, such as "I-5", "5", "005", "SR 520", or "520" — matches every corridor whose start or end point is on that route, whichever form the feed reports, or whose name writes the route ("I-5", "SR14", "via 520"). It never matches digits inside another number: "5" does not match I-405 or SR 522. Any other text matches the corridor name as a case-insensitive substring, so "Everett" finds the Seattle-Everett corridors and "1A" the 1A segments. The first number in such text, read as a route with any route type written just before it, also matches every corridor whose start or end point is on that route, in both directions — "I-405 southbound" returns northbound I-405 corridors too, since the direction word is not applied. Omit to return all corridors.',
       ),
     offset: z
       .number()
@@ -102,15 +103,7 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
       .min(0)
       .optional()
       .describe('Zero-based index of the first corridor to return, for paging. Defaults to 0.'),
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(MAX_LIMIT)
-      .optional()
-      .describe(
-        `Maximum corridors to return in this page (1–${MAX_LIMIT}). Defaults to ${DEFAULT_LIMIT}. A large page ends sooner, at the ${PAGE_BYTE_BUDGET.toLocaleString('en-US')}-byte response budget.`,
-      ),
+    limit: pageLimitSchema(LIMIT),
   }),
   output: z.object({
     corridors: z.array(CorridorSchema).describe('Travel time corridors matching the filter.'),
@@ -133,7 +126,7 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
       .string()
       .optional()
       .describe(
-        'Informational note about the page window, or guidance when no corridors matched the route filter or the offset ran past the end.',
+        'Informational note about the page window, or guidance when no corridors matched the route filter or the offset ran past the end. Ends with the applied limit when a larger one was clamped.',
       ),
   },
 
@@ -165,13 +158,19 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
   async handler(input, ctx) {
     const all = await getTrafficApiService().getTravelTimes(ctx);
     const routeFilter = input.route?.trim() ? input.route.trim().toLowerCase() : undefined;
-    // Two match paths: the route designation against the corridor's start/end road names — where
-    // the route actually lives, since most corridor names are endpoint pairs ("Seattle-Everett") —
-    // and the free-text substring against the corridor name.
+    const designation = routeFilter !== undefined && isRouteDesignation(routeFilter);
+    // Two match paths. The filter against the corridor's start/end road names — where the route
+    // actually lives, since most corridor names are endpoint pairs ("Seattle-Everett"). And the
+    // corridor name: a designation against the routes the name writes ("via 520", "I-84JCT"), so
+    // "5" never matches the digits of "405" or "SR 522"; any other text as a substring.
+    const namesRoute = (name: string, filter: string) =>
+      designation
+        ? designationsIn(name).some((written) => routeMatches(filter, written))
+        : name.toLowerCase().includes(filter);
     const filtered = routeFilter
       ? all.filter(
           (t) =>
-            t.name?.toLowerCase().includes(routeFilter) ||
+            (t.name != null && namesRoute(t.name, routeFilter)) ||
             [t.startPoint?.roadName, t.endPoint?.roadName].some(
               (roadName) => roadName != null && routeMatches(routeFilter, roadName),
             ),
@@ -183,23 +182,21 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
     // stays the full match count so the agent knows how much lies beyond this page.
     const totalCount = filtered.length;
     const offset = input.offset ?? 0;
-    const limit = input.limit ?? DEFAULT_LIMIT;
-    const requested: Corridor[] = filtered.slice(offset, offset + limit).map((t) => ({
+    const page = clampPageLimit(LIMIT, input.limit, ctx);
+    const { rows, hasMore, nextOffset } = slicePage(filtered, offset, page.limit);
+    const corridors: Corridor[] = rows.map((t) => ({
       ...t,
       delayInMinutes:
         t.currentTimeInMinutes != null && t.averageTimeInMinutes != null
           ? t.currentTimeInMinutes - t.averageTimeInMinutes
           : undefined,
     }));
-    const corridors = fitPageToBudget(requested, renderCorridor, routeFilter);
-    const hasMore = offset + corridors.length < totalCount;
-    const nextOffset = hasMore ? offset + corridors.length : null;
 
     ctx.log.info('Travel times fetched', {
       total: all.length,
       totalCount,
       offset,
-      limit,
+      limit: page.limit,
       returned: corridors.length,
     });
 
@@ -207,21 +204,25 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
 
     if (totalCount === 0) {
       ctx.enrich.notice(
-        routeFilter
-          ? `No corridors matched the route filter "${routeFilter}". Try a broader filter (e.g. "I-5" instead of "I-5 NB") or omit the filter to list all corridors.`
-          : 'No travel time data available. The WSDOT API may be temporarily unavailable — retry in 30 seconds.',
+        withClampNotice(
+          designation
+            ? `No corridor starts or ends on route "${routeFilter}" or names it. Omit the filter to list all corridors.`
+            : routeFilter
+              ? `No corridors matched the route filter "${routeFilter}". Broaden the filter, or omit it to list all corridors.`
+              : 'No travel time data available. The WSDOT API may be temporarily unavailable — retry in 30 seconds.',
+          page,
+        ),
       );
     } else if (corridors.length === 0) {
       ctx.enrich.notice(
-        `Offset ${offset} is past the end of ${totalCount} matching corridors. Use an offset between 0 and ${totalCount - 1}.`,
+        withClampNotice(
+          `Offset ${offset} is past the end of ${totalCount} matching corridors. Use an offset between 0 and ${totalCount - 1}.`,
+          page,
+        ),
       );
     } else {
       const shown = `Showing corridors ${offset + 1}–${offset + corridors.length} of ${totalCount}.`;
-      ctx.enrich.notice(
-        nextOffset === null
-          ? shown
-          : `${shown} ${continuationNotice(nextOffset, corridors.length < requested.length)}`,
-      );
+      ctx.enrich.notice(withClampNotice(withContinuation(shown, nextOffset), page));
     }
 
     return { corridors };
@@ -235,7 +236,7 @@ export const getTravelTimes = tool('wsdot_get_travel_times', {
   },
 });
 
-/** One corridor's `content[]` block — shared by `format()` and the page-budget charge. */
+/** One corridor's `content[]` block, as `format()` renders it. */
 function renderCorridor(c: Corridor): string {
   const lines = [`### ${escapeMarkdownInline(c.name ?? 'Corridor')}`];
   if (c.description) lines.push(escapeMarkdownInline(c.description));

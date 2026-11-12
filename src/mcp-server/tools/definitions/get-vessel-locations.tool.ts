@@ -7,14 +7,13 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { coordinatePair } from '@/mcp-server/tools/coordinate-pair.js';
+import { localThenUtc } from '@/mcp-server/tools/local-time.js';
 import { getFerryApiService } from '@/services/ferry/ferry-service.js';
 
 export const getVesselLocations = tool('wsdot_get_vessel_locations', {
   title: 'Get Vessel Locations',
   description:
-    'Returns real-time AIS positions, speed, heading, ETA, and dock status for all active WSF vessels. ' +
-    'Use for "where is the ferry now?", vessel tracking, or checking if a vessel is in service. ' +
-    'Position data may lag by 30–60 seconds. Many fields are null for vessels not currently operating.',
+    'Returns real-time AIS positions, speed, heading, ETA, and dock status for all active WSF vessels. Use for "where is the ferry now?", vessel tracking, or checking if a vessel is in service. Position data may lag by 30–60 seconds. Many fields are absent for vessels not currently operating.',
   annotations: { readOnlyHint: true },
   input: z.object({}),
   output: z.object({
@@ -49,19 +48,49 @@ export const getVesselLocations = tool('wsdot_get_vessel_locations', {
             longitude: z.number().optional().describe('Current longitude (AIS position).'),
             speed: z.number().optional().describe('Speed in knots.'),
             heading: z.number().optional().describe('Heading in degrees (0–359).'),
-            leftDock: z.string().optional().describe('Time the vessel last left the dock.'),
+            leftDock: z
+              .string()
+              .optional()
+              .describe('Time the vessel last left the dock (ISO 8601, UTC).'),
+            leftDockLocal: z
+              .string()
+              .optional()
+              .describe(
+                'leftDock as Pacific time (America/Los_Angeles): ISO 8601 with its UTC offset, the same instant at the same precision — the form to quote as a clock time. Absent when leftDock is absent or not an ISO 8601 instant.',
+              ),
             eta: z
               .string()
               .optional()
-              .describe('Estimated arrival time at the destination terminal.'),
-            scheduledDeparture: z.string().optional().describe('Scheduled departure time.'),
+              .describe('Estimated arrival time at the destination terminal (ISO 8601, UTC).'),
+            etaLocal: z
+              .string()
+              .optional()
+              .describe(
+                'eta as Pacific time (America/Los_Angeles): ISO 8601 with its UTC offset, the same instant at the same precision — the form to quote as a clock time. Absent when eta is absent or not an ISO 8601 instant.',
+              ),
+            scheduledDeparture: z
+              .string()
+              .optional()
+              .describe('Scheduled departure time (ISO 8601, UTC).'),
+            scheduledDepartureLocal: z
+              .string()
+              .optional()
+              .describe(
+                'scheduledDeparture as Pacific time (America/Los_Angeles): ISO 8601 with its UTC offset, the same instant at the same precision — the form to quote as a clock time. Absent when scheduledDeparture is absent or not an ISO 8601 instant.',
+              ),
             opRouteAbbrev: z
               .array(z.string())
               .describe('Abbreviations of routes this vessel operates on.'),
             timestamp: z
               .string()
               .optional()
-              .describe('AIS data timestamp — indicates position data age.'),
+              .describe('AIS data timestamp (ISO 8601, UTC) — indicates position data age.'),
+            timestampLocal: z
+              .string()
+              .optional()
+              .describe(
+                'timestamp as Pacific time (America/Los_Angeles): ISO 8601 with its UTC offset, the same instant at the same precision. Absent when timestamp is absent or not an ISO 8601 instant.',
+              ),
           })
           .describe('Real-time position and status for one WSF vessel.'),
       )
@@ -138,10 +167,15 @@ export const getVesselLocations = tool('wsdot_get_vessel_locations', {
       if (position) lines.push(`**Position:** ${position}`);
       if (v.speed != null) lines.push(`**Speed:** ${v.speed} knots`);
       if (v.heading != null) lines.push(`**Heading:** ${v.heading}°`);
-      if (v.leftDock) lines.push(`**Left Dock:** ${escapeMarkdownInline(v.leftDock)}`);
-      if (v.eta) lines.push(`**ETA:** ${escapeMarkdownInline(v.eta)}`);
+      if (v.leftDock)
+        lines.push(
+          `**Left Dock:** ${escapeMarkdownInline(localThenUtc(v.leftDock, v.leftDockLocal))}`,
+        );
+      if (v.eta) lines.push(`**ETA:** ${escapeMarkdownInline(localThenUtc(v.eta, v.etaLocal))}`);
       if (v.scheduledDeparture)
-        lines.push(`**Scheduled Departure:** ${escapeMarkdownInline(v.scheduledDeparture)}`);
+        lines.push(
+          `**Scheduled Departure:** ${escapeMarkdownInline(localThenUtc(v.scheduledDeparture, v.scheduledDepartureLocal))}`,
+        );
       // A vessel between assignments reports an empty route list; that is a fact structuredContent
       // states, so content[] says it rather than omitting the field.
       lines.push(
@@ -149,7 +183,10 @@ export const getVesselLocations = tool('wsdot_get_vessel_locations', {
           ? `**Routes:** ${escapeMarkdownInline(v.opRouteAbbrev.join(', '))}`
           : '**Routes:** none reported',
       );
-      if (v.timestamp) lines.push(`**Position Timestamp:** ${escapeMarkdownInline(v.timestamp)}`);
+      if (v.timestamp)
+        lines.push(
+          `**Position Timestamp:** ${escapeMarkdownInline(localThenUtc(v.timestamp, v.timestampLocal))}`,
+        );
       if (v.vesselId != null) lines.push(`**Vessel ID:** ${v.vesselId}`);
       lines.push('');
     }

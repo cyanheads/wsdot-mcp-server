@@ -6,17 +6,13 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
+import { localThenUtc } from '@/mcp-server/tools/local-time.js';
 import { getFerryApiService } from '@/services/ferry/ferry-service.js';
 
 export const getFerryAlerts = tool('wsdot_get_ferry_alerts', {
   title: 'Get Ferry Alerts',
   description:
-    'Returns active WSF ferry service disruptions, delays, and bulletins. ' +
-    'Each alert carries a one-line summary plus the bulletin title, kind, and full body — the body ' +
-    'is where detail such as a replacement sailing appears. ' +
-    'Each alert includes impacted route IDs — cross-reference with wsdot_get_ferry_routes ' +
-    'to resolve route IDs to human-readable route names. Some IDs (seasonal, San Juan interisland, ' +
-    'or international Sidney B.C. routes) may not appear in wsdot_get_ferry_routes for a given date.',
+    'Returns active WSF ferry service disruptions, delays, and bulletins. Each alert carries a one-line summary plus the bulletin title, kind, and full body — the body is where detail such as a replacement sailing appears. Each alert includes impacted route IDs — cross-reference with wsdot_get_ferry_routes to resolve route IDs to human-readable route names. Some IDs (seasonal, San Juan interisland, or international Sidney B.C. routes) may not appear in wsdot_get_ferry_routes for a given date.',
   annotations: { readOnlyHint: true },
   input: z.object({}),
   output: z.object({
@@ -51,11 +47,18 @@ export const getFerryAlerts = tool('wsdot_get_ferry_alerts', {
             impactedRouteIds: z
               .array(z.number())
               .describe(
-                'Route IDs affected by this alert. Cross-reference with wsdot_get_ferry_routes to get route names; ' +
-                  'some seasonal or interisland route IDs may not be listed there for a given date. ' +
-                  'Empty means no specific routes unless affectsAllRoutes is true, which makes it fleet-wide.',
+                'Route IDs affected by this alert. Cross-reference with wsdot_get_ferry_routes to get route names; some seasonal or interisland route IDs may not be listed there for a given date. Empty means no specific routes unless affectsAllRoutes is true, which makes it fleet-wide.',
               ),
-            publishDate: z.string().optional().describe('When the alert was published (ISO 8601).'),
+            publishDate: z
+              .string()
+              .optional()
+              .describe('When the alert was published (ISO 8601, UTC).'),
+            publishDateLocal: z
+              .string()
+              .optional()
+              .describe(
+                'publishDate as Pacific time (America/Los_Angeles): ISO 8601 with its UTC offset, the same instant at the same precision — the form to quote as a clock time. Absent when publishDate is absent or not an ISO 8601 instant.',
+              ),
           })
           .describe('A WSF ferry service alert or disruption.'),
       )
@@ -131,7 +134,10 @@ export const getFerryAlerts = tool('wsdot_get_ferry_alerts', {
             : '**Impacted Routes:** none listed — this alert names no specific route.',
         );
       }
-      if (a.publishDate) lines.push(`**Published:** ${escapeMarkdownInline(a.publishDate)}`);
+      if (a.publishDate)
+        lines.push(
+          `**Published:** ${escapeMarkdownInline(localThenUtc(a.publishDate, a.publishDateLocal))}`,
+        );
       lines.push('');
     }
     return [{ type: 'text', text: lines.join('\n') }];

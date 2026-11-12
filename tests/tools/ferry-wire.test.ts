@@ -7,18 +7,23 @@
  * @module tests/tools/ferry-wire.test
  */
 
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createFetchMock, runToolContract } from '@cyanheads/mcp-ts-core/testing';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 
 vi.mock('@/config/server-config.js', () => ({
   getServerConfig: () => ({ accessCode: 'test-access-code' }),
 }));
 
+import { getFerryAlerts } from '@/mcp-server/tools/definitions/get-ferry-alerts.tool.js';
 import { getFerryRoutes } from '@/mcp-server/tools/definitions/get-ferry-routes.tool.js';
 import { getFerrySchedule } from '@/mcp-server/tools/definitions/get-ferry-schedule.tool.js';
 import { getFerryTerminals } from '@/mcp-server/tools/definitions/get-ferry-terminals.tool.js';
+import { getTerminalSpace } from '@/mcp-server/tools/definitions/get-terminal-space.tool.js';
+import { getVesselLocations } from '@/mcp-server/tools/definitions/get-vessel-locations.tool.js';
 import { initFerryApiService } from '@/services/ferry/ferry-service.js';
 import { wireError } from '../helpers/assertions.js';
+import { DATE_ROLLED_REJECTION, scheduleCapture } from '../helpers/wsf-schedule.js';
 
 const API = 'https://www.wsdot.wa.gov/Ferries/API';
 
@@ -48,6 +53,10 @@ const UNREGISTERED_CODE = {
   Message:
     "Use of WSDOT Traveler API failed.  Please make sure you've registered (at this location https://wsdot.wa.gov/traffic/api/) for a developer Access Code.  This value should then be passed with every service request.",
 };
+
+/** The recovery the dated ferry tools declare for a call that spends its 50 s budget. */
+const DEADLINE_HINT =
+  'Retry in 30 seconds. If the issue persists, check wsdot.wa.gov/ferries for service status.';
 
 const LIVE_ROUTE = {
   RouteID: 5,
@@ -205,18 +214,29 @@ describe('ferry tools on the wire — unchanged behavior', () => {
     });
     expect(structured.sailings[0]).toMatchObject({
       departureTime: '2026-09-25T13:50:00.000Z',
+      departureTimeLocal: '2026-09-25T06:50:00.000-07:00',
       arrivalTime: '2026-09-25T14:05:00.000Z',
+      arrivalTimeLocal: '2026-09-25T07:05:00.000-07:00',
+      serviceDate: TRIP_DATE,
       vesselName: 'Chelan',
     });
     expect(structured.sailings[1]).toMatchObject({
       departureTime: '2026-09-25T15:55:00.000Z',
+      departureTimeLocal: '2026-09-25T08:55:00.000-07:00',
       arrivalTime: '2026-09-25T16:10:00.000Z',
+      arrivalTimeLocal: '2026-09-25T09:10:00.000-07:00',
+      serviceDate: TRIP_DATE,
       vesselName: 'Yakima',
     });
     const text = wireText(result);
     expect(text).toContain('## Ferry Schedule — Orcas Island → Shaw Island');
-    expect(text).toContain('- 2026-09-25T13:50:00.000Z → 2026-09-25T14:05:00.000Z | Chelan');
-    expect(text).toContain('- 2026-09-25T15:55:00.000Z → 2026-09-25T16:10:00.000Z | Yakima');
+    // Each time renders as its Pacific form with the UTC instant after it, then its service day.
+    expect(text).toContain(
+      '- 2026-09-25T06:50:00.000-07:00 (2026-09-25T13:50:00.000Z) → 2026-09-25T07:05:00.000-07:00 (2026-09-25T14:05:00.000Z) | serviceDate 2026-09-25 | Chelan',
+    );
+    expect(text).toContain(
+      '- 2026-09-25T08:55:00.000-07:00 (2026-09-25T15:55:00.000Z) → 2026-09-25T09:10:00.000-07:00 (2026-09-25T16:10:00.000Z) | serviceDate 2026-09-25 | Yakima',
+    );
   });
 
   it('wsdot_get_ferry_schedule reports a non-through pair on a date with routes as invalid_terminal_pair', async () => {
@@ -267,6 +287,105 @@ describe('ferry tools on the wire — unchanged behavior', () => {
       { terminalId: 1, terminalName: 'Anacortes', terminalAbbrev: 'ANA' },
       { terminalId: 11, terminalName: 'Coupeville', terminalAbbrev: 'COU' },
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pacific local time beside the UTC times of the live-status tools (the schedule's is pinned
+// above). WSF sends each time as a WCF date; both surfaces carry the UTC value and its sibling.
+// ---------------------------------------------------------------------------
+
+describe('ferry live-status times on the wire — Pacific beside UTC', () => {
+  it('wsdot_get_vessel_locations', async () => {
+    http.route({
+      match: /\/Vessels\/rest\/vessellocations\?/,
+      respond: Response.json([
+        {
+          VesselID: 38,
+          VesselName: 'Yakima',
+          LeftDock: '/Date(1794481510000-0800)/',
+          Eta: null,
+          ScheduledDeparture: '/Date(1794481200000-0800)/',
+          OpRouteAbbrev: ['sea-bi'],
+          TimeStamp: '/Date(1794481597000-0800)/',
+        },
+      ]),
+    });
+    const result = await runToolContract(getVesselLocations, {});
+    expect(result.isError).toBeFalsy();
+    const [vessel] = (result.structuredContent as { vessels: Record<string, unknown>[] }).vessels;
+    expect(vessel).toMatchObject({
+      leftDock: '2026-11-12T11:05:10.000Z',
+      leftDockLocal: '2026-11-12T03:05:10.000-08:00',
+      scheduledDeparture: '2026-11-12T11:00:00.000Z',
+      scheduledDepartureLocal: '2026-11-12T03:00:00.000-08:00',
+      timestamp: '2026-11-12T11:06:37.000Z',
+      timestampLocal: '2026-11-12T03:06:37.000-08:00',
+    });
+    // No Eta upstream: neither form appears on either surface.
+    expect(vessel).not.toHaveProperty('eta');
+    expect(vessel).not.toHaveProperty('etaLocal');
+    const text = wireText(result);
+    expect(text).toContain(
+      '**Left Dock:** 2026-11-12T03:05:10.000-08:00 (2026-11-12T11:05:10.000Z)',
+    );
+    expect(text).toContain(
+      '**Scheduled Departure:** 2026-11-12T03:00:00.000-08:00 (2026-11-12T11:00:00.000Z)',
+    );
+    expect(text).toContain(
+      '**Position Timestamp:** 2026-11-12T03:06:37.000-08:00 (2026-11-12T11:06:37.000Z)',
+    );
+    expect(text).not.toContain('**ETA:**');
+  });
+
+  it('wsdot_get_terminal_space', async () => {
+    http.route({
+      match: /\/Terminals\/rest\/terminalsailingspace\?/,
+      respond: Response.json([
+        {
+          TerminalID: 7,
+          TerminalName: 'Seattle',
+          DepartingSpaces: [
+            {
+              Departure: '/Date(1790344200000-0700)/',
+              VesselName: 'Wenatchee',
+              SpaceForArrivalTerminals: [{ ArrivalTerminalIDs: [3], DriveUpSpaceCount: 50 }],
+            },
+          ],
+        },
+      ]),
+    });
+    const result = await runToolContract(getTerminalSpace, { departingTerminalId: 7 });
+    expect(result.isError).toBeFalsy();
+    const { terminals } = result.structuredContent as {
+      terminals: { departingSpaces: Record<string, unknown>[] }[];
+    };
+    expect(terminals[0]?.departingSpaces[0]).toMatchObject({
+      departure: '2026-09-25T13:50:00.000Z',
+      departureLocal: '2026-09-25T06:50:00.000-07:00',
+    });
+    expect(wireText(result)).toContain(
+      '**2026-09-25T06:50:00.000-07:00 (2026-09-25T13:50:00.000Z)** | Wenatchee',
+    );
+  });
+
+  it('wsdot_get_ferry_alerts', async () => {
+    http.route({
+      match: /\/Schedule\/rest\/alerts\?/,
+      respond: Response.json([
+        { BulletinID: 9, AlertFullTitle: 'Notice', PublishDate: '/Date(1794481421917-0800)/' },
+      ]),
+    });
+    const result = await runToolContract(getFerryAlerts, {});
+    expect(result.isError).toBeFalsy();
+    const [alert] = (result.structuredContent as { alerts: Record<string, unknown>[] }).alerts;
+    expect(alert).toMatchObject({
+      publishDate: '2026-11-12T11:03:41.917Z',
+      publishDateLocal: '2026-11-12T03:03:41.917-08:00',
+    });
+    expect(wireText(result)).toContain(
+      '**Published:** 2026-11-12T03:03:41.917-08:00 (2026-11-12T11:03:41.917Z)',
+    );
   });
 });
 
@@ -513,21 +632,346 @@ describe('ferry dates without a published schedule, on the wire', () => {
   });
 
   it('keeps same-day remainingOnly: true as requested (characterization)', async () => {
-    const { FerryApiService } = await import('@/services/ferry/ferry-service.js');
-    const today = FerryApiService.todayFerryDate();
+    // Noon Pacific, hours past the previous service day's last sailing: one request.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-12T20:00:00Z'));
+    const today = '2026-11-12';
     http.route({
       match: /\/Schedule\/rest\/scheduletoday\/15\/18\/true\?/,
       respond: Response.json(ORCAS_SHAW_SCHEDULE),
     });
-    const result = await runToolContract(getFerrySchedule, {
-      departingTerminalId: 15,
-      arrivingTerminalId: 18,
-      tripDate: today,
-      remainingOnly: true,
-    });
+    try {
+      const result = await runToolContract(getFerrySchedule, {
+        departingTerminalId: 15,
+        arrivingTerminalId: 18,
+        tripDate: today,
+        remainingOnly: true,
+      });
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({ remainingOnly: true, tripDate: today });
+      expect(wireText(result)).toContain('**remainingOnly:** true');
+      expect(requestedPaths()).toEqual(['/Schedule/rest/scheduletoday/15/18/true']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #55 — after midnight, remainingOnly leads with the previous service day's sailings still to depart
+// ---------------------------------------------------------------------------
+
+describe('wsdot_get_ferry_schedule on the wire — the previous service day after midnight', () => {
+  const TODAY = '/Schedule/rest/scheduletoday/7/3/true';
+  const PREVIOUS = '/Schedule/rest/schedule/2026-11-11/7/3';
+  const routeOf = (path: string) => new RegExp(`${path.replaceAll('/', '\\/')}\\?`);
+  const INPUT = { departingTerminalId: 7, arrivingTerminalId: 3, remainingOnly: true };
+
+  interface WireSailing {
+    departureTime?: string;
+    serviceDate: string;
+  }
+  interface WireSchedule {
+    notice?: string;
+    sailings: WireSailing[];
+    totalSailings: number;
+    tripDate: string;
+  }
+
+  /** Run the tool, letting every retry backoff and timer elapse on the fake clock. */
+  async function call(input: Parameters<typeof runToolContract<typeof getFerrySchedule>>[1]) {
+    const pending = runToolContract(getFerrySchedule, input);
+    await vi.runAllTimersAsync();
+    return pending;
+  }
+
+  /** `scheduletoday` serving 11/12's capture, and 11/11's dated read answered by `previous`. */
+  function stub(previous: Response | (() => Response)) {
+    http.route(
+      {
+        match: routeOf(TODAY),
+        respond: Response.json(scheduleCapture('scheduletoday-2026-11-12-7-3-true')),
+      },
+      { match: routeOf(PREVIOUS), respond: previous },
+    );
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-12T08:53:00Z')); // 00:53 PST
+  });
+
+  afterEach(() => vi.useRealTimers());
+
+  it('leads at 00:53 with 11/11’s 01:35 sailing on both surfaces, each sailing naming its service day', async () => {
+    stub(Response.json(scheduleCapture('schedule-2026-11-11-7-3')));
+    const result = await call(INPUT);
     expect(result.isError).toBeFalsy();
-    expect(result.structuredContent).toMatchObject({ remainingOnly: true, tripDate: today });
-    expect(wireText(result)).toContain('**remainingOnly:** true');
+    const structured = result.structuredContent as unknown as WireSchedule;
+    expect(structured).toMatchObject({
+      tripDate: '2026-11-12',
+      remainingOnly: true,
+      totalSailings: 24,
+    });
+    expect(structured).not.toHaveProperty('notice');
+    expect(structured.sailings.slice(0, 2)).toMatchObject([
+      { departureTime: '2026-11-12T09:35:00.000Z', serviceDate: '2026-11-11' },
+      { departureTime: '2026-11-12T13:30:00.000Z', serviceDate: '2026-11-12' },
+    ]);
+    const lines = wireText(result)
+      .split('\n')
+      .filter((line) => line.startsWith('- '));
+    expect(lines).toHaveLength(24);
+    expect(lines[0]).toBe(
+      '- 2026-11-12T01:35:00.000-08:00 (2026-11-12T09:35:00.000Z) | serviceDate 2026-11-11 | Puyallup (vesselId 25) | loadingRule 3 | vesselHandicapAccessible: true',
+    );
+    expect(lines[1]).toMatch(
+      /^- 2026-11-12T05:30:00\.000-08:00 \(2026-11-12T13:30:00\.000Z\) \| serviceDate 2026-11-12 \| /,
+    );
+    expect(requestedPaths().sort()).toEqual([PREVIOUS, TODAY]);
+  });
+
+  it('answers a previous-day 5xx that outlasts its retries with today’s list and a notice on both surfaces', async () => {
+    stub(new Response('Service Unavailable', { status: 503 }));
+    const result = await call(INPUT);
+    expect(result.isError).toBeFalsy();
+    const structured = result.structuredContent as unknown as WireSchedule;
+    expect(structured.totalSailings).toBe(23);
+    expect(structured.sailings.every((s) => s.serviceDate === '2026-11-12')).toBe(true);
+    const notice =
+      "The previous service day's (2026-11-11) late sailings could not be checked: WSF's schedule for that day could not be read (WSF answered HTTP 503), so any of them still to depart are missing from this list. Call again to include them.";
+    expect(structured.notice).toBe(notice);
+    expect(wireText(result)).toContain(notice);
+    expect(requestedPaths().filter((p) => p === PREVIOUS)).toHaveLength(4);
+  });
+
+  it('answers WSF rejecting the previous day’s date with today’s list and no notice', async () => {
+    stub(Response.json(DATE_ROLLED_REJECTION, { status: 400 }));
+    const result = await call(INPUT);
+    const structured = result.structuredContent as unknown as WireSchedule;
+    expect(structured.totalSailings).toBe(23);
+    expect(structured).not.toHaveProperty('notice');
+    expect(requestedPaths().filter((p) => p === PREVIOUS)).toHaveLength(1);
+  });
+
+  describe('one deadline across the schedule reads and the routes check', () => {
+    let timeoutSpy: MockInstance<typeof AbortSignal.timeout>;
+
+    beforeEach(() => {
+      timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    });
+
+    afterEach(() => timeoutSpy.mockRestore());
+
+    it('gives the routes check a rejection chains only what is left of the 50 s budget', async () => {
+      http.route(
+        {
+          match: /\/Schedule\/rest\/scheduletoday\/7\/1\/true\?/,
+          respond: () => {
+            vi.setSystemTime(Date.now() + 42_000);
+            return Response.json(pairRejection(7, 1, '11/12/2026'), { status: 400 });
+          },
+        },
+        {
+          match: /\/Schedule\/rest\/schedule\/2026-11-11\/7\/1\?/,
+          respond: Response.json(pairRejection(7, 1, '11/11/2026'), { status: 400 }),
+        },
+        { match: routesFor('2026-11-12'), respond: Response.json([LIVE_ROUTE]) },
+      );
+      const error = wireError(await call({ ...INPUT, arrivingTerminalId: 1 }));
+      expect(error.data?.reason).toBe('invalid_terminal_pair');
+      // scheduletoday, then the previous day's read and the routes check once 42 s are gone (the
+      // fetch stub answers inside fetch(), before the second read starts).
+      expect(timeoutSpy.mock.calls).toEqual([[15_000], [8_000], [8_000]]);
+    });
+
+    it('settles a scheduletoday read that spends the budget as a Timeout', async () => {
+      http.route(
+        {
+          match: routeOf(TODAY),
+          respond: () => {
+            vi.setSystemTime(Date.now() + 55_000);
+            return new Response('Service Unavailable', { status: 503 });
+          },
+        },
+        {
+          match: routeOf(PREVIOUS),
+          respond: Response.json(scheduleCapture('schedule-2026-11-11-7-3')),
+        },
+      );
+      const result = await call(INPUT);
+      const error = wireError(result);
+      expect(error.code).toBe(JsonRpcErrorCode.Timeout);
+      expect(error.message).toBe(
+        'WSF Ferry API request exceeded its 50000ms retry deadline after 1 attempt.',
+      );
+      expect(JSON.stringify(result)).not.toMatch(/FerryApiService|fetchJson/);
+      expect(error.data).toMatchObject({
+        reason: 'retry_deadline_exceeded',
+        recovery: { hint: DEADLINE_HINT },
+      });
+      expect(wireText(result)).toContain(`Recovery: ${DEADLINE_HINT}`);
+      expect(requestedPaths().filter((p) => p === TODAY)).toHaveLength(1);
+    });
+
+    it('settles a previous-day read that spends the budget as today’s list with a timed-out notice', async () => {
+      stub(() => {
+        vi.setSystemTime(Date.now() + 55_000);
+        return new Response('Service Unavailable', { status: 503 });
+      });
+      const result = await call(INPUT);
+      expect(result.isError).toBeFalsy();
+      const structured = result.structuredContent as unknown as WireSchedule;
+      expect(structured.totalSailings).toBe(23);
+      expect(structured.notice).toContain('could not be read (the request timed out)');
+      expect(requestedPaths().filter((p) => p === PREVIOUS)).toHaveLength(1);
+    });
+  });
+});
+
+describe('wsdot_get_ferry_routes on the wire — one deadline across the call', () => {
+  let timeoutSpy: MockInstance<typeof AbortSignal.timeout>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-24T19:00:00Z'));
+    timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+  });
+
+  afterEach(() => {
+    timeoutSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  async function call(tripDate: string) {
+    const pending = runToolContract(getFerryRoutes, { tripDate });
+    await vi.runAllTimersAsync();
+    return pending;
+  }
+
+  it('gives the flush-stamp check and the pair lookups only what is left of the 50 s budget', async () => {
+    http.route(
+      {
+        match: routesFor(TRIP_DATE),
+        respond: () => {
+          vi.setSystemTime(Date.now() + 42_000);
+          return Response.json([LIVE_ROUTE]);
+        },
+      },
+      { match: CACHE_FLUSH, respond: Response.json('/Date(1790284800913-0700)/') },
+      { match: BY_ROUTE, respond: Response.json(SEA_BI_PAIRS) },
+    );
+    const result = await call(TRIP_DATE);
+    expect(result.isError).toBeFalsy();
+    expect(timeoutSpy.mock.calls).toEqual([[15_000], [8_000], [8_000]]);
+  });
+
+  it('settles a pair lookup that runs past the budget as a Timeout', async () => {
+    http.route(
+      { match: routesFor('2026-09-26'), respond: Response.json([LIVE_ROUTE]) },
+      { match: CACHE_FLUSH, respond: Response.json('/Date(1790284800913-0700)/') },
+      {
+        match: BY_ROUTE,
+        respond: () => {
+          vi.setSystemTime(Date.now() + 55_000);
+          return new Response('Service Unavailable', { status: 503 });
+        },
+      },
+    );
+    const result = await call('2026-09-26');
+    const error = wireError(result);
+    expect(error.code).toBe(JsonRpcErrorCode.Timeout);
+    expect(error.message).toBe(
+      'WSF Ferry API request exceeded its 50000ms retry deadline after 1 attempt.',
+    );
+    expect(JSON.stringify(result)).not.toMatch(/FerryApiService|fetchJson/);
+    expect(error.data).toMatchObject({
+      reason: 'retry_deadline_exceeded',
+      recovery: { hint: DEADLINE_HINT },
+    });
+    expect(wireText(result)).toContain(`Recovery: ${DEADLINE_HINT}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #60 — an empty sailing-space feed, or one that does not cover the terminal, is not an outage
+// ---------------------------------------------------------------------------
+
+describe('wsdot_get_terminal_space on the wire — an empty page names its cause', () => {
+  const SPACE = /\/Terminals\/rest\/terminalsailingspace\?/;
+  /** The 12 terminals WSF's populated feed reported at 03:11 PST on 2026-11-12, names verbatim. */
+  const COVERED: [number, string][] = [
+    [1, 'Anacortes'],
+    [3, 'Bainbridge Island'],
+    [5, 'Clinton'],
+    [7, 'Seattle'],
+    [8, 'Edmonds'],
+    [10, 'Friday Harbor'],
+    [11, 'Coupeville '],
+    [12, 'Kingston'],
+    [14, 'Mukilteo'],
+    [15, 'Orcas Island'],
+    [16, 'Point Defiance'],
+    [17, 'Port Townsend'],
+  ];
+  const EMPTY_FEED =
+    'WSF is publishing no sailing-space data right now, so vehicle space cannot be confirmed for any terminal. wsdot_get_ferry_schedule and wsdot_get_ferry_alerts still show the sailings and any disruptions.';
+
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  async function call(input: Parameters<typeof runToolContract<typeof getTerminalSpace>>[1]) {
+    const pending = runToolContract(getTerminalSpace, input);
+    await vi.runAllTimersAsync();
+    return pending;
+  }
+
+  it.each([
+    ['[]', []],
+    ['null', null],
+  ])(
+    'answers an HTTP 200 %s feed, unfiltered or filtered, with the empty-feed notice',
+    async (_label, body) => {
+      http.route({ match: SPACE, respond: Response.json(body) });
+      for (const input of [{}, { departingTerminalId: 7 }, { departingTerminalId: 9999 }]) {
+        const result = await call(input);
+        expect(result.isError).toBeFalsy();
+        expect(result.structuredContent).toMatchObject({
+          terminals: [],
+          totalCount: 0,
+          hasMore: false,
+          nextOffset: null,
+          notice: EMPTY_FEED,
+        });
+        expect(wireText(result)).toContain(`> ${EMPTY_FEED}`);
+        expect(wireText(result)).not.toMatch(/retry in 30 seconds|verify valid terminal IDs/i);
+      }
+    },
+  );
+
+  it('answers Fauntleroy (9), which the populated feed omits, by listing the 12 terminals it reports', async () => {
+    http.route({
+      match: SPACE,
+      respond: Response.json(
+        COVERED.map(([id, name]) => ({ TerminalID: id, TerminalName: name, DepartingSpaces: [] })),
+      ),
+    });
+    const result = await call({ departingTerminalId: 9 });
+    expect(result.isError).toBeFalsy();
+    const notice = (result.structuredContent as { notice?: string }).notice;
+    expect(notice).toBe(
+      'No sailing-space data for terminal ID 9. WSF publishes space only for select terminals; its feed currently reports Anacortes (ID 1), Bainbridge Island (ID 3), Clinton (ID 5), Seattle (ID 7), Edmonds (ID 8), Friday Harbor (ID 10), Coupeville (ID 11), Kingston (ID 12), Mukilteo (ID 14), Orcas Island (ID 15), Point Defiance (ID 16), Port Townsend (ID 17). wsdot_get_ferry_terminals lists every terminal ID to check this one against; for a terminal the feed does not report, space cannot be confirmed, and wsdot_get_ferry_schedule and wsdot_get_ferry_alerts still show its sailings.',
+    );
+    expect(wireText(result)).toContain(`> ${notice}`);
+  });
+
+  it('keeps a non-2xx as api_unavailable with its retry recovery (characterization)', async () => {
+    http.route({ match: SPACE, respond: new Response('Service Unavailable', { status: 503 }) });
+    const error = wireError(await call({}));
+    expect(error.data).toMatchObject({
+      reason: 'api_unavailable',
+      recovery: { hint: expect.stringContaining('Retry in 30 seconds') },
+    });
   });
 });
 

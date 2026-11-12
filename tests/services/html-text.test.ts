@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { htmlToText } from '@/services/html-text.js';
+import { expectSubQuadratic } from '../helpers/timing.js';
 
 describe('htmlToText — anchors', () => {
   it('renders an anchor as text followed by its destination', () => {
@@ -235,9 +236,8 @@ describe('htmlToText — malformed and non-markup input', () => {
 describe('htmlToText — linear time', () => {
   /**
    * A prior release shipped a regex that backtracked quadratically and blocked the event loop for
-   * 40 seconds on a 4 KB input, so linearity is measured rather than argued. Each shape below is
-   * run at two sizes an order of magnitude apart; quadratic cost would show as a ~100x jump.
-   * Thread CPU measures parser work without charging time waiting for another suite's worker.
+   * 40 seconds on a 4 KB input, so linearity is measured rather than argued: each shape below runs
+   * the shared thread-CPU growth check across 5,000 to 320,000 characters.
    */
   const shapes: [string, (n: number) => string][] = [
     ['unterminated tag openers', (n) => '<'.repeat(n)],
@@ -255,44 +255,8 @@ describe('htmlToText — linear time', () => {
     ['many paragraphs', (n) => '<p>text</p>'.repeat(n / 11)],
   ];
 
-  /**
-   * Fastest of several thread-CPU samples, each long enough to clear scheduler tick resolution.
-   */
-  function timeOf(input: string): number {
-    let fastest = Number.POSITIVE_INFINITY;
-    for (let run = 0; run < 3; run++) {
-      const start = process.threadCpuUsage();
-      let elapsedMs = 0;
-      let calls = 0;
-      do {
-        htmlToText(input);
-        calls++;
-        const used = process.threadCpuUsage(start);
-        elapsedMs = (used.user + used.system) / 1_000;
-      } while (elapsedMs < 5);
-      fastest = Math.min(fastest, elapsedMs / calls);
-    }
-    return fastest;
-  }
-
   for (const [label, build] of shapes) {
-    it(`stays linear on ${label}`, () => {
-      const small = build(50_000);
-      const large = build(500_000);
-      // Warm the JIT so compile cost is not charged to the small sample.
-      htmlToText(small);
-      htmlToText(large);
-
-      // Sub-millisecond samples make a ratio meaningless; the absolute bound covers those.
-      const smallMs = Math.max(timeOf(small), 1);
-      const largeMs = timeOf(large);
-
-      // The bound discriminates growth class, not a constant factor: a 10x input costs ~10x
-      // linear and ~100x quadratic, so anything under 50 rules out the quadratic backtracking
-      // this guards. A tighter bound only measures how much CPU the rest of the suite left.
-      expect(largeMs / smallMs).toBeLessThan(50);
-      expect(largeMs).toBeLessThan(2_000);
-    });
+    it(`stays linear on ${label}`, () => expectSubQuadratic(build, htmlToText), 0);
   }
 
   it('normalizes a 400 KB pathological fragment well inside a request budget', () => {

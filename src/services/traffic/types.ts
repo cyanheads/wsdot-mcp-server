@@ -232,11 +232,15 @@ export interface RawCameraLocation {
 export interface RawCamera {
   CameraID?: number | null;
   CameraLocation?: RawCameraLocation | null;
+  /** Who owns the image ("City of Seattle", "WSDOT Aviation"); blank or absent on most WSDOT cameras. */
+  CameraOwner?: string | null;
   Description?: string | null;
   ImageHeight?: number | null;
   ImageURL?: string | null;
   ImageWidth?: number | null;
   IsActive?: boolean | null;
+  /** The owner's web page, paired with `CameraOwner`. */
+  OwnerURL?: string | null;
   Region?: string | null;
   Title?: string | null;
 }
@@ -251,8 +255,13 @@ export interface Camera {
   imageWidth?: number;
   latitude?: number;
   longitude?: number;
+  /** `CameraLocation.MilePost`, a whole number in the feed. */
   milePost?: number;
+  owner?: string;
+  ownerUrl?: string;
   region?: string;
   roadName?: string;
   title?: string;
+  /** The milepost written in the title, usually WSDOT's decimal posted milepost; can differ from `milePost`. */
+  titleMilePost?: number;
 }

@@ -8,7 +8,7 @@
 
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 
 vi.mock('@/config/server-config.js', () => ({
   getServerConfig: () => ({ accessCode: 'test-access-code' }),
@@ -20,6 +20,19 @@ vi.mock('@cyanheads/mcp-ts-core/utils', () => ({
 
 import { FerryApiService } from '@/services/ferry/ferry-service.js';
 import { nth } from '../helpers/assertions.js';
+import {
+  DISABILITY_LINE,
+  FARES_DATE_REJECTION,
+  FARES_PAIR_REJECTION,
+  FARES_TRIP_DATE,
+  fareLineItems,
+  TERMINAL_COMBOS,
+} from '../helpers/wsf-fares.js';
+import {
+  DATE_ROLLED_REJECTION,
+  PAIR_REJECTION_1111,
+  scheduleCapture,
+} from '../helpers/wsf-schedule.js';
 
 /**
  * Obviously-fake stand-in for the credential. It matches the value returned by the mocked
@@ -61,6 +74,9 @@ const FLUSH_STAMP = '/Date(1790284800913-0700)/';
 
 /** The cache-flush response carrying `stamp`. */
 const flushResponse = (stamp = FLUSH_STAMP) => makeResponse(JSON.stringify(stamp));
+
+/** 2026-11-12 12:00 PST — "today" is 11/12, hours past the previous service day's last sailing. */
+const PACIFIC_NOON = new Date('2026-11-12T20:00:00Z');
 
 /** Answer each request with the response of the first entry whose path fragment its URL contains. */
 function stubByPath(table: [fragment: string, response: ReturnType<typeof makeResponse>][]) {
@@ -613,10 +629,16 @@ describe('FerryApiService.getSchedule', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Noon Pacific: a same-day query outside the hours that also read the previous service day.
+    vi.useFakeTimers();
+    vi.setSystemTime(PACIFIC_NOON);
     svc = new FerryApiService({} as never, {} as never);
   });
 
-  afterEach(() => vi.clearAllMocks());
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
 
   const scheduleRaw = {
     TerminalCombos: [
@@ -791,7 +813,10 @@ describe('FerryApiService.getSchedule — loading rule, vessel, and annotations'
     expect(schedule.sailings).toEqual([
       {
         departureTime: '2026-09-25T13:50:00.000Z',
+        departureTimeLocal: '2026-09-25T06:50:00.000-07:00',
         arrivalTime: '2026-09-25T14:05:00.000Z',
+        arrivalTimeLocal: '2026-09-25T07:05:00.000-07:00',
+        serviceDate: '2026-09-25',
         vesselName: 'Chelan',
         vesselId: 2,
         loadingRule: 3,
@@ -800,7 +825,10 @@ describe('FerryApiService.getSchedule — loading rule, vessel, and annotations'
       },
       {
         departureTime: '2026-09-25T13:50:00.000Z',
+        departureTimeLocal: '2026-09-25T06:50:00.000-07:00',
         arrivalTime: '2026-09-25T14:05:00.000Z',
+        arrivalTimeLocal: '2026-09-25T07:05:00.000-07:00',
+        serviceDate: '2026-09-25',
         vesselName: 'Yakima',
         vesselId: 38,
         loadingRule: 1,
@@ -918,7 +946,15 @@ describe('FerryApiService.getSchedule — loading rule, vessel, and annotations'
       arrivingTerminalName: 'Bainbridge Island',
       tripDate: '2026-09-25',
       remainingOnly: false,
-      sailings: [{ departureTime: '2026-09-25T13:50:00.000Z', vesselName: 'Wenatchee' }],
+      // No ArrivingTime upstream, so neither arrivalTime nor its Pacific sibling appears.
+      sailings: [
+        {
+          departureTime: '2026-09-25T13:50:00.000Z',
+          departureTimeLocal: '2026-09-25T06:50:00.000-07:00',
+          serviceDate: '2026-09-25',
+          vesselName: 'Wenatchee',
+        },
+      ],
     });
   });
 
@@ -1020,6 +1056,33 @@ describe('FerryApiService.getVesselLocations', () => {
     const ctx = createMockContext();
     const vessels = await svc.getVesselLocations(ctx);
     expect('leftDock' in nth(vessels)).toBe(false);
+    expect('leftDockLocal' in nth(vessels)).toBe(false);
+  });
+
+  it('gives every vessel time its Pacific sibling', async () => {
+    const raw = [
+      {
+        VesselID: 20,
+        LeftDock: '/Date(1794481510000-0800)/',
+        Eta: '/Date(1794483600000-0800)/',
+        ScheduledDeparture: '/Date(1794481200000-0800)/',
+        OpRouteAbbrev: ['sea-bi'],
+        TimeStamp: '/Date(1794481597000-0800)/',
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    expect(nth(await svc.getVesselLocations(createMockContext()))).toEqual({
+      vesselId: 20,
+      leftDock: '2026-11-12T11:05:10.000Z',
+      leftDockLocal: '2026-11-12T03:05:10.000-08:00',
+      eta: '2026-11-12T11:40:00.000Z',
+      etaLocal: '2026-11-12T03:40:00.000-08:00',
+      scheduledDeparture: '2026-11-12T11:00:00.000Z',
+      scheduledDepartureLocal: '2026-11-12T03:00:00.000-08:00',
+      opRouteAbbrev: ['sea-bi'],
+      timestamp: '2026-11-12T11:06:37.000Z',
+      timestampLocal: '2026-11-12T03:06:37.000-08:00',
+    });
   });
 });
 
@@ -1297,6 +1360,34 @@ describe('FerryApiService.getTerminalSailingSpace', () => {
     expect(nth(nth(spaces).departingSpaces).departure).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
+  it('gives the departure its Pacific sibling on both departure-row shapes', async () => {
+    const raw = [
+      {
+        TerminalID: 7,
+        DepartingSpaces: [
+          {
+            Departure: '/Date(1790344200000-0700)/',
+            SpaceForArrivalTerminals: [{ ArrivalTerminalIDs: [3], DriveUpSpaceCount: 50 }],
+          },
+          { Departure: '/Date(1790351700000-0700)/', SpaceForArrivalTerminals: [] },
+        ],
+      },
+    ];
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    expect(nth(await svc.getTerminalSailingSpace(createMockContext())).departingSpaces).toEqual([
+      {
+        departure: '2026-09-25T13:50:00.000Z',
+        departureLocal: '2026-09-25T06:50:00.000-07:00',
+        arrivingTerminalIds: [3],
+        driveUpSpaceCount: 50,
+      },
+      {
+        departure: '2026-09-25T15:55:00.000Z',
+        departureLocal: '2026-09-25T08:55:00.000-07:00',
+      },
+    ]);
+  });
+
   it('returns empty departingSpaces array when DepartingSpaces is null', async () => {
     const raw = [{ TerminalID: 7, TerminalName: 'Seattle', DepartingSpaces: null }];
     mockFetch.mockResolvedValue(makeResponse(raw));
@@ -1337,6 +1428,18 @@ describe('FerryApiService.getAlerts', () => {
     expect(nth(alerts).alertDescription).toBe('Vessel out of service.');
     expect(nth(alerts).impactedRouteIds).toEqual([1, 2]);
     expect(nth(alerts).publishDate).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('gives publishDate its Pacific sibling at the same millisecond precision', async () => {
+    mockFetch.mockResolvedValue(
+      makeResponse([{ BulletinID: 204, PublishDate: '/Date(1794481421917-0800)/' }]),
+    );
+    expect(nth(await svc.getAlerts(createMockContext()))).toEqual({
+      alertId: 204,
+      impactedRouteIds: [],
+      publishDate: '2026-11-12T11:03:41.917Z',
+      publishDateLocal: '2026-11-12T03:03:41.917-08:00',
+    });
   });
 
   it('falls back to AlertFullTitle when RouteAlertText is absent', async () => {
@@ -1616,9 +1719,10 @@ describe('FerryApiService — blank and padded upstream strings', () => {
       expect(await svc.getSchedule(7, 3, '2027-01-01', false, createMockContext())).toEqual({
         tripDate: '2027-01-01',
         remainingOnly: false,
-        // Every annotation was blank, so none is kept and no sailing points at one.
+        // Every annotation was blank, so none is kept and no sailing points at one. serviceDate is
+        // the server's own, not an upstream string.
         annotations: [],
-        sailings: [{ annotationIndexes: [] }],
+        sailings: [{ serviceDate: '2027-01-01', annotationIndexes: [] }],
       });
     });
 
@@ -1905,6 +2009,10 @@ describe('FerryApiService — trip dates WSF has no schedule for', () => {
       .getSchedule(7, 3, '2099-01-01', false, createMockContext())
       .catch((e) => e)) as McpError;
     expect(err.data).toMatchObject({ reason: 'invalid_date', retryable: false });
+    // The Schedule API's rejection names a schedule; the Fares API's names fares (getFares below).
+    expect(err.message).toBe(
+      `WSF has no schedule for the requested trip date. ${tripDateRejection('1/1/2099').Message}`,
+    );
   });
 
   it('classifies a TripDate rejection served with HTTP 200', async () => {
@@ -1948,9 +2056,13 @@ describe('FerryApiService.getSchedule — the effective remainingOnly', () => {
   let svc: FerryApiService;
 
   beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(PACIFIC_NOON);
     svc = new FerryApiService({} as never, {} as never);
     mockFetch.mockResolvedValue(makeResponse({ TerminalCombos: [] }));
   });
+
+  afterEach(() => vi.useRealTimers());
 
   it('reports false for a future date even when true was requested', async () => {
     const schedule = await svc.getSchedule(7, 3, '2099-01-01', true, createMockContext());
@@ -1964,6 +2076,355 @@ describe('FerryApiService.getSchedule — the effective remainingOnly', () => {
     );
     expect((await svc.getSchedule(7, 3, today, false, createMockContext())).remainingOnly).toBe(
       false,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getSchedule — the previous service day's sailings still to depart after midnight
+// ---------------------------------------------------------------------------
+
+describe('FerryApiService.getSchedule — the previous service day after midnight', () => {
+  const TODAY = '/Schedule/rest/scheduletoday/7/3/true';
+  const PREVIOUS = '/Schedule/rest/schedule/2026-11-11/7/3';
+  /** 2026-11-12 00:53 PST: 11/11's 01:35 sailing (09:35Z) has not departed yet. */
+  const AT_0053 = new Date('2026-11-12T08:53:00Z');
+  let svc: FerryApiService;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(AT_0053);
+    svc = new FerryApiService({} as never, {} as never);
+  });
+
+  afterEach(() => vi.useRealTimers());
+
+  /** Paths requested, in order, credential query string dropped. */
+  const requested = () =>
+    mockFetch.mock.calls.map(
+      ([url]) =>
+        String(url).split('?')[0]?.replace('https://www.wsdot.wa.gov/Ferries/API', '') ?? '',
+    );
+
+  /** `scheduletoday` serving the 11/12 capture, and the previous day's read answered `previous`. */
+  const stubToday = (previous: ReturnType<typeof makeResponse>) =>
+    stubByPath([
+      [TODAY, makeResponse(scheduleCapture('scheduletoday-2026-11-12-7-3-true'))],
+      [PREVIOUS, previous],
+    ]);
+
+  /** Today's 23 departures as [UTC instant, serviceDate], read straight off the capture. */
+  const TODAYS_LIST = (
+    scheduleCapture('scheduletoday-2026-11-12-7-3-true').TerminalCombos?.[0]?.Times ?? []
+  ).map((s) => [
+    new Date(Number(/\d+/.exec(s.DepartingTime ?? '')?.[0])).toISOString(),
+    '2026-11-12',
+  ]);
+  const listed = (schedule: { sailings: { departureTime?: string; serviceDate: string }[] }) =>
+    schedule.sailings.map((s) => [s.departureTime, s.serviceDate]);
+
+  it('leads at 00:53 with the 01:35 sailing under the previous serviceDate, then today’s under today’s', async () => {
+    stubToday(makeResponse(scheduleCapture('schedule-2026-11-11-7-3')));
+    const schedule = await svc.getSchedule(7, 3, '2026-11-12', true, createMockContext());
+    expect(requested()).toEqual([TODAY, PREVIOUS]);
+    expect(schedule).toMatchObject({ tripDate: '2026-11-12', remainingOnly: true });
+    expect(schedule).not.toHaveProperty('previousServiceDayUnread');
+    expect(schedule.sailings).toHaveLength(24);
+    expect(schedule.sailings[0]).toEqual({
+      departureTime: '2026-11-12T09:35:00.000Z',
+      departureTimeLocal: '2026-11-12T01:35:00.000-08:00',
+      serviceDate: '2026-11-11',
+      vesselName: 'Puyallup',
+      vesselId: 25,
+      loadingRule: 3,
+      vesselHandicapAccessible: true,
+      annotationIndexes: [],
+    });
+    expect(schedule.sailings[1]).toMatchObject({
+      departureTime: '2026-11-12T13:30:00.000Z',
+      departureTimeLocal: '2026-11-12T05:30:00.000-08:00',
+      serviceDate: '2026-11-12',
+    });
+    expect(new Set(schedule.sailings.slice(1).map((s) => s.serviceDate))).toEqual(
+      new Set(['2026-11-12']),
+    );
+  });
+
+  it('equals today’s list before 03:00 once the previous day’s sailings have all departed', async () => {
+    vi.setSystemTime(new Date('2026-11-12T10:30:00Z')); // 02:30 PST
+    stubToday(makeResponse(scheduleCapture('schedule-2026-11-11-7-3')));
+    const schedule = await svc.getSchedule(7, 3, '2026-11-12', true, createMockContext());
+    expect(requested()).toEqual([TODAY, PREVIOUS]);
+    expect(TODAYS_LIST).toHaveLength(23);
+    expect(listed(schedule)).toEqual(TODAYS_LIST);
+  });
+
+  it.each([
+    ['02:59:59.999', '2026-11-12T10:59:59.999Z', [TODAY, PREVIOUS]],
+    ['03:00:00.000', '2026-11-12T11:00:00.000Z', [TODAY]],
+    ['noon', '2026-11-12T20:00:00.000Z', [TODAY]],
+  ])('at %s PST asks for the previous day only before 03:00', async (_label, at, paths) => {
+    vi.setSystemTime(new Date(at));
+    stubToday(makeResponse(scheduleCapture('schedule-2026-11-11-7-3')));
+    const schedule = await svc.getSchedule(7, 3, '2026-11-12', true, createMockContext());
+    expect(requested()).toEqual(paths);
+    expect(listed(schedule)).toEqual(TODAYS_LIST);
+  });
+
+  it('carries the weekend 02:10 sailing at 02:05 on Sunday, and leaves it once it departs at 02:10:00', async () => {
+    const stubWeekend = () =>
+      stubByPath([
+        [TODAY, makeResponse(scheduleCapture('schedule-2026-11-15-7-3'))],
+        [
+          '/Schedule/rest/schedule/2026-11-14/7/3',
+          makeResponse(scheduleCapture('schedule-2026-11-14-7-3')),
+        ],
+      ]);
+    vi.setSystemTime(new Date('2026-11-15T10:05:00Z')); // 02:05 PST
+    stubWeekend();
+    const carried = await svc.getSchedule(7, 3, '2026-11-15', true, createMockContext());
+    expect(carried.sailings).toHaveLength(23);
+    expect(carried.sailings[0]).toMatchObject({
+      departureTime: '2026-11-15T10:10:00.000Z',
+      departureTimeLocal: '2026-11-15T02:10:00.000-08:00',
+      serviceDate: '2026-11-14',
+      vesselName: 'Wenatchee',
+    });
+    expect(carried.sailings[1]).toMatchObject({ serviceDate: '2026-11-15' });
+
+    // A sailing departing at the very instant of the call has left: only "after now" carries over.
+    vi.setSystemTime(new Date('2026-11-15T10:10:00Z'));
+    stubWeekend();
+    const departed = await svc.getSchedule(7, 3, '2026-11-15', true, createMockContext());
+    expect(departed.sailings).toHaveLength(22);
+    expect(departed.sailings.every((s) => s.serviceDate === '2026-11-15')).toBe(true);
+  });
+
+  it('reads no previous day for the whole day today, or for an explicit tripDate of the previous day', async () => {
+    stubByPath([
+      [
+        '/Schedule/rest/scheduletoday/7/3/false',
+        makeResponse(scheduleCapture('scheduletoday-2026-11-12-7-3-true')),
+      ],
+      [PREVIOUS, makeResponse(scheduleCapture('schedule-2026-11-11-7-3'))],
+    ]);
+    const whole = await svc.getSchedule(7, 3, '2026-11-12', false, createMockContext());
+    expect(whole.sailings.every((s) => s.serviceDate === '2026-11-12')).toBe(true);
+
+    const yesterday = await svc.getSchedule(7, 3, '2026-11-11', true, createMockContext());
+    expect(yesterday.remainingOnly).toBe(false);
+    expect(yesterday.sailings).toHaveLength(23);
+    expect(yesterday.sailings.every((s) => s.serviceDate === '2026-11-11')).toBe(true);
+    expect(requested()).toEqual(['/Schedule/rest/scheduletoday/7/3/false', PREVIOUS]);
+  });
+
+  describe('annotations, whose list WSF varies by service day', () => {
+    /** 2026-11-14 00:00 PST, Saturday: Friday's 00:15 and 01:30 Vashon → Southworth boats remain. */
+    const SAT_MIDNIGHT = new Date('2026-11-14T08:00:00Z');
+    const FRIDAY_NOTE = 'Via Fauntleroy, crossing time approximately 50 minutes.';
+
+    /**
+     * Friday's capture with its last sailing (01:30) citing `indexes` — no live carried-over
+     * sailing has cited one, so the citation is set here — and Saturday's with `notes` as its list.
+     */
+    function stubVashon(indexes: number[], notes: string[] | null) {
+      const friday = scheduleCapture('schedule-2026-11-13-22-20');
+      const fridayTimes = friday.TerminalCombos?.[0]?.Times ?? [];
+      const last = fridayTimes[fridayTimes.length - 1];
+      if (last) last.AnnotationIndexes = indexes;
+      const saturday = scheduleCapture('schedule-2026-11-14-22-20');
+      const saturdayCombo = saturday.TerminalCombos?.[0];
+      if (saturdayCombo) {
+        saturdayCombo.Annotations = notes;
+        const first = saturdayCombo.Times?.[0];
+        if (first && notes?.length) first.AnnotationIndexes = [0];
+      }
+      stubByPath([
+        ['/Schedule/rest/scheduletoday/22/20/true', makeResponse(saturday)],
+        ['/Schedule/rest/schedule/2026-11-13/22/20', makeResponse(friday)],
+      ]);
+    }
+
+    const resolved = (schedule: Awaited<ReturnType<FerryApiService['getSchedule']>>) =>
+      schedule.sailings.map((s) =>
+        (s.annotationIndexes ?? []).map((i) => schedule.annotations?.[i]),
+      );
+
+    beforeEach(() => vi.setSystemTime(SAT_MIDNIGHT));
+
+    it('appends a note a carried-over sailing cites, so its index resolves to what Friday attached', async () => {
+      stubVashon([0], []);
+      const schedule = await svc.getSchedule(22, 20, '2026-11-14', true, createMockContext());
+      expect(schedule.annotations).toEqual([FRIDAY_NOTE]);
+      expect(
+        schedule.sailings
+          .slice(0, 2)
+          .map((s) => [s.departureTime, s.serviceDate, s.annotationIndexes]),
+      ).toEqual([
+        ['2026-11-14T08:15:00.000Z', '2026-11-13', []],
+        ['2026-11-14T09:30:00.000Z', '2026-11-13', [0]],
+      ]);
+      expect(schedule.sailings).toHaveLength(24);
+    });
+
+    it('reuses the entry when today’s list already holds the same note, and appends after today’s otherwise', async () => {
+      stubVashon([0], ['Other note.', FRIDAY_NOTE]);
+      const shared = await svc.getSchedule(22, 20, '2026-11-14', true, createMockContext());
+      expect(shared.annotations).toEqual(['Other note.', FRIDAY_NOTE]);
+      expect(resolved(shared)[1]).toEqual([FRIDAY_NOTE]);
+      expect(resolved(shared)[2]).toEqual(['Other note.']);
+
+      stubVashon([0, 0], ['Other note.']);
+      const appended = await svc.getSchedule(22, 20, '2026-11-14', true, createMockContext());
+      expect(appended.annotations).toEqual(['Other note.', FRIDAY_NOTE]);
+      expect(resolved(appended)[1]).toEqual([FRIDAY_NOTE, FRIDAY_NOTE]);
+      expect(resolved(appended)[2]).toEqual(['Other note.']);
+    });
+
+    it('adds no note only a departed Friday sailing cites, and drops an index that points at nothing', async () => {
+      // Friday's 04:05 sailing cites note 0, but it departed a day ago.
+      stubVashon([3, -1], []);
+      const schedule = await svc.getSchedule(22, 20, '2026-11-14', true, createMockContext());
+      expect(schedule.annotations).toEqual([]);
+      expect(schedule.sailings[1]?.annotationIndexes).toEqual([]);
+    });
+
+    it('carries the list when only a carried-over sailing has notes and today sent no list', async () => {
+      stubVashon([0], null);
+      const schedule = await svc.getSchedule(22, 20, '2026-11-14', true, createMockContext());
+      expect(schedule.annotations).toEqual([FRIDAY_NOTE]);
+      expect(resolved(schedule)[1]).toEqual([FRIDAY_NOTE]);
+    });
+  });
+
+  describe('the previous day’s read is best-effort', () => {
+    const timeoutError = () =>
+      Object.assign(new Error('The operation timed out.'), { name: 'TimeoutError' });
+
+    /**
+     * Each way the previous-day request can fail, against what 0.5.0 answered for the same call:
+     * today's list (it never made the request). A rejection of the date or pair means nothing to
+     * carry over, so no notice; anything else is disclosed.
+     */
+    it.each([
+      [
+        'WSF rejecting the date (its window rolled)',
+        makeResponse(DATE_ROLLED_REJECTION, 400),
+        undefined,
+      ],
+      ['WSF rejecting the pair on that date', makeResponse(PAIR_REJECTION_1111, 400), undefined],
+      [
+        'an HTTP 200 carrying {"Message"}',
+        makeResponse({ Message: 'Invalid terminal combination.' }),
+        undefined,
+      ],
+      ['an HTTP 404', makeResponse('Not Found', 404, 'text/plain'), 'WSF answered HTTP 404'],
+      [
+        'an HTTP 429',
+        makeResponse('Too Many Requests', 429, 'text/plain'),
+        'WSF answered HTTP 429',
+      ],
+      ['an HTTP 401', makeResponse('Unauthorized', 401, 'text/plain'), 'WSF answered HTTP 401'],
+      ['a 5xx', makeResponse('Service Unavailable', 503, 'text/plain'), 'WSF answered HTTP 503'],
+      [
+        'a 5xx outage page',
+        makeResponse('<html>Down</html>', 502, 'text/html'),
+        'WSF answered HTTP 502',
+      ],
+      [
+        'a bot-check page served as HTTP 200',
+        makeResponse('<!DOCTYPE html><html>Check</html>', 200, 'text/html'),
+        'the request failed',
+      ],
+      [
+        'an HTTP 200 body that is not JSON',
+        makeResponse('not json', 200, 'text/plain'),
+        'the request failed',
+      ],
+    ])('answers %s with today’s list', async (_label, response, detail) => {
+      stubToday(response);
+      const schedule = await svc.getSchedule(7, 3, '2026-11-12', true, createMockContext());
+      expect(listed(schedule)).toEqual(TODAYS_LIST);
+      if (detail === undefined) expect(schedule).not.toHaveProperty('previousServiceDayUnread');
+      else expect(schedule.previousServiceDayUnread).toEqual({ serviceDate: '2026-11-11', detail });
+    });
+
+    it.each([
+      ['a timeout', timeoutError(), 'the request timed out'],
+      ['a network failure', new Error('Unable to connect.'), 'the request failed'],
+    ])(
+      'answers %s with today’s list and says the previous day went unchecked',
+      async (_label, error, detail) => {
+        mockFetch.mockImplementation((url) =>
+          String(url).includes(PREVIOUS)
+            ? Promise.reject(error)
+            : Promise.resolve(makeResponse(scheduleCapture('scheduletoday-2026-11-12-7-3-true'))),
+        );
+        const schedule = await svc.getSchedule(7, 3, '2026-11-12', true, createMockContext());
+        expect(listed(schedule)).toEqual(TODAYS_LIST);
+        expect(schedule.previousServiceDayUnread).toEqual({ serviceDate: '2026-11-11', detail });
+      },
+    );
+
+    it('fails the call when the caller cancels, rather than returning today’s list', async () => {
+      const controller = new AbortController();
+      mockFetch.mockImplementation((url) => {
+        if (String(url).includes(PREVIOUS)) {
+          controller.abort();
+          return Promise.reject(Object.assign(new Error('Aborted.'), { name: 'AbortError' }));
+        }
+        return Promise.resolve(makeResponse(scheduleCapture('scheduletoday-2026-11-12-7-3-true')));
+      });
+      const err = (await svc
+        .getSchedule(7, 3, '2026-11-12', true, createMockContext({ signal: controller.signal }))
+        .catch((e) => e)) as McpError;
+      expect(err).toBeInstanceOf(McpError);
+      expect(err.code).toBe(JsonRpcErrorCode.Timeout);
+      expect(err.message).toBe('WSF Ferry API request cancelled.');
+    });
+
+    it.each([
+      ['answered', makeResponse(scheduleCapture('schedule-2026-11-11-7-3'))],
+      ['failed too', makeResponse('Service Unavailable', 503, 'text/plain')],
+    ])(
+      'fails the call on a scheduletoday failure whatever the previous day’s read %s',
+      async (_label, previous) => {
+        stubByPath([
+          [TODAY, makeResponse('Service Unavailable', 504, 'text/plain')],
+          [PREVIOUS, previous],
+        ]);
+        const err = (await svc
+          .getSchedule(7, 3, '2026-11-12', true, createMockContext())
+          .catch((e) => e)) as McpError;
+        expect(err.data).toMatchObject({
+          reason: 'api_unavailable',
+          status: 504,
+          url: `https://www.wsdot.wa.gov/Ferries/API${TODAY}`,
+        });
+      },
+    );
+  });
+
+  describe('one deadline across both reads', () => {
+    let timeoutSpy: MockInstance<typeof AbortSignal.timeout>;
+
+    beforeEach(() => {
+      timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    });
+
+    afterEach(() => timeoutSpy.mockRestore());
+
+    it.each([
+      ['before 03:00, both reads', AT_0053, 2],
+      ['from 03:00, the one read', new Date('2026-11-12T11:00:00Z'), 1],
+    ])(
+      'bounds each read’s timeout by what is left of the budget — %s',
+      async (_label, at, reads) => {
+        vi.setSystemTime(at);
+        stubToday(makeResponse(scheduleCapture('schedule-2026-11-11-7-3')));
+        await svc.getSchedule(7, 3, '2026-11-12', true, createMockContext(), Date.now() + 7_500);
+        expect(timeoutSpy.mock.calls).toEqual(Array(reads).fill([7_500]));
+      },
     );
   });
 });
@@ -2070,5 +2531,332 @@ describe('FerryApiService — the fetch stub', () => {
       'Unstubbed fetch: https://www.wsdot.wa.gov/Ferries/API/Terminals/rest/terminallocations',
     );
     expect((err as McpError).message).not.toContain(ACCESS_CODE);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fares — the line items and the terminal combo under one deadline
+// ---------------------------------------------------------------------------
+
+describe('FerryApiService.getFares', () => {
+  const LINE_ITEMS = `/Fares/rest/farelineitems/${FARES_TRIP_DATE}/1/10/false`;
+  const COMBO = `/Fares/rest/terminalcombo/${FARES_TRIP_DATE}/1/10`;
+  /** A deadline no test reaches; withRetry is stubbed to one attempt, so nothing reads the clock. */
+  const NO_RUSH = Number.MAX_SAFE_INTEGER;
+
+  type Reply = ReturnType<typeof makeResponse> | Error;
+
+  let svc: FerryApiService;
+
+  beforeEach(() => {
+    svc = new FerryApiService({} as never, {} as never);
+  });
+
+  /** Answer the 1 → 10 one-way pair's two requests; anything else is unstubbed. */
+  function stubFares(lineItems: Reply, combo: Reply) {
+    mockFetch.mockImplementation((url) => {
+      const path = String(url).split('?')[0] ?? '';
+      const reply = path.endsWith(LINE_ITEMS)
+        ? lineItems
+        : path.endsWith(COMBO)
+          ? combo
+          : new Error(`Unstubbed fetch: ${path}`);
+      return reply instanceof Error ? Promise.reject(reply) : Promise.resolve(reply);
+    });
+  }
+
+  /** What the network layer throws when a request's own timeout fires. */
+  const timeoutError = () =>
+    Object.assign(new Error('The operation timed out.'), { name: 'TimeoutError' });
+
+  const getFares = (ctx = createMockContext()) =>
+    svc.getFares(1, 10, FARES_TRIP_DATE, false, ctx, NO_RUSH);
+
+  it('requests the line items and the terminal combo for the trip and maps every field in WSF’s order', async () => {
+    const captured = fareLineItems('1-10-oneway');
+    stubFares(makeResponse(captured), makeResponse(TERMINAL_COMBOS['1-10']));
+    const result = await getFares();
+    expect(mockFetch.mock.calls.map(([url]) => String(url).split('?')[0])).toEqual([
+      `https://www.wsdot.wa.gov/Ferries/API${LINE_ITEMS}`,
+      `https://www.wsdot.wa.gov/Ferries/API${COMBO}`,
+    ]);
+    expect(result.combo).toEqual({
+      kind: 'read',
+      departingTerminalName: 'Anacortes',
+      arrivingTerminalName: 'Friday Harbor',
+      collectionDescription:
+        'Passenger and vehicle/driver fares are collected at Anacortes, while no fares are collected at Friday Harbor.',
+    });
+    expect(result.fares).toHaveLength(22);
+    expect(result.fares.map((f) => f.fareLineItemId)).toEqual(
+      captured.map((f) => f.FareLineItemID),
+    );
+    expect(nth(result.fares)).toEqual({
+      fareLineItemId: 1,
+      description: 'Adult (age 19 - 64)',
+      category: 'Passenger',
+      amountInDollars: 18,
+      directionIndependent: false,
+    });
+    expect(result.fares.find((f) => f.fareLineItemId === 178)).toEqual({
+      fareLineItemId: 178,
+      description: "Vehicle Under 22' (standard veh) & Driver",
+      category: 'Vehicle, Motorcycle, and Stowage Fares',
+      amountInDollars: 64.15,
+      directionIndependent: false,
+    });
+  });
+
+  it('renders the HTML fare name to plain text, keeping the link destination', async () => {
+    expect(nth(fareLineItems('1-10-oneway'), 1).FareLineItem).toBe(DISABILITY_LINE.raw);
+    stubFares(makeResponse(fareLineItems('1-10-oneway')), makeResponse(TERMINAL_COMBOS['1-10']));
+    const result = await getFares();
+    expect(nth(result.fares, 1).description).toBe(DISABILITY_LINE.text);
+    expect(JSON.stringify(result)).not.toMatch(/<a\b|href=/);
+  });
+
+  it('asks for WSF’s round-trip totals when roundTrip is true', async () => {
+    mockFetch.mockImplementation((url) =>
+      Promise.resolve(
+        makeResponse(String(url).includes('/farelineitems/') ? [] : TERMINAL_COMBOS['7-3']),
+      ),
+    );
+    await svc.getFares(7, 3, FARES_TRIP_DATE, true, createMockContext(), NO_RUSH);
+    expect(String(nth(mockFetch.mock.calls)[0])).toContain(
+      `/Fares/rest/farelineitems/${FARES_TRIP_DATE}/7/3/true?`,
+    );
+  });
+
+  it('keeps a 0 amount and a false flag, and omits only what WSF leaves out', async () => {
+    stubFares(
+      makeResponse([
+        {
+          FareLineItemID: 3,
+          FareLineItem: 'Youth (age 18 and under)',
+          Category: 'Passenger',
+          DirectionIndependent: false,
+          Amount: 0,
+        },
+        {
+          FareLineItemID: null,
+          FareLineItem: '  ',
+          Category: null,
+          DirectionIndependent: null,
+          Amount: null,
+        },
+        {},
+      ]),
+      makeResponse({ DepartingDescription: '', ArrivingDescription: null }),
+    );
+    const result = await getFares();
+    expect(result.fares).toEqual([
+      {
+        fareLineItemId: 3,
+        description: 'Youth (age 18 and under)',
+        category: 'Passenger',
+        amountInDollars: 0,
+        directionIndependent: false,
+      },
+      {},
+      {},
+    ]);
+    expect(result.combo).toEqual({ kind: 'read' });
+  });
+
+  it('answers null line items and a null combo with an empty list and no names', async () => {
+    stubFares(makeResponse(null), makeResponse(null));
+    expect(await getFares()).toEqual({ fares: [], combo: { kind: 'read' } });
+  });
+
+  describe('a failed line-items request fails the call, whatever the combo did', () => {
+    it.each([
+      [
+        'a trip date outside WSF’s fares window (HTTP 400)',
+        makeResponse(FARES_DATE_REJECTION, 400),
+        {
+          code: JsonRpcErrorCode.ValidationError,
+          data: { reason: 'invalid_date', retryable: false, status: 400 },
+        },
+      ],
+      [
+        'the same rejection served with HTTP 200',
+        makeResponse(FARES_DATE_REJECTION),
+        {
+          code: JsonRpcErrorCode.ValidationError,
+          data: { reason: 'invalid_date', retryable: false, status: 200 },
+        },
+      ],
+      [
+        'a pair WSF has no fares for (HTTP 400), left for the tool to judge',
+        makeResponse(FARES_PAIR_REJECTION, 400),
+        {
+          code: JsonRpcErrorCode.ServiceUnavailable,
+          data: { reason: 'api_unavailable', retryable: false, status: 400 },
+        },
+      ],
+      [
+        'another 4xx (HTTP 404), left for the tool to judge',
+        makeResponse('Not Found', 404, 'text/plain'),
+        {
+          code: JsonRpcErrorCode.ServiceUnavailable,
+          data: { reason: 'api_unavailable', retryable: false, status: 404 },
+        },
+      ],
+      [
+        'a 5xx (HTTP 503)',
+        makeResponse('Service Unavailable', 503, 'text/plain'),
+        {
+          code: JsonRpcErrorCode.ServiceUnavailable,
+          data: { reason: 'api_unavailable', status: 503 },
+        },
+      ],
+      [
+        'a timeout',
+        timeoutError(),
+        {
+          code: JsonRpcErrorCode.Timeout,
+          message: 'WSF Ferry API request timed out after 15000ms.',
+        },
+      ],
+      [
+        'an unregistered access code (HTTP 400)',
+        makeResponse(UNREGISTERED_CODE_BODY, 400),
+        {
+          code: JsonRpcErrorCode.ConfigurationError,
+          data: { reason: 'invalid_access_code', status: 400 },
+        },
+      ],
+    ])('%s', async (_label, lineItems, expected) => {
+      stubFares(lineItems, makeResponse(TERMINAL_COMBOS['1-10']));
+      const err = await getFares().catch((e) => e);
+      expect(err).toBeInstanceOf(McpError);
+      expect(err).toMatchObject(expected);
+    });
+
+    it('leaves a 5xx retryable, so the retry ladder takes another attempt', async () => {
+      stubFares(
+        makeResponse('Service Unavailable', 503, 'text/plain'),
+        makeResponse(TERMINAL_COMBOS['1-10']),
+      );
+      const err = (await getFares().catch((e) => e)) as McpError;
+      expect(err.data).not.toHaveProperty('retryable');
+    });
+
+    it('fails on the line items even when the combo failed too', async () => {
+      stubFares(
+        makeResponse(FARES_PAIR_REJECTION, 400),
+        makeResponse('Bad Gateway', 502, 'text/plain'),
+      );
+      const err = (await getFares().catch((e) => e)) as McpError;
+      expect(err.data).toMatchObject({ reason: 'api_unavailable', status: 400 });
+    });
+
+    it('words a trip-date rejection for fares, keeping WSF’s stated range whole', async () => {
+      stubFares(makeResponse(FARES_DATE_REJECTION, 400), makeResponse(TERMINAL_COMBOS['1-10']));
+      const err = (await getFares().catch((e) => e)) as McpError;
+      expect(err.message).toBe(
+        `WSF has no fares for the requested trip date. ${FARES_DATE_REJECTION.Message}`,
+      );
+      expect(err.message).toContain('11/11/2026 - 3/20/2027');
+      expect(err.data?.url).toBe(`https://www.wsdot.wa.gov/Ferries/API${LINE_ITEMS}`);
+    });
+  });
+
+  describe('a failed terminal-combo request, on a call whose line items arrived', () => {
+    it.each([
+      ['a trip-date rejection', makeResponse(FARES_DATE_REJECTION, 400), 'WSF answered HTTP 400'],
+      ['a pair rejection', makeResponse(FARES_PAIR_REJECTION, 400), 'WSF answered HTTP 400'],
+      ['another 4xx', makeResponse('Not Found', 404, 'text/plain'), 'WSF answered HTTP 404'],
+      ['a 5xx', makeResponse('Service Unavailable', 503, 'text/plain'), 'WSF answered HTTP 503'],
+      [
+        'an HTTP 200 carrying {"Message"}',
+        makeResponse({ Message: 'Invalid terminal combination.' }),
+        'the request failed',
+      ],
+      ['a timeout', timeoutError(), 'the request timed out'],
+      ['a network failure', new Error('Unable to connect.'), 'the request failed'],
+    ])('degrades on %s to the line items alone, saying why', async (_label, combo, detail) => {
+      stubFares(makeResponse(fareLineItems('1-10-oneway')), combo);
+      const result = await getFares();
+      expect(result.combo).toEqual({ kind: 'unavailable', detail });
+      expect(result.fares).toHaveLength(22);
+    });
+
+    it('fails the call on an access-code rejection — a configuration fault, not an outage', async () => {
+      stubFares(
+        makeResponse(fareLineItems('1-10-oneway')),
+        makeResponse(UNREGISTERED_CODE_BODY, 400),
+      );
+      const err = (await getFares().catch((e) => e)) as McpError;
+      expect(err.code).toBe(JsonRpcErrorCode.ConfigurationError);
+      expect(err.data).toMatchObject({ reason: 'invalid_access_code' });
+    });
+
+    it('fails the call when the caller cancels, rather than returning a degraded answer', async () => {
+      const controller = new AbortController();
+      mockFetch.mockImplementation((url) => {
+        if (String(url).includes('/terminalcombo/')) {
+          controller.abort();
+          return Promise.reject(Object.assign(new Error('Aborted.'), { name: 'AbortError' }));
+        }
+        return Promise.resolve(makeResponse(fareLineItems('1-10-oneway')));
+      });
+      const err = (await getFares(createMockContext({ signal: controller.signal })).catch(
+        (e) => e,
+      )) as McpError;
+      expect(err).toBeInstanceOf(McpError);
+      expect(err.code).toBe(JsonRpcErrorCode.Timeout);
+      expect(err.message).toBe('WSF Ferry API request cancelled.');
+    });
+
+    it('rethrows a failure that is not a classified upstream error', async () => {
+      stubFares(makeResponse(fareLineItems('1-10-oneway')), makeResponse('not json'));
+      await expect(getFares()).rejects.toBeInstanceOf(SyntaxError);
+    });
+  });
+
+  describe('one deadline across the call', () => {
+    let timeoutSpy: MockInstance<typeof AbortSignal.timeout>;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-11-12T12:00:00Z'));
+      timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    });
+
+    afterEach(() => {
+      timeoutSpy.mockRestore();
+      vi.useRealTimers();
+    });
+
+    it.each([
+      ['plenty of budget left', 50_000, 15_000],
+      ['less than one attempt’s timeout left', 4_000, 4_000],
+      ['none left', -1_000, 0],
+    ])(
+      'bounds each fares request’s timeout by what is left of the budget — %s',
+      async (_label, leftMs, expectedMs) => {
+        stubFares(
+          makeResponse(fareLineItems('1-10-oneway')),
+          makeResponse(TERMINAL_COMBOS['1-10']),
+        );
+        await svc.getFares(1, 10, FARES_TRIP_DATE, false, createMockContext(), Date.now() + leftMs);
+        expect(timeoutSpy.mock.calls).toEqual([[expectedMs], [expectedMs]]);
+      },
+    );
+
+    it('gives the routes check what is left of the same deadline', async () => {
+      mockFetch.mockResolvedValue(makeResponse([{ RouteID: 9 }]));
+      expect(await svc.hasRoutes(FARES_TRIP_DATE, createMockContext(), Date.now() + 7_500)).toBe(
+        true,
+      );
+      expect(timeoutSpy.mock.calls).toEqual([[7_500]]);
+    });
+
+    it('keeps the 15 s per-attempt timeout on a request with no deadline (characterization)', async () => {
+      mockFetch.mockResolvedValue(makeResponse([{ RouteID: 9 }]));
+      await svc.hasRoutes(FARES_TRIP_DATE, createMockContext());
+      expect(timeoutSpy.mock.calls).toEqual([[15_000]]);
+    });
   });
 });

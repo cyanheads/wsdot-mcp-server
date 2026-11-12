@@ -1,0 +1,264 @@
+{
+  "ScheduleID": 198,
+  "ScheduleName": "Fall 2026",
+  "ScheduleSeason": 2,
+  "SchedulePDFUrl": "http:\/\/www.wsdot.wa.gov\/ferries\/pdf\/2026Fall.pdf",
+  "ScheduleStart": "\/Date(1789887600000-0700)\/",
+  "ScheduleEnd": "\/Date(1798272000000-0800)\/",
+  "AllRoutes": [5],
+  "TerminalCombos": [
+    {
+      "DepartingTerminalID": 7,
+      "DepartingTerminalName": "Seattle",
+      "ArrivingTerminalID": 3,
+      "ArrivingTerminalName": "Bainbridge Island",
+      "SailingNotes": "",
+      "Annotations": [],
+      "Times": [
+        {
+          "DepartingTime": "\/Date(1794751800000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794758100000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794761700000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 32,
+          "VesselName": "Tacoma",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794764100000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794768000000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 32,
+          "VesselName": "Tacoma",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794770700000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794774600000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 32,
+          "VesselName": "Tacoma",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794777300000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794780600000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 32,
+          "VesselName": "Tacoma",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794783900000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794786600000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 32,
+          "VesselName": "Tacoma",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794789900000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794792900000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 32,
+          "VesselName": "Tacoma",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794795900000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794799200000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 32,
+          "VesselName": "Tacoma",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794802200000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794805200000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 32,
+          "VesselName": "Tacoma",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794807900000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794811200000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 32,
+          "VesselName": "Tacoma",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794813300000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794818700000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794823800000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        }
+      ],
+      "AnnotationsIVR": []
+    }
+  ]
+}

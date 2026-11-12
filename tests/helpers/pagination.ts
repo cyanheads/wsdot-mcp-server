@@ -1,15 +1,15 @@
 /**
  * @fileoverview Shared assertions for the offset/limit paging contract the row-collection
  * tools implement. The contract is identical across tools — full-set `totalCount`, a sliced
- * page, `nextOffset`/`hasMore` continuation metadata, a past-the-end notice, and bounded
- * inputs — so the assertions live here once and each tool supplies only what differs: how to
+ * page, `nextOffset`/`hasMore` continuation metadata, a past-the-end notice, bounded inputs, and
+ * an over-maximum `limit` clamped or rejected per WSDOT_CLAMP_LIMITS — so the assertions live here once and each tool supplies only what differs: how to
  * stub its service, how to build a distinguishable row, and how to read the page back out.
  * @module tests/helpers/pagination
  */
 
 import type { Context } from '@cyanheads/mcp-ts-core';
-import { getEnrichment } from '@cyanheads/mcp-ts-core/testing';
-import { describe, expect, it } from 'vitest';
+import { getEnrichment, type MockContextLogger } from '@cyanheads/mcp-ts-core/testing';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { formattedText } from './assertions.js';
 
 /**
@@ -31,7 +31,7 @@ export interface PaginationContractOptions<TInput, TOutput, TCtx> {
   baseInput?: Record<string, unknown>;
   /** Creates a mock context; the caller owns the import so its mocks stay file-local. */
   createContext: () => TCtx;
-  /** The tool's DEFAULT_LIMIT. */
+  /** Rows the tool's page holds when no `limit` is passed. */
   defaultLimit: number;
   /** Total rows to stub — must exceed `defaultLimit` so the default-page case actually pages. */
   fixtureSize: number;
@@ -39,7 +39,7 @@ export interface PaginationContractOptions<TInput, TOutput, TCtx> {
   makeRows: (count: number) => unknown[];
   /** A string that appears in `format()` output for row `i` and for no other row. */
   markerText: (index: number) => string;
-  /** The tool's MAX_LIMIT. */
+  /** Most rows one page of the tool holds; a larger `limit` is clamped or rejected. */
   maxLimit: number;
   /** Reads back the marker of every row on the returned page, in order. */
   pageMarkers: (result: TOutput) => number[];
@@ -151,11 +151,54 @@ export function describePaginationContract<TInput, TOutput, TCtx extends Context
       expect(text.match(/^### /gm)?.length).toBe(3);
     });
 
-    it(`rejects a limit above ${maxLimit}, a zero limit, and a non-integer or negative offset`, () => {
-      expect(() => parse({ limit: maxLimit + 1 })).toThrow();
+    it('rejects a zero limit and a non-integer or negative offset', () => {
       expect(() => parse({ limit: 0 })).toThrow();
       expect(() => parse({ offset: -1 })).toThrow();
       expect(() => parse({ offset: 1.5 })).toThrow();
+    });
+
+    describe(`a limit above ${maxLimit}`, () => {
+      afterEach(() => {
+        vi.unstubAllEnvs();
+      });
+
+      it(`is served as ${maxLimit}, disclosed after the page notice, while WSDOT_CLAMP_LIMITS is unset`, async () => {
+        vi.stubEnv('WSDOT_CLAMP_LIMITS', undefined);
+        const total = maxLimit + 5;
+        stubRows(makeRows(total));
+        const ctx = createContext();
+        const result = await tool.handler(parse({ limit: maxLimit + 1 }), ctx);
+        const enrichment = getEnrichment(ctx);
+        expect(pageMarkers(result)).toEqual(Array.from({ length: maxLimit }, (_, i) => i));
+        expect(enrichment).toMatchObject({
+          totalCount: total,
+          hasMore: true,
+          nextOffset: maxLimit,
+        });
+        expect(enrichment.notice).toContain(`1–${maxLimit} of ${total}`);
+        expect(enrichment.notice).toMatch(
+          new RegExp(
+            `Pass offset=${maxLimit} for the next page\\. limit ${maxLimit + 1} exceeds the maximum of ${maxLimit}; using limit ${maxLimit}\\.$`,
+          ),
+        );
+        expect(
+          (ctx.log as MockContextLogger).calls.filter((c) => c.msg === 'Clamped limit'),
+        ).toEqual([
+          {
+            level: 'info',
+            msg: 'Clamped limit',
+            data: { tool: tool.name, requested: maxLimit + 1, applied: maxLimit },
+          },
+        ]);
+      });
+
+      it('is rejected with the bound in the message while WSDOT_CLAMP_LIMITS=false', () => {
+        vi.stubEnv('WSDOT_CLAMP_LIMITS', 'false');
+        expect(() => parse({ limit: maxLimit + 1 })).toThrow(
+          `Too big: expected number to be <=${maxLimit}`,
+        );
+        expect(() => parse({ limit: maxLimit })).not.toThrow();
+      });
     });
   });
 }

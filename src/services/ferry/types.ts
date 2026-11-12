@@ -110,8 +110,15 @@ export interface Sailing {
   /** Positions in the schedule's `annotations`; each one resolves to an entry. */
   annotationIndexes?: number[];
   arrivalTime?: string;
+  arrivalTimeLocal?: string;
   departureTime?: string;
+  departureTimeLocal?: string;
   loadingRule?: number;
+  /**
+   * The Pacific service day (`YYYY-MM-DD`) whose schedule lists the sailing: the trip date, or the
+   * day before it for a sailing carried over past midnight on a remaining-sailings query.
+   */
+  serviceDate: string;
   vesselHandicapAccessible?: boolean;
   vesselId?: number;
   vesselName?: string;
@@ -119,13 +126,22 @@ export interface Sailing {
 
 /** Normalized ferry schedule. */
 export interface FerrySchedule {
-  /** The pair's notes as plain text, blank ones removed; sailings point at them by position. */
+  /**
+   * The notes as plain text, blank ones removed; sailings point at them by position. The trip
+   * date's notes, then any a carried-over sailing cites that the list does not already hold.
+   */
   annotations?: string[];
   arrivingTerminalName?: string;
   departingTerminalName?: string;
+  /**
+   * Set when a remaining-sailings query needed the previous service day's schedule and could not
+   * read it, so that day's sailings still to depart may be missing. `detail` is a server-authored
+   * phrase naming the failure, e.g. "WSF answered HTTP 503".
+   */
+  previousServiceDayUnread?: { detail: string; serviceDate: string };
   /** Whether only today's remaining sailings were requested upstream — false for any other date. */
   remainingOnly: boolean;
-  /** The pair-wide note as plain text. */
+  /** The pair-wide note as plain text, from the trip date's schedule. */
   sailingNotes?: string;
   sailings: Sailing[];
   tripDate: string;
@@ -160,15 +176,19 @@ export interface VesselLocation {
   departingTerminalId?: number;
   departingTerminalName?: string;
   eta?: string;
+  etaLocal?: string;
   heading?: number;
   inService?: boolean;
   latitude?: number;
   leftDock?: string;
+  leftDockLocal?: string;
   longitude?: number;
   opRouteAbbrev: string[];
   scheduledDeparture?: string;
+  scheduledDepartureLocal?: string;
   speed?: number;
   timestamp?: string;
+  timestampLocal?: string;
   vesselId?: number;
   vesselName?: string;
 }
@@ -222,6 +242,7 @@ export interface DepartureSpace {
   /** Destination terminal IDs, from `ArrivalTerminalIDs`. Chainable into schedule lookups. */
   arrivingTerminalIds?: number[];
   departure?: string;
+  departureLocal?: string;
   displayDriveUpSpace?: boolean;
   displayReservableSpace?: boolean;
   /** Floored at zero — a negative upstream count means oversubscribed, not available space. */
@@ -281,4 +302,64 @@ export interface FerryAlert {
   bulletinText?: string;
   impactedRouteIds: number[];
   publishDate?: string;
+  publishDateLocal?: string;
+}
+
+/**
+ * Raw fare line item from `Fares/rest/farelineitems/{TripDate}/{DepartingTerminalID}/{ArrivingTerminalID}/{RoundTrip}`.
+ * Every field has been populated on every live item; each stays optional so a sparse item is
+ * carried rather than rejected.
+ */
+export interface RawFareLineItem {
+  /** WSF's figure for the requested trip, in dollars (served with four decimals: `64.1500`). */
+  Amount?: number | null;
+  /** "Passenger", "Vehicle, Motorcycle, and Stowage Fares", or "Vehicle Length-Based". */
+  Category?: string | null;
+  /** True for multi-ride cards and passes, which keep their amount on a leg that collects nothing. */
+  DirectionIndependent?: boolean | null;
+  /** The fare's name. Authored as HTML in places — the Senior/Disability line carries an anchor. */
+  FareLineItem?: string | null;
+  FareLineItemID?: number | null;
+}
+
+/** Raw `Fares/rest/terminalcombo/{TripDate}/{DepartingTerminalID}/{ArrivingTerminalID}` record. */
+export interface RawFareTerminalCombo {
+  ArrivingDescription?: string | null;
+  /** WSF's statement of which terminal collects which fares on the pair, as plain text. */
+  CollectionDescription?: string | null;
+  DepartingDescription?: string | null;
+}
+
+/** Normalized fare line item. */
+export interface FareLineItem {
+  amountInDollars?: number;
+  category?: string;
+  /** The fare's name as plain text, link destinations kept as "text (url)". */
+  description?: string;
+  directionIndependent?: boolean;
+  fareLineItemId?: number;
+}
+
+/**
+ * The pair's terminal combo: its names and WSF's collection statement as read, or — when that
+ * request failed on a call whose line items arrived — why it could not be read.
+ */
+export type FareTerminalCombo =
+  | {
+      arrivingTerminalName?: string;
+      collectionDescription?: string;
+      departingTerminalName?: string;
+      kind: 'read';
+    }
+  | {
+      /** Server-authored phrase naming the failure, e.g. "WSF answered HTTP 503". */
+      detail: string;
+      kind: 'unavailable';
+    };
+
+/** WSF's fares for one directed trip. */
+export interface FerryFares {
+  combo: FareTerminalCombo;
+  /** In WSF's order, which groups the lines by category. */
+  fares: FareLineItem[];
 }

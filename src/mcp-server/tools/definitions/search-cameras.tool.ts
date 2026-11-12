@@ -5,20 +5,27 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { escapeMarkdownInline, markdownImage } from '@cyanheads/mcp-ts-core/utils';
+import { escapeMarkdownInline, markdownImage, markdownLink } from '@cyanheads/mcp-ts-core/utils';
 import { coordinatePair } from '@/mcp-server/tools/coordinate-pair.js';
 import {
-  continuationNotice,
-  fitPageToBudget,
+  clampPageLimit,
   MAX_FILTER_LENGTH,
-  PAGE_BYTE_BUDGET,
+  type PageLimitSpec,
+  pageLimitSchema,
   renderPage,
-} from '@/mcp-server/tools/page-budget.js';
+  slicePage,
+  withClampNotice,
+  withContinuation,
+} from '@/mcp-server/tools/paging.js';
 import { byIdThenContent } from '@/services/traffic/stable-order.js';
 import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
 
-const DEFAULT_LIMIT = 50;
-const MAX_LIMIT = 500;
+const LIMIT: PageLimitSpec = {
+  tool: 'wsdot_search_cameras',
+  unit: 'cameras',
+  defaultLimit: 50,
+  maxLimit: 500,
+};
 
 /** The region codes the camera feed carries in `Region`. */
 const REGIONS = ['ER', 'NC', 'NW', 'OL', 'OS', 'SC', 'SW', 'WA'];
@@ -31,9 +38,21 @@ const CameraSchema = z
     imageUrl: z
       .string()
       .optional()
-      .describe('URL of the WSDOT-hosted camera image (JPEG). WSDOT copyright applies.'),
+      .describe(
+        'URL of the camera image. The image belongs to the owner the camera lists, and to WSDOT when none is listed.',
+      ),
     imageWidth: z.number().optional().describe('Image width in pixels.'),
     imageHeight: z.number().optional().describe('Image height in pixels.'),
+    owner: z
+      .string()
+      .optional()
+      .describe(
+        'Owner of the camera image as the feed lists it, e.g. "City of Seattle" or "WSDOT Aviation". Absent on most cameras: an image with no listed owner belongs to WSDOT.',
+      ),
+    ownerUrl: z
+      .string()
+      .optional()
+      .describe('Web page of the image owner as the feed lists it. Absent when none is listed.'),
     roadName: z.string().optional().describe('Road the camera monitors.'),
     direction: z
       .string()
@@ -41,7 +60,18 @@ const CameraSchema = z
       .describe(
         'Traffic-direction code monitored: N/S/E/W, B (both), NB/SB/EB/WB. Some sites use other location-specific markers.',
       ),
-    milePost: z.number().optional().describe('Milepost location of the camera.'),
+    milePost: z
+      .number()
+      .optional()
+      .describe(
+        "The feed's milepost for the camera, a whole number. It can differ from titleMilePost by more than a mile; the milepost bounds match either value. On the Airports road name it is the airport's position in WSDOT's airport list (1 = Anacortes, 4 = Bellingham), not a milepost.",
+      ),
+    titleMilePost: z
+      .number()
+      .optional()
+      .describe(
+        'Milepost written in the camera title (119.5 from "US 97 at MP 119.5: …"), usually the decimal posted milepost. It can differ from milePost, and on a concurrent or spur route it can be that route\'s own milepost; the milepost bounds match either value. Absent when the title carries none.',
+      ),
     region: z.string().optional().describe('WSDOT region.'),
     latitude: z.number().optional().describe('Camera latitude.'),
     longitude: z.number().optional().describe('Camera longitude.'),
@@ -50,13 +80,7 @@ const CameraSchema = z
 
 export const searchCameras = tool('wsdot_search_cameras', {
   title: 'Search Highway Cameras',
-  description:
-    'Returns WSDOT highway camera locations, descriptions, and image URLs. ' +
-    'Camera images are copyright WSDOT — only metadata and image URLs are returned, not image bytes. ' +
-    'Filter by state route ("I-90", "90", "SR 520", or "520" all work), WSDOT region, milepost range, ' +
-    'or words in the camera title ("Snoqualmie"). ' +
-    'Results are ordered by cameraId and paged — pass offset/limit to page through the full set. ' +
-    `A page ends at limit or at a ${PAGE_BYTE_BUDGET.toLocaleString('en-US')}-byte response budget, whichever comes first; the notice reports the next offset.`,
+  description: `Returns WSDOT highway camera locations, descriptions, owners, and image URLs. Camera images belong to the owner each camera lists, and to WSDOT when none is listed — only metadata and image URLs are returned, not image bytes. Filter by state route ("I-90", "90", "SR 520", or "520" all work), WSDOT region, milepost range (matched against both the feed milepost and the milepost in the title), or words in the camera title ("Snoqualmie"). Results are ordered by cameraId and paged — pass offset/limit to page through the full set.`,
   annotations: { readOnlyHint: true },
   input: z.object({
     stateRoute: z
@@ -77,9 +101,14 @@ export const searchCameras = tool('wsdot_search_cameras', {
       .number()
       .optional()
       .describe(
-        'Start of the milepost range to filter cameras. Either bound may be given alone; when both are given, startMilepost must not exceed endMilepost. Cameras reporting no milepost are always included.',
+        "Start of the milepost range to filter cameras. A camera matches when its feed milepost (milePost) or the milepost in its title (titleMilePost) lies in the range; the two can differ by miles. A camera reporting no milePost is always included. Either bound may be given alone; when both are given, startMilepost must not exceed endMilepost. On the Airports road name, milePost is the airport's position in WSDOT's airport list (1 = Anacortes, 4 = Bellingham), not a milepost.",
       ),
-    endMilepost: z.number().optional().describe('End of the milepost range to filter cameras.'),
+    endMilepost: z
+      .number()
+      .optional()
+      .describe(
+        'End of the milepost range to filter cameras, matched like startMilepost against milePost and titleMilePost, which can differ. On the Airports road name, milePost is a list position (1 = Anacortes), not a milepost.',
+      ),
     titleContains: z
       .string()
       .max(MAX_FILTER_LENGTH)
@@ -93,20 +122,14 @@ export const searchCameras = tool('wsdot_search_cameras', {
       .min(0)
       .optional()
       .describe('Zero-based index of the first camera to return, for paging. Defaults to 0.'),
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(MAX_LIMIT)
-      .optional()
-      .describe(
-        `Maximum cameras to return in this page (1–${MAX_LIMIT}). Defaults to ${DEFAULT_LIMIT}. A large page ends sooner, at the ${PAGE_BYTE_BUDGET.toLocaleString('en-US')}-byte response budget.`,
-      ),
+    limit: pageLimitSchema(LIMIT),
   }),
   output: z.object({
     cameras: z
       .array(CameraSchema)
-      .describe('Camera metadata and image URLs. Images are copyright WSDOT.'),
+      .describe(
+        'Camera metadata and image URLs. Images belong to the owner each camera lists, and to WSDOT when none is listed.',
+      ),
   }),
 
   enrichment: {
@@ -131,7 +154,7 @@ export const searchCameras = tool('wsdot_search_cameras', {
       .string()
       .optional()
       .describe(
-        'Informational note about the page window, copyright, or empty results. Absent when not applicable.',
+        'Informational note about the page window, image ownership, or empty results. Ends with the applied limit when a larger one was clamped. Absent when not applicable.',
       ),
   },
 
@@ -243,34 +266,38 @@ export const searchCameras = tool('wsdot_search_cameras', {
     // stays the full match count so the agent knows how much lies beyond this page.
     const totalCount = allCameras.length;
     const offset = input.offset ?? 0;
-    const limit = input.limit ?? DEFAULT_LIMIT;
-    const requested = allCameras.slice(offset, offset + limit);
-    const cameras = fitPageToBudget(requested, renderCamera, appliedFilters);
-    const hasMore = offset + cameras.length < totalCount;
-    const nextOffset = hasMore ? offset + cameras.length : null;
+    const page = clampPageLimit(LIMIT, input.limit, ctx);
+    const { rows: cameras, hasMore, nextOffset } = slicePage(allCameras, offset, page.limit);
 
-    ctx.log.info('Cameras fetched', { totalCount, offset, limit, returned: cameras.length });
+    ctx.log.info('Cameras fetched', {
+      totalCount,
+      offset,
+      limit: page.limit,
+      returned: cameras.length,
+    });
 
     ctx.enrich({ totalCount, appliedFilters, nextOffset, hasMore });
 
     if (totalCount === 0) {
       const hasFilters = Object.keys(appliedFilters).length > 0;
       ctx.enrich.notice(
-        hasFilters
-          ? 'No cameras matched the applied filters. Try removing the stateRoute, region, milepost, or titleContains filters.'
-          : 'No camera data available statewide.',
+        withClampNotice(
+          hasFilters
+            ? 'No cameras matched the applied filters. Try removing the stateRoute, region, milepost, or titleContains filters.'
+            : 'No camera data available statewide.',
+          page,
+        ),
       );
     } else if (cameras.length === 0) {
       ctx.enrich.notice(
-        `Offset ${offset} is past the end of ${totalCount} matching cameras. Use an offset between 0 and ${totalCount - 1}.`,
+        withClampNotice(
+          `Offset ${offset} is past the end of ${totalCount} matching cameras. Use an offset between 0 and ${totalCount - 1}.`,
+          page,
+        ),
       );
     } else {
-      const shown = `Showing cameras ${offset + 1}–${offset + cameras.length} of ${totalCount}. Camera images are copyright WSDOT.`;
-      ctx.enrich.notice(
-        nextOffset === null
-          ? shown
-          : `${shown} ${continuationNotice(nextOffset, cameras.length < requested.length)}`,
-      );
+      const shown = `Showing cameras ${offset + 1}–${offset + cameras.length} of ${totalCount}. Camera images belong to the owner each camera lists, and to WSDOT when none is listed.`;
+      ctx.enrich.notice(withClampNotice(withContinuation(shown, nextOffset), page));
     }
 
     return { cameras };
@@ -284,18 +311,29 @@ export const searchCameras = tool('wsdot_search_cameras', {
   },
 });
 
-/** One camera's `content[]` block — shared by `format()` and the page-budget charge. */
+/** One camera's `content[]` block, as `format()` renders it. */
 function renderCamera(c: z.infer<typeof CameraSchema>): string {
   const lines = [`### ${escapeMarkdownInline(c.title ?? `Camera ${c.cameraId ?? ''}`)}`];
   if (c.description) lines.push(escapeMarkdownInline(c.description));
-  // Direction and milepost stand on their own — gating the whole line on roadName drops
+  // Direction and both mileposts stand on their own — gating the whole line on roadName drops
   // them from content[] for a camera that reports a position but no road name.
-  const loc = [c.roadName, c.direction, c.milePost != null ? `MP ${c.milePost}` : undefined]
+  const loc = [
+    c.roadName,
+    c.direction,
+    c.milePost != null ? `MP ${c.milePost}` : undefined,
+    c.titleMilePost != null ? `(title MP ${c.titleMilePost})` : undefined,
+  ]
     .filter(Boolean)
     .join(' ');
   if (loc) lines.push(`**Location:** ${escapeMarkdownInline(loc)}`);
   if (c.region) lines.push(`**Region:** ${escapeMarkdownInline(c.region)}`);
   if (c.imageUrl) lines.push(`**Image:** ${markdownImage('Camera image', c.imageUrl)}`);
+  if (c.owner) {
+    const owner = c.ownerUrl ? markdownLink(c.owner, c.ownerUrl) : escapeMarkdownInline(c.owner);
+    lines.push(`**Owner:** ${owner}`);
+  } else if (c.ownerUrl) {
+    lines.push(`**Owner URL:** ${markdownLink(c.ownerUrl, c.ownerUrl)}`);
+  }
   if (c.imageWidth != null && c.imageHeight != null) {
     lines.push(`**Size:** ${c.imageWidth}×${c.imageHeight}px`);
   } else if (c.imageWidth != null) {

@@ -11,7 +11,7 @@ import {
   serviceUnavailable,
 } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // --- Mocks (hoisted so vi.mock factory runs before imports) ---
 
@@ -38,9 +38,14 @@ import { searchAlerts } from '@/mcp-server/tools/definitions/search-alerts.tool.
 import { searchCameras } from '@/mcp-server/tools/definitions/search-cameras.tool.js';
 import { formattedText, nth, wireError } from '../helpers/assertions.js';
 import { describePaginationContract } from '../helpers/pagination.js';
+import { expectSubQuadratic } from '../helpers/timing.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 /** Zero-padded so no row's marker is a substring of another's. */
@@ -338,6 +343,139 @@ describe('searchAlerts', () => {
     expect(text).toContain('### Overnight lane closures on I-5. #706220');
     expect(text).toContain('Speed limit reduced to 55 mph.');
   });
+
+  it('renders a CRLF headline as a clean heading and body, leaving structuredContent raw', async () => {
+    // Alert 687259 as the live feed serves it: plain text, a trailing space, then a CRLF blank line.
+    const headline =
+      'I-90 Exit 154/Adams Rd. overpass (east of George): the overpass is closed due to a hole in the bridge deck. There is currently no estimated time to reopen. Traffic is currently detoured to the junction I-90/SR 281 Spur. \r\n\r\nContact: North Central Region communications 509-667-2815';
+    mockService.searchAlerts.mockResolvedValue([
+      { alertId: 687259, headlineDescription: headline },
+    ]);
+    const result = await runToolContract(searchAlerts, {});
+    expect(
+      (result.structuredContent as { alerts: { headlineDescription: string }[] }).alerts[0]
+        ?.headlineDescription,
+    ).toBe(headline);
+    expect(formattedText(result.content)).toBe(
+      [
+        '### I-90 Exit 154/Adams Rd. overpass (east of George): the overpass is closed due to a hole in the bridge deck. There is currently no estimated time to reopen. Traffic is currently detoured to the junction I-90/SR 281 Spur. #687259',
+        'Contact: North Central Region communications 509-667-2815',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  describe.each([
+    ['CRLF', '\r\n'],
+    ['CR', '\r'],
+    ['LF', '\n'],
+  ])('a headline broken by %s', (_style, lineBreak) => {
+    // Wrapped mid-sentence after a space, then a paragraph break of a blank and a space-only line.
+    const headline = [
+      ' Lane closures on SR 3 near Gorst ',
+      '(milepost 11) ',
+      'will close nightly. *Expect* delays. ',
+      '',
+      ' ',
+      '- Detour via SR 16.',
+      '',
+    ].join(lineBreak);
+
+    it('renders each line trimmed, the wrap as one paragraph, and the blank lines as one break', () => {
+      const text = formattedText(
+        searchAlerts.format!({ alerts: [{ alertId: 900, headlineDescription: headline }] }),
+      );
+      expect(text).toBe(
+        [
+          '### Lane closures on SR 3 near Gorst #900',
+          '(milepost 11)',
+          'will close nightly. \\*Expect\\* delays.',
+          '',
+          '\\- Detour via SR 16.',
+          '',
+        ].join('\n'),
+      );
+      expect(text).not.toMatch(/&#\d+;|^\\$/m);
+    });
+  });
+
+  it('heads a headline of only line breaks with the generic label', () => {
+    const text = formattedText(
+      searchAlerts.format!({ alerts: [{ alertId: 901, headlineDescription: ' \r\n\r\n ' }] }),
+    );
+    expect(text).toBe('### Alert #901\n');
+  });
+
+  it('renders a CRLF extended description line by line, leaving structuredContent raw', async () => {
+    // Blank lines at both ends, a mid-sentence wrap after a space, and a blank plus space-only line.
+    const extendedDescription = [
+      '',
+      ' Detour via SR 16 ',
+      '(milepost 11) ',
+      'will close nightly. *Expect* delays. ',
+      '',
+      ' ',
+      'Contact: Olympic Region 360-357-2600',
+      '',
+    ].join('\r\n');
+    mockService.searchAlerts.mockResolvedValue([
+      {
+        alertId: 902,
+        headlineDescription: 'Ramp closed.',
+        extendedDescription,
+        startTime: '2026-09-01T08:00:00.000Z',
+      },
+    ]);
+    const result = await runToolContract(searchAlerts, {});
+    expect(
+      (result.structuredContent as { alerts: { extendedDescription: string }[] }).alerts[0]
+        ?.extendedDescription,
+    ).toBe(extendedDescription);
+    const text = formattedText(result.content);
+    expect(text).toBe(
+      [
+        '### Ramp closed. #902',
+        'Detour via SR 16',
+        '(milepost 11)',
+        'will close nightly. \\*Expect\\* delays.',
+        '',
+        'Contact: Olympic Region 360-357-2600',
+        '**Start:** 2026-09-01T08:00:00.000Z',
+        '',
+      ].join('\n'),
+    );
+    expect(text).not.toMatch(/&#\d+;|^\\$/m);
+  });
+});
+
+describe('searchAlerts — alert text rendering stays linear on long upstream text', () => {
+  /**
+   * Headlines and extended descriptions are upstream text with no length cap, and `format()`
+   * renders each line by line.
+   */
+  const fields: [string, (text: string) => unknown][] = [
+    [
+      'headline',
+      (headlineDescription) =>
+        searchAlerts.format!({ alerts: [{ alertId: 1, headlineDescription }] }),
+    ],
+    [
+      'extended description',
+      (extendedDescription) =>
+        searchAlerts.format!({ alerts: [{ alertId: 1, extendedDescription }] }),
+    ],
+  ];
+  const shapes: [string, (chars: number) => string][] = [
+    ['one long line ending in a break', (n) => `${'x'.repeat(n)}\ny`],
+    ['line breaks throughout', (n) => '  \r\n'.repeat(n / 4)],
+    ['short lines of escapable text', (n) => '*_[#\r\n'.repeat(n / 6)],
+  ];
+
+  for (const [field, render] of fields) {
+    for (const [label, build] of shapes) {
+      it(`format() ${field}: ${label}`, () => expectSubQuadratic(build, render), 0);
+    }
+  }
 });
 
 describe('searchAlerts — page windows are reproducible across upstream row orders', () => {
@@ -687,6 +825,144 @@ describe('getTravelTimes — paging applies after the route filter', () => {
   });
 });
 
+/**
+ * A route designation matches the routes a corridor starts or ends on, and the routes its name
+ * writes ("via 90", "I-84JCT") — never digits inside another number, a serial prefix ("020 …"), or
+ * an ordinal ("171st"). Names and road names are live corridors from the travel-times feed.
+ */
+describe('getTravelTimes — route designations', () => {
+  const corridor = (travelTimeId: number, name: string, start: string, end: string) => ({
+    travelTimeId,
+    name,
+    startPoint: { roadName: start },
+    endPoint: { roadName: end },
+  });
+  const corridors = [
+    corridor(1, 'Seattle-Everett', '005', '005'),
+    corridor(2, 'Alderwood-Southcenter via 405', '405', '405'),
+    corridor(3, 'Alderwood-Southcenter via 5', '005', '005'),
+    corridor(4, 'Bellevue-SR 522 HOV', '405', '405'),
+    corridor(5, 'Woodinville-Seattle via 520', '405', '005'),
+    corridor(6, 'Woodinville-Seattle via 90', '405', '005'),
+    corridor(7, 'Bellevue-Issaquah', '405', '090'),
+    corridor(8, 'Snoqualmie Pass EB', 'I-90', 'I-90'),
+    corridor(9, 'Redmond-Seattle', '520', '005'),
+    corridor(10, 'SR14 and 171st Ave to I-205 and I-84 JCT', 'SR 14', 'I-84'),
+    corridor(11, 'I-5 SB and 159th to I-84JCT', 'I-5', 'I-5'),
+    corridor(12, '020 SR14 and Cascade Pk to I-205 to I-5 and I-84 JCT', 'SR 14', 'I-84'),
+    corridor(13, 'Hazel Dell to I-405-US26', 'I-5', 'I-405'),
+    corridor(14, 'I-405-US 26 to Hazel Dell', 'I-405', 'I-5'),
+    corridor(15, '1A Lacey-Olympia (SB)', '005', '005'),
+    corridor(16, 'Mill Plain Vancouver to I-84', 'I-205', 'I-205'),
+  ];
+  const run = async (route: string) => {
+    mockService.getTravelTimes.mockResolvedValue(corridors);
+    const result = await runToolContract(getTravelTimes, { route, limit: 500 });
+    expect(result.isError).toBeFalsy();
+    const sc = result.structuredContent as {
+      corridors: { travelTimeId: number }[];
+      notice: string;
+      totalCount: number;
+    };
+    return { ids: sc.corridors.map((c) => c.travelTimeId), sc, text: wireText(result) };
+  };
+
+  it.each([
+    { route: 'I-84', ids: [10, 11, 12, 16] },
+    { route: '405', ids: [2, 4, 5, 6, 7, 13, 14] },
+    { route: 'I-405', ids: [2, 4, 5, 6, 7, 13, 14] },
+    { route: 'Everett', ids: [1] },
+    { route: 'Seattle-Everett', ids: [1] },
+    { route: '1A', ids: [15] },
+  ])('keeps $route matching corridors $ids', async ({ route, ids }) => {
+    expect((await run(route)).ids).toEqual(ids);
+  });
+
+  it.each([
+    // On I-5 by an endpoint, or by "via 5" / "I-5" in the name; not I-405, SR 522, or I-205.
+    { route: '5', ids: [1, 3, 5, 6, 9, 11, 12, 13, 14, 15] },
+    { route: '005', ids: [1, 3, 5, 6, 9, 11, 12, 13, 14, 15] },
+    { route: 'I-5', ids: [1, 3, 5, 6, 9, 11, 12, 13, 14, 15] },
+    { route: '90', ids: [6, 7, 8] },
+    { route: '090', ids: [6, 7, 8] },
+    { route: 'I-90', ids: [6, 7, 8] },
+    { route: 'i90', ids: [6, 7, 8] },
+    { route: 'I 90', ids: [6, 7, 8] },
+    { route: '520', ids: [5, 9] },
+    { route: 'SR 520', ids: [5, 9] },
+    { route: 'US26', ids: [13, 14] },
+    { route: 'us 26', ids: [13, 14] },
+    { route: 'US 2', ids: [] },
+    // The serial prefix "020" and the "205" of I-205 are not route 20.
+    { route: '20', ids: [] },
+  ])('$route matches the corridors on or naming that route: $ids', async ({ route, ids }) => {
+    expect((await run(route)).ids).toEqual(ids);
+  });
+
+  it('renders the designation-matched page in content[]', async () => {
+    const { text } = await run('5');
+    expect(text).toContain('### Alderwood-Southcenter via 5');
+    expect(text).toContain('### 020 SR14 and Cascade Pk to I-205 to I-5 and I-84 JCT');
+    expect(text).not.toContain('Alderwood-Southcenter via 405');
+    expect(text).not.toContain('Bellevue-SR 522 HOV');
+    expect(text).toContain('**totalCount:** 10');
+  });
+
+  it('answers a route no corridor is on with an empty page saying so', async () => {
+    const { ids, sc, text } = await run('2');
+    expect(ids).toEqual([]);
+    expect(sc.totalCount).toBe(0);
+    expect(sc.notice).toBe(
+      'No corridor starts or ends on route "2" or names it. Omit the filter to list all corridors.',
+    );
+    expect(text).toContain('No corridors matched.');
+    expect(text).toContain(`> ${sc.notice}`);
+  });
+
+  it('keeps the broader-filter notice for free text that matched nothing', async () => {
+    const { sc, text } = await run('Spokane');
+    expect(sc.notice).toBe(
+      'No corridors matched the route filter "spokane". Broaden the filter, or omit it to list all corridors.',
+    );
+    expect(text).toContain(`> ${sc.notice}`);
+  });
+
+  it('matches free text that leads with a route by the road names on that route', async () => {
+    // Not a designation, so the name match is a substring; the road names still carry I-5.
+    expect((await run('I-5 NB')).ids).toEqual([1, 3, 5, 6, 9, 11, 13, 14, 15]);
+  });
+
+  it.each([
+    // The direction word filters nothing: 13 and 14 run opposite ways between I-5 and I-405.
+    { route: 'I-405 southbound', ids: [2, 4, 5, 6, 7, 13, 14] },
+    // Endpoints only: 5 writes "via 520" in its name but starts and ends off SR 520.
+    { route: 'SR 520 westbound', ids: [9] },
+  ])(
+    'matches free text "$route" by the endpoints on the route it writes: $ids',
+    async ({ route, ids }) => {
+      expect((await run(route)).ids).toEqual(ids);
+    },
+  );
+
+  it('describes designation matching by endpoints and written routes, naming only fed routes', () => {
+    expect(getTravelTimes.description).toContain('"via 520"');
+    expect(getTravelTimes.description).not.toContain('SR 99');
+    const route = getTravelTimes.input.shape.route.description ?? '';
+    expect(route).toContain('"via 520"');
+    expect(route).toContain('"5" does not match I-405');
+    expect(route).toContain('"1A"');
+  });
+
+  it('describes free text that writes a route as matching that route’s endpoints in both directions', () => {
+    const route = getTravelTimes.input.shape.route.description ?? '';
+    for (const text of [getTravelTimes.description, route]) {
+      expect(text).toContain('"I-405 southbound"');
+      expect(text).toContain('in both directions');
+      expect(text).toContain('direction word is not applied');
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // getTollRates
 // ---------------------------------------------------------------------------
@@ -915,13 +1191,47 @@ describe('searchCameras', () => {
     expect(enrichment.appliedFilters).toEqual({ stateRoute: '090' });
   });
 
-  it('enriches notice with copyright when results fit inline', async () => {
+  it('enriches notice with image ownership when results fit inline', async () => {
     mockService.searchCameras.mockResolvedValue([cameraFixture]);
     const ctx = createMockContext({ errors: searchCameras.errors });
     const input = searchCameras.input.parse({});
     await searchCameras.handler(input, ctx);
     const enrichment = getEnrichment(ctx);
-    expect(enrichment.notice).toContain('copyright');
+    expect(enrichment.notice).toContain(
+      'Camera images belong to the owner each camera lists, and to WSDOT when none is listed.',
+    );
+    expect(enrichment.notice).not.toContain('copyright');
+  });
+
+  it('carries the owner and title milepost the service reports onto both surfaces', async () => {
+    mockService.searchCameras.mockResolvedValue([
+      {
+        cameraId: 9013,
+        title: 'US 97 at MP 119.5: W. End Odabashian Br (US 2)',
+        roadName: 'US 97',
+        direction: 'E',
+        milePost: 200,
+        titleMilePost: 119.5,
+      },
+      {
+        cameraId: 9377,
+        title: 'WSF Fauntleroy Way and Cloverdale St.',
+        imageUrl: 'https://www.seattle.gov/trafficcams/images/Fauntleroy_SW_Cloverdale_NS.jpg',
+        owner: 'City of Seattle',
+        ownerUrl: 'http://web6.seattle.gov/travelers/',
+      },
+    ]);
+    const result = await runToolContract(searchCameras, {});
+    expect(result.isError).toBeFalsy();
+    const { cameras } = result.structuredContent as { cameras: Record<string, unknown>[] };
+    expect(cameras[0]).toMatchObject({ titleMilePost: 119.5, milePost: 200 });
+    expect(cameras[1]).toMatchObject({
+      owner: 'City of Seattle',
+      ownerUrl: 'http://web6.seattle.gov/travelers/',
+    });
+    const text = wireText(result);
+    expect(text).toContain('**Location:** US 97 E MP 200 (title MP 119.5)');
+    expect(text).toContain('**Owner:** [City of Seattle](<http://web6.seattle.gov/travelers/>)');
   });
 
   it('pages results and reports continuation metadata when the total exceeds the page limit', async () => {
@@ -975,7 +1285,7 @@ describe('searchCameras', () => {
     const ctx = createMockContext({ errors: searchCameras.errors });
     const input = searchCameras.input.parse({});
     const result = await searchCameras.handler(input, ctx);
-    expect(result.cameras).toHaveLength(50); // DEFAULT_LIMIT
+    expect(result.cameras).toHaveLength(50); // the default limit
     const enrichment = getEnrichment(ctx);
     expect(enrichment.totalCount).toBe(80);
     expect(enrichment.hasMore).toBe(true);
@@ -1042,7 +1352,20 @@ describe('searchCameras', () => {
     expect(formattedText(searchCameras.format!(result))).toContain('No cameras found');
   });
 
-  it('rejects a limit above the maximum and a negative offset', () => {
+  it('serves limit 501 as 500 cameras and says so while WSDOT_CLAMP_LIMITS is unset', async () => {
+    vi.stubEnv('WSDOT_CLAMP_LIMITS', undefined);
+    const manyCameras = Array.from({ length: 520 }, (_, i) => ({ ...cameraFixture, cameraId: i }));
+    mockService.searchCameras.mockResolvedValue(manyCameras);
+    const ctx = createMockContext({ errors: searchCameras.errors });
+    const result = await searchCameras.handler(searchCameras.input.parse({ limit: 501 }), ctx);
+    expect(result.cameras).toHaveLength(500);
+    expect(getEnrichment(ctx).notice).toMatch(
+      /Pass offset=500 for the next page\. limit 501 exceeds the maximum of 500; using limit 500\.$/,
+    );
+  });
+
+  it('rejects limit 501 while WSDOT_CLAMP_LIMITS=false, and a negative offset', () => {
+    vi.stubEnv('WSDOT_CLAMP_LIMITS', 'false');
     expect(() => searchCameras.input.parse({ limit: 501 })).toThrow();
     expect(() => searchCameras.input.parse({ offset: -1 })).toThrow();
   });
@@ -1061,9 +1384,8 @@ describe('searchCameras', () => {
 
 describe('searchCameras — page windows are reproducible across upstream row orders', () => {
   /**
-   * The camera feed serves one 1,700-row set in more than one order, and the response budget
-   * holds a page to under a hundred cameras, so a full walk takes about twenty fetches and an
-   * unordered page window straddles the reorder.
+   * The camera feed serves one 1,700-row set in more than one order, and a full walk takes
+   * several fetches even at the largest page, so an unordered page window straddles the reorder.
    */
   const cameras = Array.from({ length: 12 }, (_, i) => ({
     cameraId: 5000 + i,
@@ -1327,6 +1649,46 @@ describe('traffic format() parity — one-sided and partial values', () => {
         searchCameras.format!({ cameras: [{ cameraId: 1, title: 'Cam', latitude: 47.4 }] }),
       );
       expect(text).toContain('**Coords:** 47.4, longitude not reported');
+    });
+
+    it('appends the title milepost to the Location line, MP 0 included', () => {
+      const location = (camera: Record<string, unknown>) =>
+        render(searchCameras.format!({ cameras: [{ cameraId: 1, title: 'Cam', ...camera }] }))
+          .split('\n')
+          .find((line) => line.startsWith('**Location:**'));
+      expect(
+        location({ roadName: 'US 97', direction: 'E', milePost: 200, titleMilePost: 119.5 }),
+      ).toBe('**Location:** US 97 E MP 200 (title MP 119.5)');
+      expect(location({ roadName: 'I-5', titleMilePost: 133.7 })).toBe(
+        '**Location:** I-5 (title MP 133.7)',
+      );
+      expect(location({ titleMilePost: 0 })).toBe('**Location:** (title MP 0)');
+      expect(location({ roadName: 'I-90', milePost: 52 })).toBe('**Location:** I-90 MP 52');
+    });
+
+    it('renders the owner after the image, linked when the feed gives its URL', () => {
+      const lines = (camera: Record<string, unknown>) =>
+        render(
+          searchCameras.format!({ cameras: [{ cameraId: 1, title: 'Cam', ...camera }] }),
+        ).split('\n');
+      const linked = lines({
+        imageUrl: 'https://www.seattle.gov/trafficcams/images/Fauntleroy_SW_Cloverdale_NS.jpg',
+        owner: 'City of Seattle',
+        ownerUrl: 'http://web6.seattle.gov/travelers/',
+      });
+      const image = linked.findIndex((line) => line.startsWith('**Image:**'));
+      expect(image).toBeGreaterThan(-1);
+      expect(linked[image + 1]).toBe(
+        '**Owner:** [City of Seattle](<http://web6.seattle.gov/travelers/>)',
+      );
+
+      expect(lines({ owner: 'WSDOT' })).toContain('**Owner:** WSDOT');
+      expect(lines({ ownerUrl: 'https://example.org/cams' })).toContain(
+        '**Owner URL:** [https://example.org/cams](<https://example.org/cams>)',
+      );
+      expect(lines({ imageUrl: 'https://images.wsdot.wa.gov/nw/x.jpg' }).join('\n')).not.toContain(
+        'Owner',
+      );
     });
   });
 });
@@ -1756,7 +2118,7 @@ describe('unfiltered calls — pinned wire output', () => {
         ],
         "hasMore": false,
         "nextOffset": null,
-        "notice": "Showing cameras 1–9 of 9. Camera images are copyright WSDOT.",
+        "notice": "Showing cameras 1–9 of 9. Camera images belong to the owner each camera lists, and to WSDOT when none is listed.",
         "totalCount": 9,
       }
     `);
@@ -1812,7 +2174,7 @@ describe('unfiltered calls — pinned wire output', () => {
       **Applied Filters:** none
       **nextOffset:** null
       **hasMore:** false
-      > Showing cameras 1–9 of 9. Camera images are copyright WSDOT."
+      > Showing cameras 1–9 of 9. Camera images belong to the owner each camera lists, and to WSDOT when none is listed."
     `);
   });
 
@@ -1978,8 +2340,8 @@ describe('format() — pinned multi-row layout', () => {
         '**Coords:** 47.5, -121.7',
         '**End Location:** 090 E MP 54',
         '**End Coords:** 47.6, longitude not reported',
-        'Para A\\',
-        '\\',
+        'Para A',
+        '',
         'Para B',
         '**Start:** 2026-09-01T08:00:00.000Z',
         '**End:** 2026-09-30T08:00:00.000Z',
@@ -2489,5 +2851,44 @@ describe('camera region descriptions name what the codes hold', () => {
     expect(description).not.toContain('statewide');
     expect(description).toMatch(/OS \([^)]*Oregon/);
     expect(description).toMatch(/WA \([^)]*airport[^)]*ferr/i);
+  });
+});
+
+describe('camera descriptions credit the listed owner and name both mileposts', () => {
+  const camera = () => searchCameras.output.shape.cameras.element.shape;
+
+  it('no description or notice text says every camera image is WSDOT copyright', () => {
+    const texts = [
+      searchCameras.description,
+      searchCameras.output.shape.cameras.description,
+      camera().imageUrl.description,
+      camera().owner.description,
+      camera().ownerUrl.description,
+      searchCameras.enrichment?.notice.description,
+    ];
+    for (const text of texts) {
+      expect(text).toBeDefined();
+      expect(text).not.toMatch(/copyright WSDOT|WSDOT copyright|images are copyright/i);
+    }
+    expect(camera().imageUrl.description).not.toMatch(/WSDOT-hosted|JPEG/);
+    expect(searchCameras.description).toContain('to WSDOT when none is listed');
+  });
+
+  it('the milepost fields and bounds say both values are matched and can differ', () => {
+    const milePost = camera().milePost.description ?? '';
+    const titleMilePost = camera().titleMilePost.description ?? '';
+    const start = searchCameras.input.shape.startMilepost.description ?? '';
+    const end = searchCameras.input.shape.endMilepost.description ?? '';
+    expect(milePost).toContain('titleMilePost');
+    expect(titleMilePost).toContain('milePost');
+    for (const text of [milePost, titleMilePost, start, end]) expect(text).toMatch(/differ/);
+    for (const text of [start, end]) {
+      expect(text).toContain('milePost');
+      expect(text).toContain('titleMilePost');
+    }
+    for (const text of [milePost, start, end]) {
+      expect(text).toContain('Airports');
+      expect(text).toContain('1 = Anacortes');
+    }
   });
 });

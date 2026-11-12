@@ -4,6 +4,7 @@
  * @module tests/tools/ferry-tools.test
  */
 
+import { z } from '@cyanheads/mcp-ts-core';
 import {
   configurationError,
   type ErrorContract,
@@ -29,6 +30,7 @@ const mockService = {
 const mockToFerryDate = vi.fn((isoDate: string) => isoDate.trim().slice(0, 10));
 
 vi.mock('@/services/ferry/ferry-service.js', () => ({
+  CALL_BUDGET_MS: 50_000,
   getFerryApiService: () => mockService,
   FerryApiService: {
     toFerryDate: (isoDate: string) => mockToFerryDate(isoDate),
@@ -44,7 +46,7 @@ import { getFerrySchedule } from '@/mcp-server/tools/definitions/get-ferry-sched
 import { getFerryTerminals } from '@/mcp-server/tools/definitions/get-ferry-terminals.tool.js';
 import { getTerminalSpace } from '@/mcp-server/tools/definitions/get-terminal-space.tool.js';
 import { getVesselLocations } from '@/mcp-server/tools/definitions/get-vessel-locations.tool.js';
-import { formattedText, nth, rejection, wireError } from '../helpers/assertions.js';
+import { formattedText, markdownText, nth, rejection, wireError } from '../helpers/assertions.js';
 import { describePaginationContract } from '../helpers/pagination.js';
 
 beforeEach(() => {
@@ -234,7 +236,7 @@ describe('getFerryRoutes', () => {
     const input = getFerryRoutes.input.parse({ tripDate: '2026-05-23' });
     const result = await getFerryRoutes.handler(input, ctx);
     expect(result.routes).toHaveLength(1);
-    expect(mockService.getRoutes).toHaveBeenCalledWith('2026-05-23', ctx);
+    expect(mockService.getRoutes).toHaveBeenCalledWith('2026-05-23', ctx, expect.any(Number));
   });
 
   it('returns empty routes list', async () => {
@@ -336,11 +338,13 @@ describe('getFerrySchedule', () => {
       {
         departureTime: '6:00 AM',
         arrivalTime: '6:35 AM',
+        serviceDate: '2026-05-23',
         vesselName: 'Yakima',
       },
       {
         departureTime: '7:00 AM',
         arrivalTime: '7:35 AM',
+        serviceDate: '2026-05-23',
         vesselName: 'Walla Walla',
       },
     ],
@@ -398,7 +402,14 @@ describe('getFerrySchedule', () => {
       arrivingTerminalId: 3,
     });
     await getFerrySchedule.handler(input, ctx);
-    expect(mockService.getSchedule).toHaveBeenCalledWith(7, 3, expect.any(String), false, ctx);
+    expect(mockService.getSchedule).toHaveBeenCalledWith(
+      7,
+      3,
+      expect.any(String),
+      false,
+      ctx,
+      expect.any(Number),
+    );
   });
 
   it('passes remainingOnly when set to true', async () => {
@@ -410,7 +421,14 @@ describe('getFerrySchedule', () => {
       remainingOnly: true,
     });
     await getFerrySchedule.handler(input, ctx);
-    expect(mockService.getSchedule).toHaveBeenCalledWith(7, 3, expect.any(String), true, ctx);
+    expect(mockService.getSchedule).toHaveBeenCalledWith(
+      7,
+      3,
+      expect.any(String),
+      true,
+      ctx,
+      expect.any(Number),
+    );
   });
 
   it('uses provided tripDate', async () => {
@@ -422,7 +440,14 @@ describe('getFerrySchedule', () => {
       tripDate: '2026-05-23',
     });
     await getFerrySchedule.handler(input, ctx);
-    expect(mockService.getSchedule).toHaveBeenCalledWith(7, 3, '2026-05-23', false, ctx);
+    expect(mockService.getSchedule).toHaveBeenCalledWith(
+      7,
+      3,
+      '2026-05-23',
+      false,
+      ctx,
+      expect.any(Number),
+    );
   });
 
   it('formats schedule with sailings', () => {
@@ -433,9 +458,10 @@ describe('getFerrySchedule', () => {
         {
           departureTime: '6:00 AM',
           arrivalTime: '6:35 AM',
+          serviceDate: '2026-05-23',
           vesselName: 'Yakima',
         },
-        { departureTime: '7:00 AM' },
+        { departureTime: '7:00 AM', serviceDate: '2026-05-23' },
       ],
     };
     const blocks = getFerrySchedule.format!(output);
@@ -456,7 +482,14 @@ describe('getFerrySchedule', () => {
     const blocks = getFerrySchedule.format!({
       departingTerminalName: 'Seattle',
       arrivingTerminalName: 'Bainbridge Island',
-      sailings: [{ departureTime: '6:00 AM', arrivalTime: '6:35 AM', vesselName: 'Yakima' }],
+      sailings: [
+        {
+          departureTime: '6:00 AM',
+          arrivalTime: '6:35 AM',
+          serviceDate: '2026-05-23',
+          vesselName: 'Yakima',
+        },
+      ],
     });
     const text = (blocks[0] as { text: string }).text;
     expect(text).not.toMatch(/cancell?ed/i);
@@ -600,7 +633,65 @@ describe('getFerrySchedule', () => {
       retryable: false,
       recovery: { hint: expect.stringContaining('on which wsdot_get_ferry_routes lists routes') },
     });
-    expect(mockService.hasRoutes).toHaveBeenCalledWith('2027-01-15', expect.anything());
+    // The routes check runs under the deadline the schedule read was given.
+    const deadlineAt = nth(mockService.getSchedule.mock.calls)[5];
+    expect(deadlineAt).toEqual(expect.any(Number));
+    expect(mockService.hasRoutes).toHaveBeenCalledWith('2027-01-15', expect.anything(), deadlineAt);
+  });
+
+  it('gives the schedule read and the routes check one deadline, 50 s from the call', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-12T08:53:00Z'));
+    try {
+      mockService.getSchedule.mockRejectedValue(
+        new McpError(JsonRpcErrorCode.ServiceUnavailable, 'WSF Ferry API returned HTTP 400.', {
+          reason: 'api_unavailable',
+          status: 400,
+          retryable: false,
+        }),
+      );
+      await runToolContract(getFerrySchedule, { departingTerminalId: 7, arrivingTerminalId: 1 });
+      const deadlineAt = Date.parse('2026-11-12T08:53:50Z');
+      expect(nth(mockService.getSchedule.mock.calls)[5]).toBe(deadlineAt);
+      expect(mockService.hasRoutes).toHaveBeenCalledWith(
+        '2026-05-23',
+        expect.anything(),
+        deadlineAt,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('tells the caller when the previous service day could not be checked, after the empty-result notice', async () => {
+    const unread = { serviceDate: '2026-05-22', detail: 'WSF answered HTTP 503' };
+    const disclosure =
+      "The previous service day's (2026-05-22) late sailings could not be checked: WSF's schedule for that day could not be read (WSF answered HTTP 503), so any of them still to depart are missing from this list. Call again to include them.";
+    const input = { departingTerminalId: 7, arrivingTerminalId: 3, remainingOnly: true };
+
+    mockService.getSchedule.mockResolvedValue({
+      ...scheduleFixture,
+      remainingOnly: true,
+      previousServiceDayUnread: unread,
+    });
+    const withSailings = await runToolContract(getFerrySchedule, input);
+    expect(withSailings.structuredContent).toMatchObject({ totalSailings: 2, notice: disclosure });
+    expect(withSailings.structuredContent).not.toHaveProperty('previousServiceDayUnread');
+    const text = withSailings.content
+      .map((block) => ('text' in block && typeof block.text === 'string' ? block.text : ''))
+      .join('\n');
+    expect(markdownText(text)).toContain(disclosure);
+
+    mockService.getSchedule.mockResolvedValue({
+      ...scheduleFixture,
+      remainingOnly: true,
+      sailings: [],
+      previousServiceDayUnread: unread,
+    });
+    const empty = await runToolContract(getFerrySchedule, input);
+    expect((empty.structuredContent as { notice?: string }).notice).toBe(
+      `No remaining sailings today for this terminal pair (2026-05-23). The last sailing may have departed — check wsdot_get_ferry_schedule without remainingOnly for the full day's schedule. ${disclosure}`,
+    );
   });
 
   it('keeps a schedule outage as api_unavailable without asking for routes', async () => {
@@ -669,6 +760,43 @@ describe('getFerrySchedule', () => {
     const err = await rejection(() => getFerrySchedule.handler(input, ctx));
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toBe('Network timeout');
+  });
+
+  describe('the rejection mapping it shares with wsdot_get_ferry_fares keeps its schedule wording', () => {
+    const pairRejection = new McpError(
+      JsonRpcErrorCode.ServiceUnavailable,
+      'WSF Ferry API returned HTTP 400.',
+      { reason: 'api_unavailable', status: 400, retryable: false },
+    );
+    const input = getFerrySchedule.input.parse({
+      departingTerminalId: 7,
+      arrivingTerminalId: 1,
+      tripDate: '2026-11-13',
+    });
+
+    it('words a pair rejection on a date with routes as no schedule for the pair, keeping the cause', async () => {
+      mockService.getSchedule.mockRejectedValue(pairRejection);
+      const ctx = createMockContext({ errors: getFerrySchedule.errors });
+      const err = (await rejection(() => getFerrySchedule.handler(input, ctx))) as McpError;
+      expect(err.code).toBe(JsonRpcErrorCode.ValidationError);
+      expect(err.message).toBe(
+        'No ferry schedule for terminal 7 → 1 on 2026-11-13. These terminals may not have direct service, or a terminal ID may be invalid.',
+      );
+      expect(err.data).toEqual({ reason: 'invalid_terminal_pair' });
+      expect(err.cause).toBe(pairRejection);
+    });
+
+    it('words a pair rejection on a date with no routes as no schedule that day, keeping the cause', async () => {
+      mockService.getSchedule.mockRejectedValue(pairRejection);
+      mockService.hasRoutes.mockResolvedValue(false);
+      const ctx = createMockContext({ errors: getFerrySchedule.errors });
+      const err = (await rejection(() => getFerrySchedule.handler(input, ctx))) as McpError;
+      expect(err.message).toBe(
+        'WSF lists no routes on 2026-11-13, so no terminal pair has a schedule that day. The date is inside the window WSF accepts, but no sailings are loaded for it yet.',
+      );
+      expect(err.data).toEqual({ retryable: false, reason: 'invalid_date' });
+      expect(err.cause).toBe(pairRejection);
+    });
   });
 });
 
@@ -835,15 +963,73 @@ describe('getTerminalSpace', () => {
     expect(enrichment.terminalFilter).toBe(7);
   });
 
-  it('enriches notice when filter matches no terminal', async () => {
-    mockService.getTerminalSailingSpace.mockResolvedValue([terminalSpaceFixture]);
-    const ctx = createMockContext({ errors: getTerminalSpace.errors });
-    const input = getTerminalSpace.input.parse({ departingTerminalId: 999 });
-    await getTerminalSpace.handler(input, ctx);
-    const enrichment = getEnrichment(ctx);
-    expect(enrichment.totalCount).toBe(0);
-    expect(enrichment.notice).toBeDefined();
-    expect(enrichment.notice).toContain('999');
+  describe('an empty page says why, without calling it an outage or a bad ID', () => {
+    const EMPTY_FEED =
+      'WSF is publishing no sailing-space data right now, so vehicle space cannot be confirmed for any terminal. wsdot_get_ferry_schedule and wsdot_get_ferry_alerts still show the sailings and any disruptions.';
+    /** The terminals WSF's populated feed reported, as normalized. */
+    const covered = [
+      { terminalId: 1, terminalName: 'Anacortes', departingSpaces: [] },
+      { terminalId: 7, terminalName: 'Seattle', departingSpaces: [] },
+      { terminalId: 11, terminalName: 'Coupeville', departingSpaces: [] },
+      // Sparse rows still name what they carry.
+      { terminalId: 30, departingSpaces: [] },
+      { terminalName: 'Unnumbered', departingSpaces: [] },
+      { departingSpaces: [] },
+    ];
+    const notCovered = (id: number) =>
+      `No sailing-space data for terminal ID ${id}. WSF publishes space only for select terminals; its feed currently reports Anacortes (ID 1), Seattle (ID 7), Coupeville (ID 11), (ID 30), Unnumbered. wsdot_get_ferry_terminals lists every terminal ID to check this one against; for a terminal the feed does not report, space cannot be confirmed, and wsdot_get_ferry_schedule and wsdot_get_ferry_alerts still show its sailings.`;
+
+    it.each([
+      [{}, undefined],
+      [{ departingTerminalId: 7 }, 7],
+      [{ departingTerminalId: 9999 }, 9999],
+    ])(
+      'answers an empty feed (%j) with an empty page and the empty-feed notice',
+      async (args, filter) => {
+        mockService.getTerminalSailingSpace.mockResolvedValue([]);
+        const result = await runToolContract(getTerminalSpace, args);
+        expect(result.isError).toBeFalsy();
+        expect(result.structuredContent).toEqual({
+          terminals: [],
+          totalCount: 0,
+          hasMore: false,
+          nextOffset: null,
+          ...(filter !== undefined && { terminalFilter: filter }),
+          notice: EMPTY_FEED,
+        });
+        const text = result.content
+          .map((block) => ('text' in block && typeof block.text === 'string' ? block.text : ''))
+          .join('\n');
+        expect(markdownText(text)).toContain(EMPTY_FEED);
+        expect(text).not.toMatch(/retry in 30 seconds|verify valid terminal IDs/i);
+      },
+    );
+
+    it.each([9, 22, 9999])(
+      'answers terminal %i, absent from a populated feed, with the terminals the feed reports',
+      async (id) => {
+        mockService.getTerminalSailingSpace.mockResolvedValue(covered);
+        const result = await runToolContract(getTerminalSpace, { departingTerminalId: id });
+        expect(result.isError).toBeFalsy();
+        expect(result.structuredContent).toEqual({
+          terminals: [],
+          totalCount: 0,
+          hasMore: false,
+          nextOffset: null,
+          terminalFilter: id,
+          notice: notCovered(id),
+        });
+        expect(notCovered(id)).not.toMatch(/invalid|verify valid|retry/i);
+      },
+    );
+
+    it('keeps the clamp sentence beside the empty-feed notice', async () => {
+      mockService.getTerminalSailingSpace.mockResolvedValue([]);
+      const result = await runToolContract(getTerminalSpace, { limit: 50 });
+      expect((result.structuredContent as { notice?: string }).notice).toBe(
+        `${EMPTY_FEED} limit 50 exceeds the maximum of 20; using limit 20.`,
+      );
+    });
   });
 
   it('filters to a specific terminal by ID', async () => {
@@ -1431,6 +1617,7 @@ describe('ferry format() parity — false, empty, and one-sided values', () => {
           sailings: [
             {
               departureTime: 'T1',
+              serviceDate: '2026-09-25',
               vesselName: 'Chelan',
               vesselId: 2,
               loadingRule: 3,
@@ -1439,6 +1626,7 @@ describe('ferry format() parity — false, empty, and one-sided values', () => {
             },
             {
               departureTime: 'T2',
+              serviceDate: '2026-09-25',
               vesselName: 'Yakima',
               vesselId: 38,
               loadingRule: 1,
@@ -1449,10 +1637,10 @@ describe('ferry format() parity — false, empty, and one-sided values', () => {
         }),
       );
       expect(text).toContain(
-        '- T1 | Chelan (vesselId 2) | loadingRule 3 | vesselHandicapAccessible: true\n- T2',
+        '- T1 | serviceDate 2026-09-25 | Chelan (vesselId 2) | loadingRule 3 | vesselHandicapAccessible: true\n- T2',
       );
       expect(text).toContain(
-        '- T2 | Yakima (vesselId 38) | loadingRule 1 | vesselHandicapAccessible: false\n' +
+        '- T2 | serviceDate 2026-09-25 | Yakima (vesselId 38) | loadingRule 1 | vesselHandicapAccessible: false\n' +
           '  - [0] No interisland vehicles. Foot passenger and bikes okay.',
       );
       expect(text).toContain(
@@ -1465,20 +1653,69 @@ describe('ferry format() parity — false, empty, and one-sided values', () => {
         getFerrySchedule.format!({
           ...pair,
           annotations: [],
-          sailings: [{ departureTime: 'T1', vesselName: 'Chelan', annotationIndexes: [] }],
+          sailings: [
+            {
+              departureTime: 'T1',
+              serviceDate: '2026-09-25',
+              vesselName: 'Chelan',
+              annotationIndexes: [],
+            },
+          ],
         }),
       );
       expect(text).toContain('**Annotations:** none');
-      expect(text).toContain('- T1 | Chelan');
+      expect(text).toContain('- T1 | serviceDate 2026-09-25 | Chelan');
       expect(text).not.toContain('- [');
     });
 
     it('says nothing about annotations when upstream sent none', () => {
       const text = render(
-        getFerrySchedule.format!({ ...pair, sailings: [{ departureTime: 'T1' }] }),
+        getFerrySchedule.format!({
+          ...pair,
+          sailings: [{ departureTime: 'T1', serviceDate: '2026-09-25' }],
+        }),
       );
       expect(text).not.toContain('Annotations');
       expect(text).toContain('- T1');
+    });
+
+    it('renders each sailing’s serviceDate after its times, a carried-over sailing’s earlier day included', () => {
+      const text = render(
+        getFerrySchedule.format!({
+          ...pair,
+          sailings: [
+            {
+              departureTime: '2026-11-05T09:35:00.000Z',
+              departureTimeLocal: '2026-11-05T01:35:00.000-08:00',
+              serviceDate: '2026-11-04',
+              vesselName: 'Puyallup',
+            },
+            {
+              departureTime: '2026-11-05T13:30:00.000Z',
+              departureTimeLocal: '2026-11-05T05:30:00.000-08:00',
+              serviceDate: '2026-11-05',
+              vesselName: 'Puyallup',
+            },
+          ],
+        }),
+      );
+      expect(text).toContain(
+        '- 2026-11-05T01:35:00.000-08:00 (2026-11-05T09:35:00.000Z) | serviceDate 2026-11-04 | Puyallup\n' +
+          '- 2026-11-05T05:30:00.000-08:00 (2026-11-05T13:30:00.000Z) | serviceDate 2026-11-05 | Puyallup',
+      );
+    });
+
+    it('declares serviceDate as a required field naming the previous-day carryover', () => {
+      const field = getFerrySchedule.output.shape.sailings.element.shape.serviceDate;
+      expect(field.safeParse(undefined).success).toBe(false);
+      expect(field.description).toContain('YYYY-MM-DD');
+      expect(field.description).toContain('remainingOnly');
+      expect(getFerrySchedule.input.shape.remainingOnly.description).toContain(
+        "previous service day's sailings still to depart",
+      );
+      expect(getFerrySchedule.description).toContain(
+        "a query after midnight also includes the previous service day's sailings still to depart",
+      );
     });
 
     it('renders the pair-wide sailing note', () => {
@@ -1499,10 +1736,19 @@ describe('ferry format() parity — false, empty, and one-sided values', () => {
         getFerrySchedule.format!({
           ...pair,
           annotations: ['Line one.\nLine two.'],
-          sailings: [{ departureTime: 'T1', vesselId: 25, annotationIndexes: [0, 4] }],
+          sailings: [
+            {
+              departureTime: 'T1',
+              serviceDate: '2026-09-25',
+              vesselId: 25,
+              annotationIndexes: [0, 4],
+            },
+          ],
         }),
       );
-      expect(text).toContain('- T1 | (vesselId 25)\n  - [0] Line one.\\\n    Line two.');
+      expect(text).toContain(
+        '- T1 | serviceDate 2026-09-25 | (vesselId 25)\n  - [0] Line one.\\\n    Line two.',
+      );
       // An index format() is handed directly that points past the list is named, not dropped.
       expect(text).toContain('  - [4] not listed in annotations');
     });
@@ -1515,6 +1761,152 @@ describe('ferry format() parity — false, empty, and one-sided values', () => {
       expect(sailingShape.departureTime.description).toContain('tripDate');
       expect(sailingShape.arrivalTime.description).toContain('UTC');
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pacific local time beside each UTC ferry time — schemas and format() wiring. The conversion
+// itself is tabled in tests/services/wcf-date.test.ts.
+// ---------------------------------------------------------------------------
+
+describe('ferry times — a Pacific sibling beside each UTC value', () => {
+  const render = formattedText;
+  const depUtc = '2026-11-05T13:30:00.000Z';
+  const depLocal = '2026-11-05T05:30:00.000-08:00';
+  const arrUtc = '2026-11-05T14:05:00.000Z';
+  const arrLocal = '2026-11-05T06:05:00.000-08:00';
+
+  const timeFields = [
+    [
+      getFerrySchedule,
+      getFerrySchedule.output.shape.sailings.element.shape,
+      ['departureTime', 'arrivalTime'],
+    ],
+    [
+      getVesselLocations,
+      getVesselLocations.output.shape.vessels.element.shape,
+      ['leftDock', 'eta', 'scheduledDeparture', 'timestamp'],
+    ],
+    [
+      getTerminalSpace,
+      getTerminalSpace.output.shape.terminals.element.shape.departingSpaces.element.shape,
+      ['departure'],
+    ],
+    [getFerryAlerts, getFerryAlerts.output.shape.alerts.element.shape, ['publishDate']],
+  ] as const;
+
+  it.each(timeFields)(
+    '$name declares a Pacific sibling for every UTC time',
+    (_tool, shape, fields) => {
+      const described = shape as Record<string, { description?: string } | undefined>;
+      for (const field of fields) {
+        expect(described[field]?.description).toContain('UTC');
+        expect(described[`${field}Local`]?.description).toContain('America/Los_Angeles');
+      }
+    },
+  );
+
+  it.each(timeFields)('$name no longer asks the caller to convert a time', (tool) => {
+    const surface = `${tool.description}\n${JSON.stringify(z.toJSONSchema(tool.output))}`;
+    expect(surface).not.toMatch(/convert to America\/Los_Angeles/i);
+  });
+
+  it('wsdot_get_ferry_schedule renders each sailing time Pacific-first, and one without a sibling alone', () => {
+    const text = render(
+      getFerrySchedule.format!({
+        sailings: [
+          {
+            departureTime: depUtc,
+            departureTimeLocal: depLocal,
+            arrivalTime: arrUtc,
+            arrivalTimeLocal: arrLocal,
+            serviceDate: '2026-11-05',
+            vesselName: 'Wenatchee',
+          },
+          { departureTime: '6:00 AM', arrivalTime: '6:35 AM', serviceDate: '2026-11-05' },
+        ],
+      }),
+    );
+    expect(text).toContain(
+      `- ${depLocal} (${depUtc}) → ${arrLocal} (${arrUtc}) | serviceDate 2026-11-05 | Wenatchee\n- 6:00 AM → 6:35 AM | serviceDate 2026-11-05`,
+    );
+  });
+
+  it('wsdot_get_vessel_locations renders all four times Pacific-first, and ones without a sibling alone', () => {
+    const text = render(
+      getVesselLocations.format!({
+        vessels: [
+          {
+            vesselName: 'Yakima',
+            leftDock: depUtc,
+            leftDockLocal: depLocal,
+            eta: arrUtc,
+            etaLocal: arrLocal,
+            scheduledDeparture: '2026-11-05T13:25:00.000Z',
+            scheduledDepartureLocal: '2026-11-05T05:25:00.000-08:00',
+            opRouteAbbrev: [],
+            timestamp: '2026-11-05T13:31:07.000Z',
+            timestampLocal: '2026-11-05T05:31:07.000-08:00',
+          },
+          {
+            vesselName: 'Tacoma',
+            leftDock: '08:00 AM',
+            eta: '08:35 AM',
+            scheduledDeparture: '07:55 AM',
+            opRouteAbbrev: [],
+            timestamp: '08:01 AM',
+          },
+        ],
+      }),
+    );
+    expect(text).toContain(`**Left Dock:** ${depLocal} (${depUtc})\n`);
+    expect(text).toContain(`**ETA:** ${arrLocal} (${arrUtc})\n`);
+    expect(text).toContain(
+      '**Scheduled Departure:** 2026-11-05T05:25:00.000-08:00 (2026-11-05T13:25:00.000Z)\n',
+    );
+    expect(text).toContain(
+      '**Position Timestamp:** 2026-11-05T05:31:07.000-08:00 (2026-11-05T13:31:07.000Z)\n',
+    );
+    expect(text).toContain(
+      '**Left Dock:** 08:00 AM\n**ETA:** 08:35 AM\n**Scheduled Departure:** 07:55 AM\n**Routes:** none reported\n**Position Timestamp:** 08:01 AM\n',
+    );
+  });
+
+  it('wsdot_get_terminal_space renders a departure Pacific-first, and one without a sibling alone', () => {
+    const text = render(
+      getTerminalSpace.format!({
+        terminals: [
+          {
+            terminalId: 7,
+            departingSpaces: [
+              { departure: depUtc, departureLocal: depLocal, vesselName: 'Wenatchee' },
+              { departure: '10:00 AM', vesselName: 'Tacoma' },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(text).toContain(`**${depLocal} (${depUtc})** | Wenatchee\n**10:00 AM** | Tacoma`);
+  });
+
+  it('wsdot_get_ferry_alerts renders publishDate Pacific-first, and one without a sibling alone', () => {
+    const text = render(
+      getFerryAlerts.format!({
+        alerts: [
+          {
+            alertId: 1,
+            impactedRouteIds: [],
+            publishDate: '2026-11-12T11:03:41.917Z',
+            publishDateLocal: '2026-11-12T03:03:41.917-08:00',
+          },
+          { alertId: 2, impactedRouteIds: [], publishDate: 'yesterday' },
+        ],
+      }),
+    );
+    expect(text).toContain(
+      '**Published:** 2026-11-12T03:03:41.917-08:00 (2026-11-12T11:03:41.917Z)\n',
+    );
+    expect(text).toContain('**Published:** yesterday\n');
   });
 });
 
@@ -1552,7 +1944,13 @@ describe('terminal ID inputs', () => {
       arrivingTerminalName: 'Bainbridge Island',
       tripDate: '2026-05-23',
       remainingOnly: false,
-      sailings: [{ departureTime: '2026-09-24T22:00:00.000Z', vesselName: 'Wenatchee' }],
+      sailings: [
+        {
+          departureTime: '2026-09-24T22:00:00.000Z',
+          serviceDate: '2026-05-23',
+          vesselName: 'Wenatchee',
+        },
+      ],
     });
     const result = await runToolContract(getFerrySchedule, {
       departingTerminalId: 7,
@@ -1565,6 +1963,7 @@ describe('terminal ID inputs', () => {
       '2026-05-23',
       false,
       expect.anything(),
+      expect.any(Number),
     );
   });
 });

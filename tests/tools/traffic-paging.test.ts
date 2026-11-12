@@ -1,13 +1,16 @@
 /**
- * @fileoverview The per-surface byte budget on the four paged traffic collection tools, asserted
- * on the assembled `CallToolResult` — `structuredContent` with its enrichment merged in, and
- * `content[]` with the enrichment trailer appended — since `format()` alone never sees the
- * trailer. Rows carry multi-KB free text so the budget, not `limit`, ends the page.
- * @module tests/tools/traffic-page-budget.test
+ * @fileoverview Paging on the four traffic collection tools, asserted on the assembled
+ * `CallToolResult` — `structuredContent` with its enrichment merged in, and `content[]` with the
+ * enrichment trailer appended — through the same argument parsing a client's call meets. A page
+ * ends only at `limit` or at the end of the matching set, however much its rows weigh, and a
+ * `limit` above the maximum is clamped with a notice unless WSDOT_CLAMP_LIMITS=false rejects it.
+ * The clamp mechanism itself is tabled in `paging.test.ts`; these cases prove each tool's wiring.
+ * @module tests/tools/traffic-paging.test
  */
 
 import { runToolContract } from '@cyanheads/mcp-ts-core/testing';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { wireError } from '../helpers/assertions.js';
 
 const mockService = {
   searchAlerts: vi.fn(),
@@ -29,10 +32,11 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-type WireResult = Awaited<ReturnType<typeof runToolContract>>;
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
-/** The ceiling each surface of a response must stay within, in UTF-8 bytes. */
-const CEILING = 24_000;
+type WireResult = Awaited<ReturnType<typeof runToolContract>>;
 
 /** Zero-padded so no row's marker is a substring of another's. */
 const pad = (index: number) => String(index).padStart(3, '0');
@@ -47,17 +51,6 @@ function longText(bytes: number): string {
   return text.slice(0, Math.max(0, Math.floor(bytes * (text.length / Buffer.byteLength(text)))));
 }
 
-/** UTF-8 bytes of each surface a client can read. */
-function surfaces(result: WireResult) {
-  const text = result.content
-    .map((block) => ('text' in block && typeof block.text === 'string' ? block.text : ''))
-    .join('\n');
-  return {
-    json: Buffer.byteLength(JSON.stringify(result.structuredContent)),
-    text: Buffer.byteLength(text),
-  };
-}
-
 function enrichmentOf(result: WireResult) {
   const sc = result.structuredContent as Record<string, unknown>;
   return {
@@ -68,10 +61,15 @@ function enrichmentOf(result: WireResult) {
   };
 }
 
-interface BudgetCase {
+/** Every text block of `content[]`, joined: the rendered rows and the enrichment trailer. */
+function textOf(result: WireResult): string {
+  return result.content
+    .map((block) => ('text' in block && typeof block.text === 'string' ? block.text : ''))
+    .join('\n');
+}
+
+interface PagingCase {
   defaultLimit: number;
-  /** Input that still matches every row while the enrichment echoes a long caller-supplied value. */
-  longEcho: Record<string, unknown>;
   /** Row markers of the returned page, in order. */
   markers: (result: WireResult) => number[];
   name: string;
@@ -90,7 +88,7 @@ interface BudgetCase {
 const page = (result: WireResult, key: string) =>
   ((result.structuredContent as Record<string, unknown>)[key] ?? []) as Record<string, unknown>[];
 
-const cases: BudgetCase[] = [
+const cases: PagingCase[] = [
   {
     name: 'wsdot_search_alerts',
     run: (input) => runToolContract(searchAlerts, input),
@@ -107,14 +105,6 @@ const cases: BudgetCase[] = [
     unit: 'alerts',
     pastEndUnit: 'matching alerts',
     defaultLimit: 20,
-    // The service applies stateRoute, and the stub ignores it, so a maximum-length value still
-    // matches; control characters make its JSON echo six bytes per character.
-    longEcho: {
-      stateRoute: '\u0001'.repeat(200),
-      region: 'north central',
-      startMilepost: -1.7976931348623157e308,
-      endMilepost: 1.7976931348623157e308,
-    },
     oversized: { stateRoute: `SR ${'9'.repeat(30_000)}` },
   },
   {
@@ -134,9 +124,6 @@ const cases: BudgetCase[] = [
     unit: 'cameras',
     pastEndUnit: 'matching cameras',
     defaultLimit: 50,
-    // Every title carries "cam", so a maximum-length title filter repeating it still matches every
-    // row; the stub ignores stateRoute, whose quotes escape to two JSON bytes each.
-    longEcho: { titleContains: 'cam '.repeat(50), stateRoute: '"'.repeat(200), region: 'nw' },
     oversized: { titleContains: 'i '.repeat(15_000) },
   },
   {
@@ -155,9 +142,6 @@ const cases: BudgetCase[] = [
     unit: 'corridors',
     pastEndUnit: 'matching corridors',
     defaultLimit: 50,
-    // Text ahead of a route number leaves the designation bare, so this still matches every "005"
-    // corridor; its control characters make the routeFilter echo six JSON bytes per character.
-    longEcho: { route: `${'\u0001'.repeat(197)}005` },
     // Matches nothing, so the no-match notice repeats it beside routeFilter.
     oversized: { route: 'X'.repeat(30_000) },
   },
@@ -178,9 +162,6 @@ const cases: BudgetCase[] = [
     unit: 'toll rates',
     pastEndUnit: 'toll rate entries',
     defaultLimit: 50,
-    // A bare route number matches SR 520 whatever text precedes it, so every row stays on the page
-    // while the appliedFilters echo carries six JSON bytes per control character.
-    longEcho: { stateRoute: `${'\u0001'.repeat(197)}520` },
     // Matches no facility, so the no-facility notice repeats it beside appliedFilters.
     oversized: { stateRoute: `SR ${'9'.repeat(30_000)}` },
   },
@@ -188,93 +169,73 @@ const cases: BudgetCase[] = [
 
 const range = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => from + i);
 
-describe.each(cases)('$name — 24,000-byte page budget', (c) => {
+describe.each(cases)('$name — paging', (c) => {
   const rowsOf = (count: number, textBytes: (i: number) => number) =>
     range(0, count).map((i) => c.row(i, textBytes(i)));
 
-  it('keeps both surfaces within the budget on a long-text page at limit 500', async () => {
+  it('returns every row of a long-text page at limit 500, on both surfaces', async () => {
     c.stub(rowsOf(200, () => 3000));
     const result = await c.run({ limit: 500 });
     expect(result.isError).toBeFalsy();
-    const size = surfaces(result);
-    expect(size.json).toBeLessThanOrEqual(CEILING);
-    expect(size.text).toBeLessThanOrEqual(CEILING);
-
-    const markers = c.markers(result);
-    expect(markers.length).toBeGreaterThan(1);
-    expect(markers.length).toBeLessThan(200);
-    expect(markers).toEqual(range(0, markers.length));
+    expect(c.markers(result)).toEqual(range(0, 200));
+    expect(textOf(result).match(/^### /gm)).toHaveLength(200);
 
     const enrichment = enrichmentOf(result);
-    expect(enrichment.totalCount).toBe(200);
-    expect(enrichment.hasMore).toBe(true);
-    expect(enrichment.nextOffset).toBe(markers.length);
-    expect(enrichment.notice).toContain(`Showing ${c.unit} 1–${markers.length} of 200.`);
-    expect(enrichment.notice).toContain('24,000-byte response budget');
-    expect(enrichment.notice).toContain(`offset=${markers.length}`);
+    expect(enrichment).toMatchObject({ totalCount: 200, hasMore: false, nextOffset: null });
+    expect(enrichment.notice).toMatch(new RegExp(`^Showing ${c.unit} 1–200 of 200\\.`));
+    expect(enrichment.notice).not.toContain('budget');
+    expect(enrichment.notice).not.toContain('next page');
   });
 
-  it('returns a row larger than the whole budget alone, continuing at the next offset', async () => {
+  it('returns rows 3–5 when row 3 alone outweighs 24 KB', async () => {
     c.stub(rowsOf(6, (i) => (i === 3 ? 30_000 : 0)));
-    const alone = await c.run({ offset: 3, limit: 10 });
-    expect(c.markers(alone)).toEqual([3]);
-    expect(enrichmentOf(alone)).toMatchObject({ hasMore: true, nextOffset: 4, totalCount: 6 });
-    expect(enrichmentOf(alone).notice).toContain('24,000-byte response budget');
-    expect(enrichmentOf(alone).notice).toContain('offset=4');
+    const from3 = await c.run({ offset: 3, limit: 10 });
+    expect(c.markers(from3)).toEqual([3, 4, 5]);
+    expect(enrichmentOf(from3)).toMatchObject({ hasMore: false, nextOffset: null, totalCount: 6 });
+    expect(enrichmentOf(from3).notice).toMatch(new RegExp(`^Showing ${c.unit} 4–6 of 6\\.`));
 
-    const before = await c.run({ offset: 0, limit: 10 });
-    expect(c.markers(before)).toEqual([0, 1, 2]);
-    expect(enrichmentOf(before)).toMatchObject({ hasMore: true, nextOffset: 3 });
-    expect(surfaces(before).json).toBeLessThanOrEqual(CEILING);
-    expect(surfaces(before).text).toBeLessThanOrEqual(CEILING);
+    const from0 = await c.run({ offset: 0, limit: 10 });
+    expect(c.markers(from0)).toEqual(range(0, 6));
   });
 
-  it('ends an over-budget last row with the end-of-set notice', async () => {
-    c.stub(rowsOf(4, (i) => (i === 3 ? 30_000 : 0)));
-    const result = await c.run({ offset: 3 });
-    expect(c.markers(result)).toEqual([3]);
-    expect(enrichmentOf(result)).toMatchObject({ hasMore: false, nextOffset: null });
-    expect(enrichmentOf(result).notice).toMatch(new RegExp(`^Showing ${c.unit} 4–4 of 4\\.`));
-    expect(enrichmentOf(result).notice).not.toContain('budget');
+  it('returns min(limit, totalCount − offset) rows whatever the rows weigh', async () => {
+    for (const textBytes of [0, 3000, 30_000]) {
+      c.stub(rowsOf(40, () => textBytes));
+      const middle = await c.run({ offset: 7, limit: 25 });
+      expect(c.markers(middle), `${textBytes} B rows`).toEqual(range(7, 32));
+      expect(enrichmentOf(middle)).toMatchObject({ hasMore: true, nextOffset: 32 });
+      const tail = await c.run({ offset: 32, limit: 25 });
+      expect(c.markers(tail), `${textBytes} B rows`).toEqual(range(32, 40));
+      expect(enrichmentOf(tail)).toMatchObject({ hasMore: false, nextOffset: null });
+    }
   });
 
-  it('walks every row exactly once whether pages end at the budget or at limit', async () => {
-    // Heavy rows come in pairs three apart, one pair per twenty rows: a page reaching the second
-    // of a pair fills the budget, a page holding one heavy row reaches limit first.
+  it('walks every row exactly once, each page but the last holding limit rows', async () => {
+    // Heavy rows in pairs three apart, one pair per twenty rows: row weight never moves a boundary.
     c.stub(rowsOf(60, (i) => (i % 20 === 0 || i % 20 === 3 ? 11_000 : 150)));
     const seen: number[] = [];
-    const endings = { budget: 0, limit: 0, end: 0 };
+    const sizes: number[] = [];
     let offset: number | null = 0;
     while (offset !== null) {
       const result = await c.run({ offset, limit: 8 });
       const markers = c.markers(result);
       const enrichment = enrichmentOf(result);
-      expect(markers.length).toBeGreaterThan(0);
       expect(enrichment.totalCount).toBe(60);
-      expect(surfaces(result).json).toBeLessThanOrEqual(CEILING);
-      expect(surfaces(result).text).toBeLessThanOrEqual(CEILING);
       const window = `Showing ${c.unit} ${offset + 1}–${offset + markers.length} of 60.`;
-      if (!enrichment.hasMore) {
-        endings.end++;
-        expect(enrichment.notice).toMatch(new RegExp(`^${window}`));
-      } else if (markers.length === 8) {
-        endings.limit++;
-        expect(enrichment.notice).toMatch(new RegExp(`^${window}`));
+      expect(enrichment.notice).toMatch(new RegExp(`^${window}`));
+      expect(enrichment.notice).not.toContain('budget');
+      if (enrichment.hasMore) {
+        expect(enrichment.nextOffset).toBe(offset + markers.length);
         expect(enrichment.notice).toMatch(
-          new RegExp(`\\. Pass offset=${offset + 8} for the next page\\.$`),
+          new RegExp(`\\. Pass offset=${offset + markers.length} for the next page\\.$`),
         );
-        expect(enrichment.notice).not.toContain('budget');
-      } else {
-        endings.budget++;
-        expect(enrichment.notice).toContain('24,000-byte response budget');
       }
       seen.push(...markers);
+      sizes.push(markers.length);
       offset = enrichment.nextOffset;
     }
     expect(seen).toEqual(range(0, 60));
-    expect(endings.budget).toBeGreaterThan(0);
-    expect(endings.limit).toBeGreaterThan(0);
-    expect(endings.end).toBe(1);
+    expect(sizes).toEqual([8, 8, 8, 8, 8, 8, 8, 4]);
   });
 
   it('keeps the past-the-end notice unchanged', async () => {
@@ -306,30 +267,101 @@ describe.each(cases)('$name — 24,000-byte page budget', (c) => {
     expect(enrichmentOf(result).nextOffset).toBe(c.defaultLimit);
   });
 
-  it('accepts limit 500 and rejects limit 501', async () => {
-    c.stub(rowsOf(3, () => 0));
-    expect((await c.run({ limit: 500 })).isError).toBeFalsy();
-    expect((await c.run({ limit: 501 })).isError).toBe(true);
-  });
-
-  it('rejects a filter value past the schema cap instead of echoing it over the budget', async () => {
+  it('rejects a filter value past the schema cap', async () => {
     c.stub(rowsOf(5, () => 0));
     const result = await c.run(c.oversized);
     expect(result.isError).toBe(true);
-    const size = surfaces(result);
-    expect(size.json).toBeLessThanOrEqual(CEILING);
-    expect(size.text).toBeLessThanOrEqual(CEILING);
   });
 
-  it('holds the ceiling on the assembled result across row sizes', async () => {
-    for (let textBytes = 0; textBytes <= 7000; textBytes += 211) {
-      c.stub(rowsOf(300, (i) => textBytes + (i % 5) * 97));
-      const result = await c.run({ limit: 500, ...c.longEcho });
+  describe('a limit above 500, with WSDOT_CLAMP_LIMITS unset', () => {
+    beforeEach(() => {
+      vi.stubEnv('WSDOT_CLAMP_LIMITS', undefined);
+    });
+
+    it('serves limit 501 as 500 and appends the clamp sentence to the page notice', async () => {
+      c.stub(rowsOf(600, () => 0));
+      const result = await c.run({ limit: 501 });
       expect(result.isError).toBeFalsy();
-      const size = surfaces(result);
-      expect(size.json, `JSON at ${textBytes} B rows`).toBeLessThanOrEqual(CEILING);
-      expect(size.text, `text at ${textBytes} B rows`).toBeLessThanOrEqual(CEILING);
-      expect(c.markers(result).length).toBeGreaterThan(0);
-    }
+      expect(c.markers(result)).toEqual(range(0, 500));
+      expect(enrichmentOf(result)).toMatchObject({
+        totalCount: 600,
+        hasMore: true,
+        nextOffset: 500,
+      });
+      const { notice } = enrichmentOf(result);
+      expect(notice).toMatch(new RegExp(`^Showing ${c.unit} 1–500 of 600\\.`));
+      expect(notice).toMatch(
+        /Pass offset=500 for the next page\. limit 501 exceeds the maximum of 500; using limit 500\.$/,
+      );
+    });
+
+    it('clamps the numeric string "600" the framework repairs to a number', async () => {
+      c.stub(rowsOf(600, () => 0));
+      const result = await c.run({ limit: '600' });
+      expect(result.isError).toBeFalsy();
+      expect(c.markers(result)).toEqual(range(0, 500));
+      expect(enrichmentOf(result).notice).toMatch(
+        /limit 600 exceeds the maximum of 500; using limit 500\.$/,
+      );
+    });
+
+    it('continues at offset plus the rows returned when the clamped page reaches the end', async () => {
+      c.stub(rowsOf(84, () => 0));
+      const result = await c.run({ offset: 80, limit: 100_000 });
+      expect(c.markers(result)).toEqual([80, 81, 82, 83]);
+      expect(enrichmentOf(result)).toMatchObject({ hasMore: false, nextOffset: null });
+      expect(enrichmentOf(result).notice).toMatch(
+        new RegExp(
+          `^Showing ${c.unit} 81–84 of 84\\..* limit 100000 exceeds the maximum of 500; using limit 500\\.$`,
+        ),
+      );
+    });
+
+    it('leaves a page within the maximum without the clamp sentence', async () => {
+      c.stub(rowsOf(600, () => 0));
+      const result = await c.run({ limit: 500 });
+      expect(c.markers(result)).toEqual(range(0, 500));
+      expect(enrichmentOf(result).notice).not.toContain('exceeds the maximum');
+    });
   });
+
+  describe('a limit above 500, with WSDOT_CLAMP_LIMITS=false', () => {
+    beforeEach(() => {
+      vi.stubEnv('WSDOT_CLAMP_LIMITS', 'false');
+    });
+
+    it('rejects limit 501 and "600" with the bound in the message, before the service runs', async () => {
+      c.stub(rowsOf(600, () => 0));
+      for (const limit of [501, '600']) {
+        const result = await c.run({ limit });
+        expect(wireError(result).message).toContain('limit: Too big: expected number to be <=500');
+      }
+      expect(Object.values(mockService).every((fn) => fn.mock.calls.length === 0)).toBe(true);
+    });
+
+    it('serves limit 500 whole', async () => {
+      c.stub(rowsOf(600, () => 0));
+      const result = await c.run({ limit: 500 });
+      expect(c.markers(result)).toEqual(range(0, 500));
+      expect(enrichmentOf(result).notice).not.toContain('exceeds the maximum');
+    });
+  });
+
+  it.each([
+    ['unset', undefined],
+    ['false', 'false'],
+  ])(
+    'rejects 0, -1, 2.5, and "abc" with their own messages when the flag is %s',
+    async (_mode, flag) => {
+      vi.stubEnv('WSDOT_CLAMP_LIMITS', flag);
+      c.stub(rowsOf(5, () => 0));
+      const messages = await Promise.all(
+        [0, -1, 2.5, 'abc'].map(async (limit) => wireError(await c.run({ limit })).message),
+      );
+      expect(messages[0]).toContain('limit: Too small: expected number to be >=1');
+      expect(messages[1]).toContain('limit: Too small: expected number to be >=1');
+      expect(messages[2]).toContain('limit: Invalid input: expected int, received number');
+      expect(messages[3]).toContain('limit: Invalid input: expected number, received string');
+    },
+  );
 });

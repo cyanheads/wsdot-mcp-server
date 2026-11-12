@@ -162,6 +162,31 @@ describe('upstream failures over the real service', () => {
     });
   });
 
+  it('names the retried request in the caller’s words when a 5xx outlasts its retries', async () => {
+    serveTolls(
+      new Response('Service Unavailable', {
+        status: 503,
+        headers: { 'content-type': 'text/plain' },
+      }),
+    );
+    vi.useFakeTimers();
+    try {
+      const pending = runToolContract(getTollRates, {});
+      await vi.runAllTimersAsync();
+      const result = await pending;
+      expect(wireError(result).data).toMatchObject({
+        reason: 'api_unavailable',
+        status: 503,
+        retryAttempts: 4,
+        operation: 'WSDOT Traffic API request',
+      });
+      expect(JSON.stringify(result)).not.toMatch(/TrafficApiService|fetchJson/);
+      expect(http.calls).toHaveLength(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('fills the declared invalid_access_code hint on a 401', async () => {
     serveTolls(
       new Response('Unauthorized', { status: 401, headers: { 'content-type': 'text/plain' } }),

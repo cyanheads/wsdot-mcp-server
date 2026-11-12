@@ -4,15 +4,17 @@
  * the 2020-12 dialect. Both are wire-visible, and neither is expressible from a handler test —
  * a stripped key and a rejected key produce the same handler call, so only a parse-level
  * assertion separates them. Every tool is covered because the guarantee is the surface's, not
- * any one tool's.
+ * any one tool's. The `limit` each paged tool advertises is pinned here too, in both
+ * WSDOT_CLAMP_LIMITS modes.
  * @module tests/tools/input-strictness.test
  */
 
 import { z } from '@cyanheads/mcp-ts-core';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   getBorderWaits,
   getFerryAlerts,
+  getFerryFares,
   getFerryRoutes,
   getFerrySchedule,
   getFerryTerminals,
@@ -29,6 +31,15 @@ import {
 const tools = [
   { tool: getBorderWaits, valid: {} },
   { tool: getFerryAlerts, valid: {} },
+  {
+    tool: getFerryFares,
+    valid: {
+      departingTerminalId: 1,
+      arrivingTerminalId: 10,
+      tripDate: '2026-11-13',
+      roundTrip: true,
+    },
+  },
   { tool: getFerryRoutes, valid: { tripDate: '2026-08-25' } },
   {
     tool: getFerrySchedule,
@@ -100,4 +111,60 @@ describe('tool inputs are strict', () => {
       'state_route',
     ]);
   });
+});
+
+/**
+ * The `limit` a client reads from `tools/list` follows WSDOT_CLAMP_LIMITS: while clamping, no
+ * `maximum` (a larger value is served at the cap and disclosed); with `false`, the cap. Read through
+ * a JSON round trip, as a client receives it.
+ */
+describe('paged tools advertise limit per WSDOT_CLAMP_LIMITS', () => {
+  const paged = [
+    { tool: searchAlerts, maximum: 500 },
+    { tool: searchCameras, maximum: 500 },
+    { tool: getTravelTimes, maximum: 500 },
+    { tool: getTollRates, maximum: 500 },
+    { tool: getTerminalSpace, maximum: 20 },
+  ] as const;
+
+  const advertisedLimit = (tool: (typeof paged)[number]['tool']) =>
+    JSON.parse(JSON.stringify(z.toJSONSchema(tool.input, { io: 'input' }))).properties.limit as {
+      description: string;
+      maximum?: number;
+      minimum: number;
+    };
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('lists exactly the five paged tools as taking a limit', () => {
+    const withLimit = tools.filter(
+      ({ tool }) => 'limit' in (z.toJSONSchema(tool.input, { io: 'input' }).properties ?? {}),
+    );
+    expect(withLimit.map(({ tool }) => tool.name).sort()).toEqual(
+      paged.map(({ tool }) => tool.name).sort(),
+    );
+  });
+
+  for (const { tool, maximum } of paged) {
+    it.each([
+      ['unset', undefined],
+      ['true', 'true'],
+    ])(`${tool.name} advertises no maximum while WSDOT_CLAMP_LIMITS is %s`, (_mode, flag) => {
+      vi.stubEnv('WSDOT_CLAMP_LIMITS', flag);
+      const limit = advertisedLimit(tool);
+      expect(limit.maximum).toBeUndefined();
+      expect(limit.minimum).toBe(1);
+      expect(limit.description).toContain(`a larger value returns at most ${maximum} and says so.`);
+    });
+
+    it(`${tool.name} advertises maximum ${maximum} with WSDOT_CLAMP_LIMITS=false`, () => {
+      vi.stubEnv('WSDOT_CLAMP_LIMITS', 'false');
+      const limit = advertisedLimit(tool);
+      expect(limit.maximum).toBe(maximum);
+      expect(limit.minimum).toBe(1);
+      expect(limit.description).toContain(`(1–${maximum})`);
+    });
+  }
 });

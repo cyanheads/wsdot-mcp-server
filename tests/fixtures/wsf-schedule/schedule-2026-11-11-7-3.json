@@ -1,0 +1,275 @@
+{
+  "ScheduleID": 198,
+  "ScheduleName": "Fall 2026",
+  "ScheduleSeason": 2,
+  "SchedulePDFUrl": "http:\/\/www.wsdot.wa.gov\/ferries\/pdf\/2026Fall.pdf",
+  "ScheduleStart": "\/Date(1789887600000-0700)\/",
+  "ScheduleEnd": "\/Date(1798272000000-0800)\/",
+  "AllRoutes": [5],
+  "TerminalCombos": [
+    {
+      "DepartingTerminalID": 7,
+      "DepartingTerminalName": "Seattle",
+      "ArrivingTerminalID": 3,
+      "ArrivingTerminalName": "Bainbridge Island",
+      "SailingNotes": "",
+      "Annotations": [],
+      "Times": [
+        {
+          "DepartingTime": "\/Date(1794403800000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 25,
+          "VesselName": "Puyallup",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794406200000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794409500000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 25,
+          "VesselName": "Puyallup",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794412500000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794415500000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 25,
+          "VesselName": "Puyallup",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794418500000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794422400000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 25,
+          "VesselName": "Puyallup",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794425100000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794428700000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 25,
+          "VesselName": "Puyallup",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794431400000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794434700000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 25,
+          "VesselName": "Puyallup",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794438000000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794441000000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 25,
+          "VesselName": "Puyallup",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794444300000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794447900000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 25,
+          "VesselName": "Puyallup",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794450600000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794454200000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 25,
+          "VesselName": "Puyallup",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794456900000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794460800000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 25,
+          "VesselName": "Puyallup",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794463500000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 37,
+          "VesselName": "Wenatchee",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794466200000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 25,
+          "VesselName": "Puyallup",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794471300000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 25,
+          "VesselName": "Puyallup",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794476100000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 25,
+          "VesselName": "Puyallup",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [5],
+          "AnnotationIndexes": []
+        }
+      ],
+      "AnnotationsIVR": []
+    }
+  ]
+}

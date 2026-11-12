@@ -1,0 +1,264 @@
+{
+  "ScheduleID": 198,
+  "ScheduleName": "Fall 2026",
+  "ScheduleSeason": 2,
+  "SchedulePDFUrl": "http:\/\/www.wsdot.wa.gov\/ferries\/pdf\/2026Fall.pdf",
+  "ScheduleStart": "\/Date(1789887600000-0700)\/",
+  "ScheduleEnd": "\/Date(1798272000000-0800)\/",
+  "AllRoutes": [15],
+  "TerminalCombos": [
+    {
+      "DepartingTerminalID": 22,
+      "DepartingTerminalName": "Vashon Island",
+      "ArrivingTerminalID": 20,
+      "ArrivingTerminalName": "Southworth",
+      "SailingNotes": "",
+      "Annotations": [],
+      "Times": [
+        {
+          "DepartingTime": "\/Date(1794663300000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 19,
+          "VesselName": "Kittitas",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794666600000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 1,
+          "VesselName": "Cathlamet",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794669300000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 19,
+          "VesselName": "Kittitas",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794672000000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 1,
+          "VesselName": "Cathlamet",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794675300000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 19,
+          "VesselName": "Kittitas",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794678000000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 1,
+          "VesselName": "Cathlamet",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794681000000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 19,
+          "VesselName": "Kittitas",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794683400000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 1,
+          "VesselName": "Cathlamet",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794684900000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 66,
+          "VesselName": "Salish",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 3,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794686400000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 19,
+          "VesselName": "Kittitas",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794689400000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 1,
+          "VesselName": "Cathlamet",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794693900000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 66,
+          "VesselName": "Salish",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 3,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794696300000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 19,
+          "VesselName": "Kittitas",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794698700000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 1,
+          "VesselName": "Cathlamet",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794702300000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 19,
+          "VesselName": "Kittitas",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794704700000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 1,
+          "VesselName": "Cathlamet",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794710700000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 1,
+          "VesselName": "Cathlamet",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794715200000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 19,
+          "VesselName": "Kittitas",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794719700000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 1,
+          "VesselName": "Cathlamet",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 2,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794726000000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 19,
+          "VesselName": "Kittitas",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794730500000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 19,
+          "VesselName": "Kittitas",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        },
+        {
+          "DepartingTime": "\/Date(1794735000000-0800)\/",
+          "ArrivingTime": null,
+          "LoadingRule": 3,
+          "VesselID": 19,
+          "VesselName": "Kittitas",
+          "VesselHandicapAccessible": true,
+          "VesselPositionNum": 1,
+          "Routes": [15],
+          "AnnotationIndexes": []
+        }
+      ],
+      "AnnotationsIVR": []
+    }
+  ]
+}

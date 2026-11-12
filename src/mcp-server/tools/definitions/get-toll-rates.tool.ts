@@ -8,17 +8,24 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { coordinatePair } from '@/mcp-server/tools/coordinate-pair.js';
 import {
-  continuationNotice,
-  fitPageToBudget,
+  clampPageLimit,
   MAX_FILTER_LENGTH,
-  PAGE_BYTE_BUDGET,
+  type PageLimitSpec,
+  pageLimitSchema,
   renderPage,
-} from '@/mcp-server/tools/page-budget.js';
+  slicePage,
+  withClampNotice,
+  withContinuation,
+} from '@/mcp-server/tools/paging.js';
 import { routeMatches } from '@/services/traffic/route-match.js';
 import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
 
-const DEFAULT_LIMIT = 50;
-const MAX_LIMIT = 500;
+const LIMIT: PageLimitSpec = {
+  tool: 'wsdot_get_toll_rates',
+  unit: 'toll rates',
+  defaultLimit: 50,
+  maxLimit: 500,
+};
 
 /**
  * Washington's Interstate route numbers. The feed reports a bare, zero-padded route number with
@@ -64,15 +71,7 @@ const TollRateSchema = z
 
 export const getTollRates = tool('wsdot_get_toll_rates', {
   title: 'Get Toll Rates',
-  description:
-    'Returns current dynamic toll rates for WA express lanes and tolled facilities: SR 99 (WSDOT Tunnel), ' +
-    'SR 167 HOT Lanes, I-405 Express Lanes, SR 509 tolled segment, and the SR 520 Bridge. ' +
-    'Rates are time-banded and change dynamically based on traffic conditions. ' +
-    'Filter to one facility with stateRoute ("SR 520", "520", "I-405", or "405" all work). ' +
-    'Each row reports stateRoute as the bare, zero-padded number the feed carries ("099", "405") — ' +
-    'the posted designation is in the rendered text. Results are paged — pass offset/limit to page ' +
-    'through the matching set. ' +
-    `A page ends at limit or at a ${PAGE_BYTE_BUDGET.toLocaleString('en-US')}-byte response budget, whichever comes first; the notice reports the next offset.`,
+  description: `Returns current dynamic toll rates for WA express lanes and tolled facilities: SR 99 (WSDOT Tunnel), SR 167 HOT Lanes, I-405 Express Lanes, SR 509 tolled segment, and the SR 520 Bridge. Rates are time-banded and change dynamically based on traffic conditions. Filter to one facility with stateRoute ("SR 520", "520", "I-405", or "405" all work). Each row reports stateRoute as the bare, zero-padded number the feed carries ("099", "405") — the posted designation is in the rendered text. Results are paged — pass offset/limit to page through the matching set.`,
   annotations: { readOnlyHint: true },
   input: z.object({
     stateRoute: z
@@ -88,15 +87,7 @@ export const getTollRates = tool('wsdot_get_toll_rates', {
       .min(0)
       .optional()
       .describe('Zero-based index of the first toll rate to return, for paging. Defaults to 0.'),
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(MAX_LIMIT)
-      .optional()
-      .describe(
-        `Maximum toll rates to return in this page (1–${MAX_LIMIT}). Defaults to ${DEFAULT_LIMIT}. A large page ends sooner, at the ${PAGE_BYTE_BUDGET.toLocaleString('en-US')}-byte response budget.`,
-      ),
+    limit: pageLimitSchema(LIMIT),
   }),
   output: z.object({
     rates: z
@@ -125,7 +116,7 @@ export const getTollRates = tool('wsdot_get_toll_rates', {
       .string()
       .optional()
       .describe(
-        'Informational note about the page window, or guidance when no toll rate data is available, the route has no tolled facility, or the offset ran past the end.',
+        'Informational note about the page window, or guidance when no toll rate data is available, the route has no tolled facility, or the offset ran past the end. Ends with the applied limit when a larger one was clamped.',
       ),
   },
 
@@ -176,13 +167,15 @@ export const getTollRates = tool('wsdot_get_toll_rates', {
     // stays the full match count so the agent knows how much lies beyond this page.
     const totalCount = matched.length;
     const offset = input.offset ?? 0;
-    const limit = input.limit ?? DEFAULT_LIMIT;
-    const requested = matched.slice(offset, offset + limit);
-    const rates = fitPageToBudget(requested, renderTollRate, stateRoute);
-    const hasMore = offset + rates.length < totalCount;
-    const nextOffset = hasMore ? offset + rates.length : null;
+    const page = clampPageLimit(LIMIT, input.limit, ctx);
+    const { rows: rates, hasMore, nextOffset } = slicePage(matched, offset, page.limit);
 
-    ctx.log.info('Toll rates fetched', { totalCount, offset, limit, returned: rates.length });
+    ctx.log.info('Toll rates fetched', {
+      totalCount,
+      offset,
+      limit: page.limit,
+      returned: rates.length,
+    });
 
     ctx.enrich({
       totalCount,
@@ -193,7 +186,10 @@ export const getTollRates = tool('wsdot_get_toll_rates', {
 
     if (allRates.length === 0) {
       ctx.enrich.notice(
-        'No toll rate data available. The WSDOT API may be temporarily unavailable — retry in 30 seconds.',
+        withClampNotice(
+          'No toll rate data available. The WSDOT API may be temporarily unavailable — retry in 30 seconds.',
+          page,
+        ),
       );
     } else if (totalCount === 0) {
       // Dedupe the designations, not the raw values — "099" and "99" are one facility.
@@ -206,19 +202,21 @@ export const getTollRates = tool('wsdot_get_toll_rates', {
         ),
       ];
       ctx.enrich.notice(
-        `No tolled facility on ${stateRoute}. The feed carries tolls on ${tolled.join(', ')} — pass one of those, or omit stateRoute for every facility.`,
+        withClampNotice(
+          `No tolled facility on ${stateRoute}. The feed carries tolls on ${tolled.join(', ')} — pass one of those, or omit stateRoute for every facility.`,
+          page,
+        ),
       );
     } else if (rates.length === 0) {
       ctx.enrich.notice(
-        `Offset ${offset} is past the end of ${totalCount} toll rate entries. Use an offset between 0 and ${totalCount - 1}.`,
+        withClampNotice(
+          `Offset ${offset} is past the end of ${totalCount} toll rate entries. Use an offset between 0 and ${totalCount - 1}.`,
+          page,
+        ),
       );
     } else {
       const shown = `Showing toll rates ${offset + 1}–${offset + rates.length} of ${totalCount}.`;
-      ctx.enrich.notice(
-        nextOffset === null
-          ? shown
-          : `${shown} ${continuationNotice(nextOffset, rates.length < requested.length)}`,
-      );
+      ctx.enrich.notice(withClampNotice(withContinuation(shown, nextOffset), page));
     }
 
     return { rates };
@@ -232,7 +230,7 @@ export const getTollRates = tool('wsdot_get_toll_rates', {
   },
 });
 
-/** One toll rate's `content[]` block — shared by `format()` and the page-budget charge. */
+/** One toll rate's `content[]` block, as `format()` renders it. */
 function renderTollRate(r: z.infer<typeof TollRateSchema>): string {
   // tripName is an opaque upstream key ("099tp03268"); the endpoint names read as a segment,
   // so they lead. A segment whose ends carry the same name collapses to one.

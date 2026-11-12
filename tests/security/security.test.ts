@@ -39,6 +39,7 @@ vi.mock('@/services/traffic/traffic-service.js', () => ({
 }));
 
 vi.mock('@/services/ferry/ferry-service.js', () => ({
+  CALL_BUDGET_MS: 50_000,
   getFerryApiService: () => mockFerryService,
   FerryApiService: {
     toFerryDate: (d: string) => d.trim().slice(0, 10),
@@ -52,6 +53,7 @@ vi.mock('@/services/ferry/ferry-service.js', () => ({
 
 import { getBorderWaits } from '@/mcp-server/tools/definitions/get-border-waits.tool.js';
 import { getFerryAlerts } from '@/mcp-server/tools/definitions/get-ferry-alerts.tool.js';
+import { getFerryFares } from '@/mcp-server/tools/definitions/get-ferry-fares.tool.js';
 import { getFerryRoutes } from '@/mcp-server/tools/definitions/get-ferry-routes.tool.js';
 import { getFerrySchedule } from '@/mcp-server/tools/definitions/get-ferry-schedule.tool.js';
 import { getFerryTerminals } from '@/mcp-server/tools/definitions/get-ferry-terminals.tool.js';
@@ -66,6 +68,7 @@ import { FerryApiService } from '@/services/ferry/ferry-service.js';
 import { htmlToText } from '@/services/html-text.js';
 import { assertUpstreamJson, redactUrl } from '@/services/wsdot-http.js';
 import { formattedText, markdownText, nth, rejection } from '../helpers/assertions.js';
+import { expectSubQuadratic } from '../helpers/timing.js';
 
 beforeEach(() => vi.clearAllMocks());
 afterEach(() => vi.clearAllMocks());
@@ -184,17 +187,39 @@ describe('Input validation — type coercion', () => {
     }
   });
 
-  it('paged tools reject a zero, negative, or over-maximum limit', () => {
-    // The traffic tools cap at 500; terminal-space caps at 20, its own MAX_LIMIT.
-    for (const t of [searchAlerts, getTravelTimes, getTollRates, searchCameras]) {
-      expect(() => t.input.parse({ limit: 0 })).toThrow();
-      expect(() => t.input.parse({ limit: -5 })).toThrow();
-      expect(() => t.input.parse({ limit: 501 })).toThrow();
-      expect(() => t.input.parse({ limit: 500 })).not.toThrow();
-    }
-    expect(() => getTerminalSpace.input.parse({ limit: 0 })).toThrow();
-    expect(() => getTerminalSpace.input.parse({ limit: 21 })).toThrow();
-    expect(() => getTerminalSpace.input.parse({ limit: 20 })).not.toThrow();
+  describe('paged tools — limit bounds (traffic tools cap at 500, terminal space at 20)', () => {
+    const traffic = [searchAlerts, getTravelTimes, getTollRates, searchCameras];
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it.each([
+      ['unset', undefined],
+      ['false', 'false'],
+    ])('reject a zero or negative limit when WSDOT_CLAMP_LIMITS is %s', (_mode, flag) => {
+      vi.stubEnv('WSDOT_CLAMP_LIMITS', flag);
+      for (const t of [...traffic, getTerminalSpace]) {
+        expect(() => t.input.parse({ limit: 0 })).toThrow();
+        expect(() => t.input.parse({ limit: -5 })).toThrow();
+      }
+    });
+
+    it('pass an over-maximum limit to the handler, which clamps it, while WSDOT_CLAMP_LIMITS is unset', () => {
+      vi.stubEnv('WSDOT_CLAMP_LIMITS', undefined);
+      for (const t of traffic) expect(t.input.parse({ limit: 501 }).limit).toBe(501);
+      expect(getTerminalSpace.input.parse({ limit: 21 }).limit).toBe(21);
+    });
+
+    it('reject an over-maximum limit and accept the maximum while WSDOT_CLAMP_LIMITS=false', () => {
+      vi.stubEnv('WSDOT_CLAMP_LIMITS', 'false');
+      for (const t of traffic) {
+        expect(() => t.input.parse({ limit: 501 })).toThrow();
+        expect(() => t.input.parse({ limit: 500 })).not.toThrow();
+      }
+      expect(() => getTerminalSpace.input.parse({ limit: 21 })).toThrow();
+      expect(() => getTerminalSpace.input.parse({ limit: 20 })).not.toThrow();
+    });
   });
 
   it('getFerrySchedule rejects boolean departingTerminalId', () => {
@@ -216,9 +241,9 @@ describe('Input validation — type coercion', () => {
 
 describe('Injection attempts — payloads stay inert on both response paths', () => {
   /**
-   * Carries the payload in `extendedDescription`, which `format()` escapes on its own
-   * line, so a payload holding newlines or control characters reaches `content[]` whole rather
-   * than being split across the alert heading.
+   * Carries the payload in `extendedDescription`, which `format()` renders below the heading one
+   * line at a time, so a payload holding line breaks or control characters never reaches the
+   * alert heading.
    */
   const alertCarrying = (payload: string) => ({
     alertId: 900,
@@ -242,11 +267,19 @@ describe('Injection attempts — payloads stay inert on both response paths', ()
         ctx,
       );
 
-      // Structured values stay raw; CommonMark decodes the text surface, normalizing CR to LF.
+      /**
+       * Structured values stay raw. CommonMark reads back the heading, then each non-blank payload
+       * line trimmed, and nothing else: a payload character parsed as markup would drop out of or
+       * add to the text. A NUL decodes to U+FFFD.
+       */
       const text = formattedText(searchAlerts.format!(result));
       expect(nth(result.alerts).extendedDescription).toBe(injection);
-      expect(markdownText(text)).toContain(
-        injection.replaceAll('\r', '\n').replaceAll('\x00', '\uFFFD'),
+      const lines = injection
+        .split(/\r\n|\r|\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      expect(markdownText(text)).toBe(
+        ['Injection probe #900', ...lines].join('\n').replaceAll('\x00', '\uFFFD'),
       );
       checkOutputForSecrets(result);
       checkOutputForSecrets(text);
@@ -392,9 +425,8 @@ describe('Injection attempts — payloads stay inert on both response paths', ()
 
 /**
  * Every traffic free-text filter is echoed back — in `appliedFilters`/`routeFilter`, the
- * `content[]` trailer, and some notices — so an unbounded one lets the caller's own input push a
- * response past the page budget. The schema caps each at 200 characters: the longest live value a
- * filter is matched against is a 73-character corridor name (camera titles run to 50).
+ * `content[]` trailer, and some notices — so the schema caps each at 200 characters: the longest
+ * live value a filter is matched against is a 73-character corridor name (camera titles run to 50).
  */
 describe('Oversized inputs — free-text filters are capped at the schema', () => {
   const MAX = 200;
@@ -803,10 +835,8 @@ describe('Upstream HTML — normalization strips markup before either response p
 
   it('does not stall on a pathological fragment', () => {
     // A quadratic normalizer would block the event loop here; the scanner is linear.
-    const start = performance.now();
-    htmlToText('<'.repeat(200_000));
-    expect(performance.now() - start).toBeLessThan(1_000);
-  });
+    expectSubQuadratic((n) => '<'.repeat(n), htmlToText);
+  }, 0);
 });
 
 // ---------------------------------------------------------------------------
@@ -837,7 +867,9 @@ describe('Sparse upstream payloads — no fabricated data', () => {
   });
 
   it('getFerrySchedule format(): missing arrivalTime shows Unknown for departure', () => {
-    const output = { sailings: [{ departureTime: undefined, arrivalTime: undefined }] };
+    const output = {
+      sailings: [{ departureTime: undefined, arrivalTime: undefined, serviceDate: '2026-11-04' }],
+    };
     const blocks = getFerrySchedule.format!(output);
     const text = (blocks[0] as { text: string }).text;
     expect(text).toContain('Unknown');
@@ -868,6 +900,7 @@ describe('SSRF — no user-controlled URL parameters in tool inputs', () => {
   const everyTool = [
     getBorderWaits,
     getFerryAlerts,
+    getFerryFares,
     getFerryRoutes,
     getFerrySchedule,
     getFerryTerminals,

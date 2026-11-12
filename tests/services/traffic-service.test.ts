@@ -25,7 +25,8 @@ vi.mock('@cyanheads/mcp-ts-core/utils', () => ({
   withRetry: (fn: () => Promise<unknown>) => fn(),
 }));
 
-import { TrafficApiService } from '@/services/traffic/traffic-service.js';
+import { type CameraSearchParams, TrafficApiService } from '@/services/traffic/traffic-service.js';
+import type { Camera } from '@/services/traffic/types.js';
 import { nth } from '../helpers/assertions.js';
 
 /**
@@ -807,6 +808,10 @@ describe('TrafficApiService — camera normalization', () => {
     expect(c.milePost).toBe(52);
     expect(c.latitude).toBe(47.4);
     expect(c.longitude).toBe(-121.4);
+    // No MP token and no "at <number>:" in this title, and no owner in the feed row.
+    expect('titleMilePost' in c).toBe(false);
+    expect('owner' in c).toBe(false);
+    expect('ownerUrl' in c).toBe(false);
   });
 
   it('omits optional fields when raw values are null', async () => {
@@ -958,6 +963,218 @@ describe('TrafficApiService — camera normalization', () => {
     expect(cameras).toHaveLength(1);
     expect(nth(cameras).cameraId).toBe(1);
   });
+
+  it('keeps a camera reporting no milepost under a range, and applies a lone bound', async () => {
+    const raw = [
+      { CameraID: 1, CameraLocation: { RoadName: 'I-90', MilePost: 10 } },
+      { CameraID: 2, CameraLocation: { RoadName: 'I-90', MilePost: 60 } },
+      { CameraID: 3, CameraLocation: { RoadName: 'I-90' } },
+    ];
+    const idsFor = async (params: CameraSearchParams) => {
+      mockFetch.mockResolvedValue(makeResponse(raw));
+      return (await svc.searchCameras(params, createMockContext())).map((c) => c.cameraId);
+    };
+    expect(await idsFor({ startMilepost: 5, endMilepost: 50 })).toEqual([1, 3]);
+    expect(await idsFor({ startMilepost: 50 })).toEqual([2, 3]);
+    expect(await idsFor({ endMilepost: 10 })).toEqual([1, 3]);
+  });
+});
+
+describe('TrafficApiService — camera owner', () => {
+  let svc: TrafficApiService;
+
+  beforeEach(() => {
+    svc = new TrafficApiService({} as never, {} as never);
+  });
+
+  const HOOD_CANAL_SIGN_UP = {
+    CameraOwner: 'Sign up to receive Hood Canal traffic updates by e-mail.',
+    OwnerURL: 'http://service.govdelivery.com/service/multi_subscribe.html?code=WADOT',
+  };
+
+  it.each([
+    [
+      'a named owner and its URL',
+      { CameraOwner: 'City of Seattle', OwnerURL: 'http://web6.seattle.gov/travelers/' },
+      { owner: 'City of Seattle', ownerUrl: 'http://web6.seattle.gov/travelers/' },
+    ],
+    [
+      'a padded owner, trimmed',
+      { CameraOwner: 'Whidbeytel.com ', OwnerURL: ' https://www.whidbeytel.com/cams/clinton/' },
+      { owner: 'Whidbeytel.com', ownerUrl: 'https://www.whidbeytel.com/cams/clinton/' },
+    ],
+    ['an owner with no URL', { CameraOwner: 'WSDOT', OwnerURL: null }, { owner: 'WSDOT' }],
+    [
+      'a URL whose owner is blank',
+      { CameraOwner: '  ', OwnerURL: 'https://example.org/cams' },
+      { ownerUrl: 'https://example.org/cams' },
+    ],
+    [
+      'an owner whose URL does not parse',
+      { CameraOwner: 'Harvey Field', OwnerURL: 'not a url' },
+      { owner: 'Harvey Field', ownerUrl: 'not a url' },
+    ],
+    ['neither, both absent', {}, {}],
+    ['neither, both blank', { CameraOwner: '', OwnerURL: '' }, {}],
+    ['a sign-up prompt on service.govdelivery.com, dropped as a pair', HOOD_CANAL_SIGN_UP, {}],
+    [
+      'the sign-up host in capitals over https, dropped as a pair',
+      { CameraOwner: 'Sign up', OwnerURL: 'https://SERVICE.GovDelivery.com/x' },
+      {},
+    ],
+    [
+      'a host that only begins with the sign-up host',
+      { CameraOwner: 'Example', OwnerURL: 'https://service.govdelivery.com.example.net/' },
+      { owner: 'Example', ownerUrl: 'https://service.govdelivery.com.example.net/' },
+    ],
+  ])('maps %s', async (_label, raw, expected) => {
+    mockFetch.mockResolvedValue(makeResponse([{ CameraID: 1, ...raw }]));
+    expect(await svc.searchCameras({}, createMockContext())).toEqual([
+      { cameraId: 1, ...expected },
+    ]);
+  });
+});
+
+describe('TrafficApiService — camera title milepost', () => {
+  let svc: TrafficApiService;
+
+  beforeEach(() => {
+    svc = new TrafficApiService({} as never, {} as never);
+  });
+
+  it.each([
+    ['US 97 at MP 119.5: W. End Odabashian Br (US 2)', 119.5],
+    ['I-90 at MP 0: Seattle', 0],
+    ['SR 290 at MP .7: Hamilton', 0.7],
+    ['SR 18 at Mp 20.3: Issaquah-Hobart Rd', 20.3],
+    ['SR 28 at MP 4.3B: Bypass at Grant Rd', 4.3],
+    ['I-5 @MP 118.16: Center Dr VMS', 118.16],
+    ['I-5 at MP 73.3', 73.3],
+    ['I-5 at 133.7: SB I-705 to NB I-5/SB SR 7, Ground', 133.7],
+    ['I-5 @ 119: Clark Rd NB Ramp', 119],
+    ['I-5 at 5: MP 7 sign', 7],
+    ['SR 7 at 152nd St S', undefined],
+    ['Anacortes Airport Fuel Pump', undefined],
+    ['Olympia Airport Ramp 12', undefined],
+    ['I-90 at Exit 52: Snoqualmie', undefined],
+  ])('reads %j as %j', async (Title, expected) => {
+    mockFetch.mockResolvedValue(makeResponse([{ CameraID: 1, Title }]));
+    const camera = nth(await svc.searchCameras({}, createMockContext()));
+    expect(camera).toEqual({
+      cameraId: 1,
+      title: Title,
+      ...(expected !== undefined && { titleMilePost: expected }),
+    });
+  });
+
+  it('carries no title milepost for a camera with no title', async () => {
+    mockFetch.mockResolvedValue(makeResponse([{ CameraID: 1, Title: null }]));
+    expect(await svc.searchCameras({}, createMockContext())).toEqual([{ cameraId: 1 }]);
+  });
+});
+
+describe('TrafficApiService — camera milepost filter reads both WSDOT mileposts', () => {
+  let svc: TrafficApiService;
+
+  beforeEach(() => {
+    svc = new TrafficApiService({} as never, {} as never);
+  });
+
+  const cam = (id: number, title: string | null, roadName: string, milePost?: number) => ({
+    CameraID: id,
+    Title: title,
+    CameraLocation: { RoadName: roadName, ...(milePost !== undefined && { MilePost: milePost }) },
+  });
+
+  /** Titles and feed mileposts as the live camera feed serves them. */
+  const live = [
+    cam(8310, 'I-90 at MP 220: US 395 Interchange @ Ritzville (1)', 'I-90', 218),
+    cam(8230, 'US 395 at MP 270.1: Laurier (1)', 'US 395', 275),
+    cam(9013, 'US 97 at MP 119.5: W. End Odabashian Br (US 2)', 'US 97', 200),
+    cam(9359, 'SR 28 Spur at MP 0.2 looking North', 'SR 28', 4),
+    cam(9363, 'SR 28 Spur at MP 0.67', 'SR 28', 4),
+  ];
+
+  const idsFor = async (raw: object[], params: CameraSearchParams) => {
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    return (await svc.searchCameras(params, createMockContext())).map((c) => c.cameraId);
+  };
+
+  it.each([
+    [{ stateRoute: 'I-90', startMilepost: 219.5, endMilepost: 220.5 }, [8310]],
+    [{ stateRoute: 'US 395', startMilepost: 270, endMilepost: 271 }, [8230]],
+    [{ stateRoute: 'US 97', startMilepost: 119, endMilepost: 120 }, [9013]],
+    [{ stateRoute: 'US 97', startMilepost: 199, endMilepost: 201 }, [9013]],
+    [{ stateRoute: 'SR 28', startMilepost: 4, endMilepost: 5 }, [9359, 9363]],
+    [{ stateRoute: 'SR 28', startMilepost: 0, endMilepost: 0.5 }, [9359]],
+    [{ startMilepost: 220, endMilepost: 220 }, [8310]],
+    [{ stateRoute: 'US 97', endMilepost: 120 }, [9013]],
+    [{ stateRoute: 'US 395', startMilepost: 276 }, []],
+    [{ stateRoute: 'I-90', startMilepost: 100, endMilepost: 200 }, []],
+  ])('%j returns %j', async (params, expected) => {
+    expect(await idsFor(live, params)).toEqual(expected);
+  });
+
+  it('keeps a camera with no feed milepost whatever its title milepost, as 0.5.0 did', async () => {
+    const raw = [
+      cam(1, 'I-5 at MP 300: Far', 'I-5'),
+      cam(2, 'I-5 at MP 5: Near', 'I-5'),
+      cam(3, 'I-5 at Exit 9', 'I-5'),
+      cam(4, 'I-5 at MP 300: Far', 'I-5', 300),
+    ];
+    expect(await idsFor(raw, { startMilepost: 0, endMilepost: 10 })).toEqual([1, 2, 3]);
+  });
+
+  /** The 0.5.0 milepost filter, copied verbatim: the baseline no milepost search may undercut. */
+  function milepostFilterV050(cameras: Camera[], params: CameraSearchParams): Camera[] {
+    let out = cameras;
+    if (params.startMilepost != null) {
+      const minMp = params.startMilepost;
+      out = out.filter((c) => c.milePost == null || c.milePost >= minMp);
+    }
+    if (params.endMilepost != null) {
+      const maxMp = params.endMilepost;
+      out = out.filter((c) => c.milePost == null || c.milePost <= maxMp);
+    }
+    return out;
+  }
+
+  it('never returns fewer cameras than the 0.5.0 filter, over every feed and title milepost pairing', async () => {
+    const feedPosts = [undefined, 0, 4, 52, 200, 218, 275];
+    const titles = [
+      null,
+      'X at MP 0.2',
+      'X at MP 52',
+      'X at MP 119.5: Y',
+      'X at MP 220: Y',
+      'X at 270.1: Y',
+      'X at Exit 3',
+    ];
+    const raw = feedPosts.flatMap((mp, i) =>
+      titles.map((title, j) => cam(i * titles.length + j + 1, title, 'I-90', mp)),
+    );
+    mockFetch.mockResolvedValue(makeResponse(raw));
+    const all = await svc.searchCameras({}, createMockContext());
+    expect(all).toHaveLength(49);
+
+    const bounds = [undefined, 0, 0.2, 4, 50, 119, 200, 220, 300];
+    let widened = 0;
+    for (const startMilepost of bounds) {
+      for (const endMilepost of bounds) {
+        if (startMilepost != null && endMilepost != null && startMilepost > endMilepost) continue;
+        const params = {
+          ...(startMilepost != null && { startMilepost }),
+          ...(endMilepost != null && { endMilepost }),
+        };
+        const before = milepostFilterV050(all, params).map((c) => c.cameraId);
+        const after = await idsFor(raw, params);
+        expect(after, JSON.stringify(params)).toEqual(expect.arrayContaining(before));
+        widened += after.length - before.length;
+      }
+    }
+    // The title milepost adds cameras somewhere in the grid, so the subset check is not vacuous.
+    expect(widened).toBeGreaterThan(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1040,6 +1257,8 @@ describe('TrafficApiService — blank and padded upstream strings', () => {
           Description: blank,
           ImageURL: blank,
           Region: blank,
+          CameraOwner: blank,
+          OwnerURL: blank,
           CameraLocation: { ...location, MilePost: 3 },
         },
       ],

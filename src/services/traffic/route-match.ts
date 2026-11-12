@@ -1,6 +1,7 @@
 /**
  * @fileoverview Route-designation matching for WSDOT road names — compares a caller's route
- * filter against the `roadName` values the traffic feeds carry.
+ * filter against the `roadName` values the traffic feeds carry, tells a designation filter from
+ * free text, and reads the designations a corridor name writes.
  * @module services/traffic/route-match
  */
 
@@ -56,4 +57,37 @@ export function routeMatches(a: string, b: string): boolean {
   if (!left || !right) return a.trim().toLowerCase() === b.trim().toLowerCase();
   if (left.number !== right.number) return false;
   return left.prefix === undefined || right.prefix === undefined || left.prefix === right.prefix;
+}
+
+/** Text that is wholly a route designation: an optional route type, then digits only. */
+const DESIGNATION = /^(?:(?:i|sr|us|ore)[\s-]*)?\d+$/;
+
+/**
+ * Reports whether a filter is wholly a route designation — "5", "005", "I-5", "SR 520", "us-26" —
+ * rather than free text. A trailing letter keeps it free text, so the travel-times segment labels
+ * "1A" through "6A" stay name searches.
+ */
+export function isRouteDesignation(text: string): boolean {
+  return DESIGNATION.test(text.trim().toLowerCase());
+}
+
+/**
+ * A route written in running text: a number carrying a route type ("I-5", "SR 522", "SR14",
+ * "US26") or following "via" ("via 90"). The lookbehind keeps the type or "via" a whole word, so
+ * the "us" ending "bus" is not a route type, and the number ends at its last digit, so "I-84JCT"
+ * names I-84. Linear on any input: no quantified group repeats, and each separator run is
+ * scanned once from the one route word in front of it.
+ */
+const WRITTEN_DESIGNATION = /(?<![a-z])(?:(i|sr|us|ore)[\s-]*|via\s+)(\d+)/g;
+
+/**
+ * The route designations a corridor name writes, each in a form {@link routeMatches} reads:
+ * "Hazel Dell to I-405-US26" gives `["i-405", "us-26"]`, "Woodinville-Seattle via 90" gives
+ * `["90"]`. A bare number anywhere else is not a designation — a corridor serial ("020 SR14 …"),
+ * a segment label ("1A Lacey-Olympia"), or an ordinal ("171st").
+ */
+export function designationsIn(text: string): string[] {
+  return Array.from(text.toLowerCase().matchAll(WRITTEN_DESIGNATION), ([, type, digits = '']) =>
+    type ? `${type}-${digits}` : digits,
+  );
 }

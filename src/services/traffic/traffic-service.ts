@@ -9,7 +9,7 @@ import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
-import { htmlTextField, textField } from '@/services/text-field.js';
+import { htmlTextField, nonBlank, textField } from '@/services/text-field.js';
 import { wcfDateField } from '@/services/wcf-date.js';
 import { assertUpstreamJson, fetchUpstream, redactUrl } from '@/services/wsdot-http.js';
 import { routeMatches } from './route-match.js';
@@ -72,7 +72,9 @@ export class TrafficApiService {
         return JSON.parse(body) as T;
       },
       {
-        operation: 'TrafficApiService.fetchJson',
+        // Caller-visible on an exhausted error's data.operation, so it names the request, never
+        // this method.
+        operation: `${SERVICE} request`,
         baseDelayMs: 1000,
         signal: ctx.signal,
       },
@@ -255,13 +257,17 @@ export class TrafficApiService {
       const region = params.region.toUpperCase();
       cameras = cameras.filter((c) => c.region?.toUpperCase() === region);
     }
-    if (params.startMilepost != null) {
-      const minMp = params.startMilepost;
-      cameras = cameras.filter((c) => c.milePost == null || c.milePost >= minMp);
-    }
-    if (params.endMilepost != null) {
-      const maxMp = params.endMilepost;
-      cameras = cameras.filter((c) => c.milePost == null || c.milePost <= maxMp);
+    if (params.startMilepost != null || params.endMilepost != null) {
+      // WSDOT places a camera twice: the feed's whole-number milePost and the decimal milepost its
+      // title carries, which can lie miles apart. A camera is kept when either falls in the range.
+      // One with no feed milepost is kept whatever its title says, as before the title was read, so
+      // no milepost search returns fewer cameras than the feed value alone selected.
+      const min = params.startMilepost ?? Number.NEGATIVE_INFINITY;
+      const max = params.endMilepost ?? Number.POSITIVE_INFINITY;
+      const inRange = (mp: number | undefined) => mp != null && mp >= min && mp <= max;
+      cameras = cameras.filter(
+        (c) => c.milePost == null || inRange(c.milePost) || inRange(c.titleMilePost),
+      );
     }
 
     return cameras;
@@ -347,20 +353,56 @@ function normalizeAlert(a: RawHighwayAlert): HighwayAlert {
 
 function normalizeCamera(c: RawCamera): Camera {
   const loc = c.CameraLocation;
+  const title = nonBlank(c.Title);
+  const titleMilePost = title == null ? undefined : parseTitleMilePost(title);
   return {
     ...(c.CameraID != null && { cameraId: c.CameraID }),
-    ...textField('title', c.Title),
+    ...(title != null && { title }),
     ...textField('description', c.Description),
     ...textField('imageUrl', c.ImageURL),
     ...(c.ImageWidth != null && { imageWidth: c.ImageWidth }),
     ...(c.ImageHeight != null && { imageHeight: c.ImageHeight }),
+    ...cameraOwner(c),
     ...textField('roadName', loc?.RoadName),
     ...textField('direction', loc?.Direction),
     ...(loc?.MilePost != null && { milePost: loc.MilePost }),
+    ...(titleMilePost != null && { titleMilePost }),
     ...textField('region', c.Region),
     ...(loc?.Latitude != null && { latitude: loc.Latitude }),
     ...(loc?.Longitude != null && { longitude: loc.Longitude }),
   };
+}
+
+/**
+ * WSDOT's e-mail sign-up service. The Hood Canal Bridge cameras list a sign-up prompt ("Sign up
+ * to receive Hood Canal traffic updates by e-mail.") as their owner, with its URL here.
+ */
+const SIGN_UP_HOST = 'service.govdelivery.com';
+
+/**
+ * The camera's listed owner and owner page, each trimmed and absent when blank. A camera with
+ * neither is a WSDOT camera: every such camera's image is served from images.wsdot.wa.gov. The
+ * pair is dropped when the page is on the sign-up host, whose "owner" is a prompt, not an owner.
+ */
+function cameraOwner(c: RawCamera): Pick<Camera, 'owner' | 'ownerUrl'> {
+  const ownerUrl = nonBlank(c.OwnerURL);
+  if (ownerUrl != null && URL.parse(ownerUrl)?.hostname === SIGN_UP_HOST) return {};
+  return { ...textField('owner', c.CameraOwner), ...(ownerUrl != null && { ownerUrl }) };
+}
+
+/** First `MP <number>` token, any case: "MP 119.5", "Mp 20.3", "@MP 118.16", "MP .7", "MP 4.3B". */
+const TITLE_MP = /\bMP\s*(\d+(?:\.\d+)?|\.\d+)/i;
+/** A bare milepost after "at" or "@", closed by a colon: "I-5 at 133.7:", "I-5 @ 119:". */
+const TITLE_AT_MILEPOST = /(?:\bat|@)\s*(\d+(?:\.\d+)?|\.\d+)\s*:/i;
+
+/**
+ * The milepost a camera title carries — the first MP token, else an "at"/"@" number before a
+ * colon — or `undefined` when it has neither ("SR 7 at 152nd St S"). A trailing letter is not part
+ * of the number ("MP 4.3B" is 4.3). Runs over upstream titles only, never caller text.
+ */
+function parseTitleMilePost(title: string): number | undefined {
+  const digits = (TITLE_MP.exec(title) ?? TITLE_AT_MILEPOST.exec(title))?.[1];
+  return digits == null ? undefined : Number(digits);
 }
 
 // --- Init/accessor pattern ---

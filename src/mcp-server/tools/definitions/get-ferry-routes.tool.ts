@@ -6,25 +6,20 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
-import { FerryApiService, getFerryApiService } from '@/services/ferry/ferry-service.js';
+import { resolveTripDate } from '@/mcp-server/tools/ferry-trip-rejection.js';
+import { CALL_BUDGET_MS, getFerryApiService } from '@/services/ferry/ferry-service.js';
 
 export const getFerryRoutes = tool('wsdot_get_ferry_routes', {
   title: 'Get Ferry Routes',
   description:
-    'Returns the main WSF ferry routes operating on a given date, each with the directed terminal ' +
-    'pairs it serves that day (terminalPairs) — departing and arriving terminal IDs and names, which ' +
-    'are exactly the pairs wsdot_get_ferry_schedule accepts for that date. ' +
-    'Route IDs correspond to impactedRouteIds in ferry alerts from wsdot_get_ferry_alerts, though some ' +
-    'alert route IDs (seasonal, San Juan interisland, or Sidney B.C.) may not appear in this list. ' +
-    'For the full terminal list with coordinates, use wsdot_get_ferry_terminals.',
+    'Returns the main WSF ferry routes operating on a given date, each with the directed terminal pairs it serves that day (terminalPairs) — departing and arriving terminal IDs and names, which are exactly the pairs wsdot_get_ferry_schedule accepts for that date. Route IDs correspond to impactedRouteIds in ferry alerts from wsdot_get_ferry_alerts, though some alert route IDs (seasonal, San Juan interisland, or Sidney B.C.) may not appear in this list. For the full terminal list with coordinates, use wsdot_get_ferry_terminals.',
   annotations: { readOnlyHint: true },
   input: z.object({
     tripDate: z
       .string()
       .optional()
       .describe(
-        'Date for which to list routes, in ISO 8601 format (YYYY-MM-DD). ' +
-          'Defaults to today if omitted.',
+        'Date for which to list routes, in ISO 8601 format (YYYY-MM-DD). Defaults to today if omitted.',
       ),
   }),
   output: z.object({
@@ -75,8 +70,7 @@ export const getFerryRoutes = tool('wsdot_get_ferry_routes', {
               )
               .optional()
               .describe(
-                'Directed terminal pairs this route serves on the requested date; empty when it serves none. ' +
-                  'Absent only when upstream omits the route ID the lookup needs.',
+                'Directed terminal pairs this route serves on the requested date; empty when it serves none. Absent only when upstream omits the route ID the lookup needs.',
               ),
           })
           .describe('A WSF ferry route operating on the requested date.'),
@@ -106,6 +100,15 @@ export const getFerryRoutes = tool('wsdot_get_ferry_routes', {
       thrownBy: 'service',
     },
     {
+      reason: 'retry_deadline_exceeded',
+      code: JsonRpcErrorCode.Timeout,
+      when: `The WSF Ferry API requests the call makes did not finish within its ${CALL_BUDGET_MS / 1000}-second budget, retries included.`,
+      retryable: true,
+      recovery:
+        'Retry in 30 seconds. If the issue persists, check wsdot.wa.gov/ferries for service status.',
+      thrownBy: 'service',
+    },
+    {
       reason: 'invalid_access_code',
       code: JsonRpcErrorCode.ConfigurationError,
       when: 'WSF rejected the request because WSDOT_ACCESS_CODE is missing, invalid, or not registered.',
@@ -125,19 +128,10 @@ export const getFerryRoutes = tool('wsdot_get_ferry_routes', {
   ],
 
   async handler(input, ctx) {
-    let tripDate: string;
-    try {
-      tripDate = input.tripDate?.trim()
-        ? FerryApiService.toFerryDate(input.tripDate.trim())
-        : FerryApiService.todayFerryDate();
-    } catch {
-      throw ctx.fail(
-        'invalid_date',
-        `Invalid date: "${input.tripDate}". Expected YYYY-MM-DD format (e.g. 2026-05-23).`,
-      );
-    }
+    const tripDate = resolveTripDate(input.tripDate, ctx.fail);
 
-    const routes = await getFerryApiService().getRoutes(tripDate, ctx);
+    // One budget for the routes request, the flush-stamp check, and every pair lookup.
+    const routes = await getFerryApiService().getRoutes(tripDate, ctx, Date.now() + CALL_BUDGET_MS);
     ctx.log.info('Ferry routes fetched', { tripDate, count: routes.length });
 
     ctx.enrich({ tripDate, totalCount: routes.length });

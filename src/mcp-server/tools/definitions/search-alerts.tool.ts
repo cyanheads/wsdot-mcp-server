@@ -8,17 +8,24 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { coordinatePair } from '@/mcp-server/tools/coordinate-pair.js';
 import {
-  continuationNotice,
-  fitPageToBudget,
+  clampPageLimit,
   MAX_FILTER_LENGTH,
-  PAGE_BYTE_BUDGET,
+  type PageLimitSpec,
+  pageLimitSchema,
   renderPage,
-} from '@/mcp-server/tools/page-budget.js';
+  slicePage,
+  withClampNotice,
+  withContinuation,
+} from '@/mcp-server/tools/paging.js';
 import { byIdThenContent } from '@/services/traffic/stable-order.js';
 import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
 
-const DEFAULT_LIMIT = 20;
-const MAX_LIMIT = 500;
+const LIMIT: PageLimitSpec = {
+  tool: 'wsdot_search_alerts',
+  unit: 'alerts',
+  defaultLimit: 20,
+  maxLimit: 500,
+};
 
 /** The region names the alerts feed carries in `Region`. */
 const REGIONS = ['Eastern', 'North Central', 'Northwest', 'Olympic', 'South Central', 'Southwest'];
@@ -87,14 +94,7 @@ const AlertSchema = z
 
 export const searchAlerts = tool('wsdot_search_alerts', {
   title: 'Search Highway Alerts',
-  description:
-    'Returns active WA highway alerts: incidents, construction, closures, and restrictions. ' +
-    'Filter by state route ("I-90", "90", "SR 520", or "520" all work), ' +
-    'WSDOT region (Northwest, Olympic, Southwest, South Central, North Central, Eastern), ' +
-    "or milepost range, matched against the alert's full extent. " +
-    'Omit all filters to return all current statewide alerts. ' +
-    'Results are ordered by alertId and paged — pass offset/limit to page through the full set. ' +
-    `A page ends at limit or at a ${PAGE_BYTE_BUDGET.toLocaleString('en-US')}-byte response budget, whichever comes first; the notice reports the next offset.`,
+  description: `Returns active WA highway alerts: incidents, construction, closures, and restrictions. Filter by state route ("I-90", "90", "SR 520", or "520" all work), WSDOT region (Northwest, Olympic, Southwest, South Central, North Central, Eastern), or milepost range, matched against the alert's full extent. Omit all filters to return all current statewide alerts. Results are ordered by alertId and paged — pass offset/limit to page through the full set.`,
   annotations: { readOnlyHint: true },
   input: z.object({
     stateRoute: z
@@ -129,15 +129,7 @@ export const searchAlerts = tool('wsdot_search_alerts', {
       .min(0)
       .optional()
       .describe('Zero-based index of the first alert to return, for paging. Defaults to 0.'),
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(MAX_LIMIT)
-      .optional()
-      .describe(
-        `Maximum alerts to return in this page (1–${MAX_LIMIT}). Defaults to ${DEFAULT_LIMIT}. A page of long alerts can end sooner, at the ${PAGE_BYTE_BUDGET.toLocaleString('en-US')}-byte response budget.`,
-      ),
+    limit: pageLimitSchema(LIMIT),
   }),
   output: z.object({
     alerts: z.array(AlertSchema).describe('Matching highway alerts.'),
@@ -164,7 +156,7 @@ export const searchAlerts = tool('wsdot_search_alerts', {
       .string()
       .optional()
       .describe(
-        'Informational note about the page window, or guidance when no alerts matched the filters or the offset ran past the end.',
+        'Informational note about the page window, or guidance when no alerts matched the filters or the offset ran past the end. Ends with the applied limit when a larger one was clamped.',
       ),
   },
 
@@ -263,34 +255,38 @@ export const searchAlerts = tool('wsdot_search_alerts', {
     // stays the full match count so the agent knows how much lies beyond this page.
     const totalCount = matched.length;
     const offset = input.offset ?? 0;
-    const limit = input.limit ?? DEFAULT_LIMIT;
-    const requested = matched.slice(offset, offset + limit);
-    const alerts = fitPageToBudget(requested, renderAlert, appliedFilters);
-    const hasMore = offset + alerts.length < totalCount;
-    const nextOffset = hasMore ? offset + alerts.length : null;
+    const page = clampPageLimit(LIMIT, input.limit, ctx);
+    const { rows: alerts, hasMore, nextOffset } = slicePage(matched, offset, page.limit);
 
-    ctx.log.info('Alerts fetched', { totalCount, offset, limit, returned: alerts.length });
+    ctx.log.info('Alerts fetched', {
+      totalCount,
+      offset,
+      limit: page.limit,
+      returned: alerts.length,
+    });
 
     ctx.enrich({ totalCount, appliedFilters, nextOffset, hasMore });
 
     if (totalCount === 0) {
       const hasFilters = Object.keys(appliedFilters).length > 0;
       ctx.enrich.notice(
-        hasFilters
-          ? 'No alerts matched the applied filters. Try removing the stateRoute, region, or milepost filters to broaden results.'
-          : 'No active highway alerts statewide at this time.',
+        withClampNotice(
+          hasFilters
+            ? 'No alerts matched the applied filters. Try removing the stateRoute, region, or milepost filters to broaden results.'
+            : 'No active highway alerts statewide at this time.',
+          page,
+        ),
       );
     } else if (alerts.length === 0) {
       ctx.enrich.notice(
-        `Offset ${offset} is past the end of ${totalCount} matching alerts. Use an offset between 0 and ${totalCount - 1}.`,
+        withClampNotice(
+          `Offset ${offset} is past the end of ${totalCount} matching alerts. Use an offset between 0 and ${totalCount - 1}.`,
+          page,
+        ),
       );
     } else {
       const shown = `Showing alerts ${offset + 1}–${offset + alerts.length} of ${totalCount}.`;
-      ctx.enrich.notice(
-        nextOffset === null
-          ? shown
-          : `${shown} ${continuationNotice(nextOffset, alerts.length < requested.length)}`,
-      );
+      ctx.enrich.notice(withClampNotice(withContinuation(shown, nextOffset), page));
     }
 
     return { alerts };
@@ -304,15 +300,19 @@ export const searchAlerts = tool('wsdot_search_alerts', {
   },
 });
 
-/** One alert's `content[]` block — shared by `format()` and the page-budget charge. */
+/** A line break in alert text: the feed writes CRLF, and a lone CR or LF reads the same. */
+const LINE_BREAK = /\r\n|\r|\n/;
+
+/** One alert's `content[]` block, as `format()` renders it. */
 function renderAlert(a: z.infer<typeof AlertSchema>): string {
   const lines: string[] = [];
   const id = a.alertId != null ? ` #${a.alertId}` : '';
   // A headline can run to several paragraphs; only its first line belongs in the heading,
   // otherwise the trailing alert ID lands at the end of the last paragraph.
-  const [heading, ...restOfHeadline] = (a.headlineDescription ?? '').split('\n');
-  lines.push(`### ${escapeMarkdownInline(heading || 'Alert')}${id}`);
-  if (restOfHeadline.length > 0) lines.push(escapeMarkdownInline(restOfHeadline.join('\n')));
+  const [heading = '', ...restOfHeadline] = (a.headlineDescription ?? '').trim().split(LINE_BREAK);
+  lines.push(`### ${escapeMarkdownInline(heading.trim() || 'Alert')}${id}`);
+  const body = plainTextLines(restOfHeadline);
+  if (body) lines.push(body);
   if (a.eventCategory) lines.push(`**Category:** ${escapeMarkdownInline(a.eventCategory)}`);
   if (a.eventStatus) lines.push(`**Status:** ${escapeMarkdownInline(a.eventStatus)}`);
   if (a.priority) lines.push(`**Priority:** ${escapeMarkdownInline(a.priority)}`);
@@ -344,9 +344,27 @@ function renderAlert(a: z.infer<typeof AlertSchema>): string {
     const endCoords = coordinatePair(end.latitude, end.longitude);
     if (endCoords) lines.push(`**End Coords:** ${endCoords}`);
   }
-  if (a.extendedDescription) lines.push(escapeMarkdownInline(a.extendedDescription));
+  const description = plainTextLines((a.extendedDescription ?? '').split(LINE_BREAK));
+  if (description) lines.push(description);
   if (a.startTime) lines.push(`**Start:** ${escapeMarkdownInline(a.startTime)}`);
   if (a.endTime) lines.push(`**End:** ${escapeMarkdownInline(a.endTime)}`);
   if (a.lastUpdatedTime) lines.push(`**Updated:** ${escapeMarkdownInline(a.lastUpdatedTime)}`);
   return lines.join('\n');
+}
+
+/**
+ * Lines of upstream plain text — the headline after its heading, or the extended description — as
+ * Markdown. Each line is trimmed and escaped on its own, and consecutive lines join as one
+ * paragraph; a run of blank lines between text stays one paragraph break, and blank lines at
+ * either end are dropped. Escaping the lines as one value would turn each break into a backslash
+ * hard break, a blank line into a lone `\` line, and a line's edge spaces into `&#32;`.
+ */
+function plainTextLines(lines: readonly string[]): string {
+  const out: string[] = [];
+  for (const line of lines.map((l) => l.trim())) {
+    if (line) out.push(escapeMarkdownInline(line));
+    else if (out.length > 0 && out.at(-1) !== '') out.push('');
+  }
+  if (out.at(-1) === '') out.pop();
+  return out.join('\n');
 }
