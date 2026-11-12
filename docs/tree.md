@@ -1,6 +1,6 @@
 # wsdot-mcp-server - Directory Structure
 
-Generated on: 2026-10-28 07:30:13
+Generated on: 2026-11-12 13:10:33
 
 ```text
 wsdot-mcp-server/
@@ -29,6 +29,7 @@ wsdot-mcp-server/
 │   ├── 0.3.x/
 │   ├── 0.4.x/
 │   ├── 0.5.x/
+│   ├── 0.6.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -156,6 +157,7 @@ wsdot-mcp-server/
 │   │       ├── definitions/
 │   │       │   ├── get-border-waits.tool.ts
 │   │       │   ├── get-ferry-alerts.tool.ts
+│   │       │   ├── get-ferry-fares.tool.ts
 │   │       │   ├── get-ferry-routes.tool.ts
 │   │       │   ├── get-ferry-schedule.tool.ts
 │   │       │   ├── get-ferry-terminals.tool.ts
@@ -168,7 +170,9 @@ wsdot-mcp-server/
 │   │       │   ├── search-alerts.tool.ts
 │   │       │   └── search-cameras.tool.ts
 │   │       ├── coordinate-pair.ts
-│   │       └── page-budget.ts
+│   │       ├── ferry-trip-rejection.ts
+│   │       ├── local-time.ts
+│   │       └── paging.ts
 │   ├── services/
 │   │   ├── ferry/
 │   │   │   ├── ferry-service.ts
@@ -184,9 +188,29 @@ wsdot-mcp-server/
 │   │   └── wsdot-http.ts
 │   └── index.ts
 ├── tests/
+│   ├── config/
+│   │   └── server-config.test.ts
+│   ├── fixtures/
+│   │   ├── wsf-fares/
+│   │   │   ├── farelineitems-1-10-oneway.json
+│   │   │   ├── farelineitems-1-10-roundtrip.json
+│   │   │   ├── farelineitems-10-1-oneway.json
+│   │   │   ├── farelineitems-3-7-oneway.json
+│   │   │   ├── farelineitems-7-3-oneway.json
+│   │   │   └── farelineitems-7-3-roundtrip.json
+│   │   └── wsf-schedule/
+│   │       ├── schedule-2026-11-11-7-3.json
+│   │       ├── schedule-2026-11-13-22-20.json
+│   │       ├── schedule-2026-11-14-22-20.json
+│   │       ├── schedule-2026-11-14-7-3.json
+│   │       ├── schedule-2026-11-15-7-3.json
+│   │       └── scheduletoday-2026-11-12-7-3-true.json
 │   ├── helpers/
 │   │   ├── assertions.ts
-│   │   └── pagination.ts
+│   │   ├── pagination.ts
+│   │   ├── timing.ts
+│   │   ├── wsf-fares.ts
+│   │   └── wsf-schedule.ts
 │   ├── prompts/
 │   ├── resources/
 │   ├── scripts/
@@ -204,13 +228,16 @@ wsdot-mcp-server/
 │   └── tools/
 │       ├── blank-string-wire.test.ts
 │       ├── coordinate-pair.test.ts
+│       ├── ferry-fares.test.ts
 │       ├── ferry-tools.test.ts
+│       ├── ferry-trip-rejection.test.ts
 │       ├── ferry-wire.test.ts
 │       ├── input-strictness.test.ts
+│       ├── local-time.test.ts
 │       ├── markdown-parity.test.ts
-│       ├── page-budget.test.ts
+│       ├── paging.test.ts
 │       ├── traffic-filters-upstream.test.ts
-│       ├── traffic-page-budget.test.ts
+│       ├── traffic-paging.test.ts
 │       └── traffic-tools.test.ts
 ├── .dockerignore
 ├── .env.example

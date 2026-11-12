@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.6.0](changelog/0.6.x/0.6.0.md) — 2026-11-12
+
+Adds wsdot_get_ferry_fares and a Pacific local time beside every ferry time. Paged tools end a page only at limit, and an over-maximum limit is clamped with a notice. Cameras gain owner and title milepost. Fixes post-midnight remaining sailings, route filtering, alert text, and ferry call deadlines.
+
 ## [0.5.0](changelog/0.5.x/0.5.0.md) — 2026-10-28
 
 Ferry trip guidance is available as an MCP skill resource, with updated framework behavior and desktop bundle packaging.
