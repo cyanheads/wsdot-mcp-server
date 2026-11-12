@@ -12,10 +12,7 @@ import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
 export const getMountainPasses = tool('wsdot_get_mountain_passes', {
   title: 'Get Mountain Pass Conditions',
   description:
-    'Returns current road conditions for all Washington State mountain passes: status, weather, ' +
-    'road condition, traction laws, temperature, and elevation. Includes all 16 passes ' +
-    '(Snoqualmie, Stevens, White, Blewett, Cayuse, etc.). Use for "is the pass open?", ' +
-    'traction law status, or winter driving planning.',
+    'Returns current road conditions for all Washington State mountain passes: status, weather, road condition, traction laws, temperature, and elevation. Includes all 16 passes (Snoqualmie, Stevens, White, Blewett, Cayuse, etc.). Use for "is the pass open?", traction law status, or winter driving planning.',
   annotations: { readOnlyHint: true },
   input: z.object({}),
   output: z.object({
@@ -56,8 +53,7 @@ export const getMountainPasses = tool('wsdot_get_mountain_passes', {
                   .string()
                   .optional()
                   .describe(
-                    'Restriction / traction-law text (e.g. "Traction Tires Required, Chains Required (Except All Wheel Drive)"). ' +
-                      'Reads "No current information available" or "No restrictions" when nothing is in effect.',
+                    'Restriction / traction-law text (e.g. "Traction Tires Required, Chains Required (Except All Wheel Drive)"). Reads "No current information available" or "No restrictions" when nothing is in effect.',
                   ),
                 travelDirection: z
                   .string()

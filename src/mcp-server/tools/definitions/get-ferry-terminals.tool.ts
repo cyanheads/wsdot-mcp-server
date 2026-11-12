@@ -12,10 +12,7 @@ import { getFerryApiService } from '@/services/ferry/ferry-service.js';
 export const getFerryTerminals = tool('wsdot_get_ferry_terminals', {
   title: 'Get Ferry Terminals',
   description:
-    'Returns all WSF ferry terminals with their numeric IDs, names, abbreviations, and coordinates. ' +
-    'Call this first to resolve human-readable terminal names (e.g. "Bainbridge Island", ' +
-    '"Seattle", "Kingston") to the numeric terminal IDs required by the schedule and space tools. ' +
-    'The terminal list is small (20 terminals) and rarely changes.',
+    'Returns all WSF ferry terminals with their numeric IDs, names, abbreviations, and coordinates. Call this first to resolve human-readable terminal names (e.g. "Bainbridge Island", "Seattle", "Kingston") to the numeric terminal IDs required by the schedule and space tools. The terminal list is small (20 terminals) and rarely changes.',
   annotations: { readOnlyHint: true },
   input: z.object({}),
   output: z.object({

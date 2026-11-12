@@ -12,14 +12,7 @@ import { getTrafficApiService } from '@/services/traffic/traffic-service.js';
 export const getBorderWaits = tool('wsdot_get_border_waits', {
   title: 'Get Border Wait Times',
   description:
-    'Returns current vehicle wait times at WA→Canada land border crossings: I-5 (Peace Arch, Blaine), ' +
-    'SR 543 (Pacific Highway, Blaine), SR 539 (Lynden), and SR 9 (Sumas). Each crossing reports a ' +
-    'general-purpose lane and a Nexus lane; SR 539 adds a truck lane and SR 543 adds truck and ' +
-    'FAST truck lanes — eleven entries in crossings[], one per lane. ' +
-    'crossingName is a route code (e.g. "I5", "I5Nexus", "SR543Trucks"); the readable name is in ' +
-    'location.description. Wait times are in minutes. A crossing reporting no current data is still ' +
-    'returned — only waitTimeInMinutes is omitted. ' +
-    'Use for "how long is the border wait?" questions.',
+    'Returns current vehicle wait times at WA→Canada land border crossings: I-5 (Peace Arch, Blaine), SR 543 (Pacific Highway, Blaine), SR 539 (Lynden), and SR 9 (Sumas). Each crossing reports a general-purpose lane and a Nexus lane; SR 539 adds a truck lane and SR 543 adds truck and FAST truck lanes — eleven entries in crossings[], one per lane. crossingName is a route code (e.g. "I5", "I5Nexus", "SR543Trucks"); the readable name is in location.description. Wait times are in minutes. A crossing reporting no current data is still returned — only waitTimeInMinutes is omitted. Use for "how long is the border wait?" questions.',
   annotations: { readOnlyHint: true },
   input: z.object({}),
   output: z.object({
@@ -31,15 +24,13 @@ export const getBorderWaits = tool('wsdot_get_border_waits', {
               .string()
               .optional()
               .describe(
-                'Route-code crossing identifier (e.g. "I5", "I5Nexus", "SR539", "SR9"). ' +
-                  'See location.description for the readable name.',
+                'Route-code crossing identifier (e.g. "I5", "I5Nexus", "SR539", "SR9"). See location.description for the readable name.',
               ),
             waitTimeInMinutes: z
               .number()
               .optional()
               .describe(
-                'Current vehicle wait time in minutes. Omitted when the crossing reports no data ' +
-                  '(WSDOT emits a -1 sentinel for closed/unmonitored crossings).',
+                'Current vehicle wait time in minutes. Omitted when the crossing reports no data (WSDOT emits a -1 sentinel for closed/unmonitored crossings).',
               ),
             updateTime: z
               .string()
