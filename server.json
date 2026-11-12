@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.cyanheads/wsdot-mcp-server",
-  "description": "WA highway conditions, ferry schedules, vessel locations, toll rates, and border waits via MCP.",
+  "description": "WA highway conditions, ferry schedules and fares, vessel locations, tolls, and border waits via MCP.",
   "repository": {
     "url": "https://github.com/cyanheads/wsdot-mcp-server",
     "source": "github"
@@ -26,6 +26,13 @@
           "description": "WSDOT Traveler API access code. Register at wsdot.wa.gov/Traffic/api/.",
           "format": "string",
           "isRequired": true
+        },
+        {
+          "name": "WSDOT_CLAMP_LIMITS",
+          "description": "Clamp a paged tool's limit above its maximum (500; 20 for terminal space) to that maximum, with a notice. Set false to reject it instead.",
+          "format": "string",
+          "isRequired": false,
+          "default": "true"
         },
         {
           "name": "MCP_LOG_LEVEL",
@@ -57,6 +64,13 @@
           "description": "WSDOT Traveler API access code. Register at wsdot.wa.gov/Traffic/api/.",
           "format": "string",
           "isRequired": true
+        },
+        {
+          "name": "WSDOT_CLAMP_LIMITS",
+          "description": "Clamp a paged tool's limit above its maximum (500; 20 for terminal space) to that maximum, with a notice. Set false to reject it instead.",
+          "format": "string",
+          "isRequired": false,
+          "default": "true"
         },
         {
           "name": "MCP_HTTP_HOST",

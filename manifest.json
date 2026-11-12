@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "wsdot-mcp-server",
   "version": "0.5.0",
-  "description": "Query WA highway conditions, ferry schedules, vessel locations, toll rates, border waits, and alerts via MCP. STDIO or Streamable HTTP.",
+  "description": "Query WA highway conditions, ferry schedules and fares, vessel locations, toll rates, border waits, and alerts via MCP. STDIO or Streamable HTTP.",
   "author": { "name": "cyanheads" },
   "repository": {
     "type": "git",
@@ -20,7 +20,8 @@
         "MCP_TRANSPORT_TYPE": "stdio",
         "MCP_AUTH_MODE": "none",
         "NODE_ENV": "production",
-        "WSDOT_ACCESS_CODE": "${user_config.WSDOT_ACCESS_CODE}"
+        "WSDOT_ACCESS_CODE": "${user_config.WSDOT_ACCESS_CODE}",
+        "WSDOT_CLAMP_LIMITS": "${user_config.WSDOT_CLAMP_LIMITS}"
       }
     }
   },
@@ -36,6 +37,13 @@
       "description": "WSDOT Traveler API access code. Register at wsdot.wa.gov/Traffic/api/.",
       "required": true,
       "sensitive": false
+    },
+    "WSDOT_CLAMP_LIMITS": {
+      "type": "string",
+      "title": "Clamp page limits",
+      "description": "Clamp a paged tool's limit above its maximum (500; 20 for terminal space) to that maximum, with a notice. Set false to reject it instead.",
+      "default": "true",
+      "required": false
     }
   }
 }

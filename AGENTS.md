@@ -2,8 +2,8 @@
 
 **Server:** @cyanheads/wsdot-mcp-server
 **Version:** 0.5.0
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.18`
-**Engines:** Bun ≥1.4.0, Node ≥24.0.0
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.22`
+**Engines:** Bun ≥1.4.4, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/server` ^2.4.0 (protocol revisions 2026-07-28 and 2025-*)
 **Zod:** ^4.6.7
 
@@ -169,15 +169,15 @@ See framework CLAUDE.md and the `api-errors` skill for the full auto-classificat
 
 ```text
 src/
-  index.ts                              # createApp() entry point — 12 tools, 2 services
+  index.ts                              # createApp() entry point — 13 tools, 2 services
   config/
-    server-config.ts                    # WSDOT_ACCESS_CODE env var (Zod schema)
+    server-config.ts                    # WSDOT_ACCESS_CODE (Zod schema) and WSDOT_CLAMP_LIMITS (read on every call) env vars
   services/
     traffic/
       traffic-service.ts                # WSDOT Traffic API — mountain passes, alerts, travel times, toll rates, border waits, cameras
       types.ts                          # Traffic domain types
     ferry/
-      ferry-service.ts                  # WSF Ferry API — terminals, routes, schedule, vessel locations, space, alerts
+      ferry-service.ts                  # WSF Ferry API — terminals, routes, schedule, fares, vessel locations, space, alerts
       types.ts                          # Ferry domain types
   mcp-server/
     tools/definitions/
@@ -190,9 +190,13 @@ src/
       get-ferry-terminals.tool.ts       # wsdot_get_ferry_terminals
       get-ferry-routes.tool.ts          # wsdot_get_ferry_routes
       get-ferry-schedule.tool.ts        # wsdot_get_ferry_schedule
+      get-ferry-fares.tool.ts           # wsdot_get_ferry_fares
       get-vessel-locations.tool.ts      # wsdot_get_vessel_locations
       get-terminal-space.tool.ts        # wsdot_get_terminal_space
       get-ferry-alerts.tool.ts          # wsdot_get_ferry_alerts
+    tools/ferry-trip-rejection.ts       # Shared schedule/fares mapping of a WSF trip rejection to its typed failure
+    tools/local-time.ts                 # content[] rendering of a ferry time: Pacific `…Local` value, then UTC
+    tools/paging.ts                     # Paged tools' limit schema, clamp, page text, filter length cap
 ```
 
 ---
@@ -210,7 +214,7 @@ src/
 
 ## Skills
 
-Development skills live in `framework-skills/`; read the matching skill before working, and use `bun run list-skills` for the registry. Root `skills/` is the published tree for agents calling this server. `skills/wsdot-guide/SKILL.md` guides ferry trip decisions across schedules, alerts, space, and vessel positions. It ships in plugin installs, npm, Docker, and MCPB, and `createApp({ skills: 'skills' })` serves it over MCP. `lint:packaging` validates the tree. Maintenance syncs development skills only; published skills are author-managed.
+Development skills live in `framework-skills/`; read the matching skill before working, and use `bun run list-skills` for the registry. Root `skills/` is the published tree for agents calling this server. `skills/wsdot-guide/SKILL.md` guides ferry trip decisions across schedules, fares, alerts, space, and vessel positions. It ships in plugin installs, npm, Docker, and MCPB, and `createApp({ skills: 'skills' })` serves it over MCP. `lint:packaging` validates the tree. Maintenance syncs development skills only; published skills are author-managed.
 
 **Agent skill directory:** Copy skills into the directory your agent discovers (Claude Code: `.claude/skills/`, others: equivalent). Skills then load as context without referencing `framework-skills/` paths. After framework updates, run the `maintenance` skill — Phase B re-syncs the agent directory.
 
@@ -292,7 +296,7 @@ When you complete a skill's checklist, check the boxes and add a completion time
 
 `mcpb pack` reads `.mcpbignore`, not `.gitignore`. Keep exclusions root-anchored so `/docs/` excludes project docs without dropping dependency docs; root `skills/` must ship. The cleaner also strips node-gyp build output and framework build-only files from dependencies. Rebuild an older bundle after a framework update; `lint:packaging` checks its contents.
 
-`bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. The pack step is followed by `scripts/clean-mcpb.ts`, which prunes dev dependencies (`mcpb clean`) and strips dependency-shipped agent docs (`framework-skills/`, `skills/`, `.claude/`, `.agents/`, `SKILL.md`), platform-specific native bindings, node-gyp build output, and build-only package files from `node_modules/**`. Root-anchored `.mcpbignore` patterns cannot reach these dependency paths. MCPB is stdio-only — HTTP and Cloudflare Workers deployments are unaffected. Consumers who don't need it can delete `manifest.json` and `.mcpbignore`; `lint:packaging` skips cleanly.
+`bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. The pack step is followed by `scripts/clean-mcpb.ts`, which prunes dev dependencies (`mcpb clean`) and strips dependency-shipped agent docs (`framework-skills/`, `skills/`, `.claude/`, `.agents/`, `AGENTS.md`, and `CLAUDE.md` at a package's root, and `SKILL.md` anywhere; a `skills/` deeper in a package is runtime code and stays), platform-specific native bindings, node-gyp build output, and build-only package files from `node_modules/**`. Root-anchored `.mcpbignore` patterns cannot reach these dependency paths. MCPB is stdio-only — HTTP and Cloudflare Workers deployments are unaffected. Consumers who don't need it can delete `manifest.json` and `.mcpbignore`; `lint:packaging` skips cleanly.
 
 **Adding an env var requires both files:** `server.json` (registry discovery, `environmentVariables[]`) and `manifest.json` (bundle install UX, `mcp_config.env` + `user_config`). `lint:packaging` (run by `devcheck`) verifies the env var names match, that every `user_config` option is wired into `mcp_config.env` as `"X": "${user_config.X}"` (the host substitutes nothing else — `"${X}"` reaches the server as that literal string), and that an optional string option carries `"default": ""`.
 

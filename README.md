@@ -1,7 +1,7 @@
 <div align="center">
   <h1>@cyanheads/wsdot-mcp-server</h1>
-  <p><b>Query WA highway conditions, ferry schedules, vessel locations, toll rates, border waits, and alerts via MCP. STDIO or Streamable HTTP.</b>
-  <div>12 Tools • 1 Skill Resource</div>
+  <p><b>Query WA highway conditions, ferry schedules and fares, vessel locations, toll rates, border waits, and alerts via MCP. STDIO or Streamable HTTP.</b>
+  <div>13 Tools • 1 Skill Resource</div>
   </p>
 </div>
 
@@ -25,7 +25,7 @@
 
 ## Overview
 
-Washington State roads and ferries from WSDOT. Check mountain passes, travel times, tolls, border waits, alerts, and traffic cameras, and track ferry schedules, vessel locations, and terminal space.
+Washington State roads and ferries from WSDOT. Check mountain passes, travel times, tolls, border waits, alerts, and traffic cameras, and track ferry schedules, fares, vessel locations, and terminal space.
 
 ### Tools
 
@@ -37,24 +37,25 @@ Washington State roads and ferries from WSDOT. Check mountain passes, travel tim
 | `wsdot_get_toll_rates` | Dynamic toll rates for WA express lanes and tolled facilities — SR 99, SR 167 HOT, I-405 Express, SR 509, SR 520 — filterable by route. |
 | `wsdot_get_border_waits` | Current vehicle wait times at all WA/Canada land border crossings. |
 | `wsdot_search_cameras` | Highway camera metadata and image URLs, filterable by state route, region, milepost range, and title words. |
-| `wsdot_get_ferry_terminals` | All WSF ferry terminals with numeric IDs needed for schedule and space lookups, plus coordinates. |
+| `wsdot_get_ferry_terminals` | All WSF ferry terminals with numeric IDs needed for schedule, fare, and space lookups, plus coordinates. |
 | `wsdot_get_ferry_routes` | WSF routes operating on a given date — route ID, abbreviation, description, and the terminal pairs each serves, for route discovery, schedule lookups, and ferry-alert cross-reference. |
 | `wsdot_get_ferry_schedule` | Departure times for a specific WSF route — today-remaining or full-day future mode — with each sailing's vessel, loading rule, and notes. |
+| `wsdot_get_ferry_fares` | WSF fares for a terminal pair on a date — passenger, vehicle and driver by length, motorcycle, bicycle, and multi-ride card line items, one way or round trip, with WSF's statement of which terminal collects which fares. |
 | `wsdot_get_vessel_locations` | Real-time AIS positions, speed, heading, ETA, and dock status for all active WSF vessels. |
-| `wsdot_get_terminal_space` | Drive-up and reservable vehicle space available at WSF terminals for upcoming sailings. |
+| `wsdot_get_terminal_space` | Drive-up and reservable vehicle space available for upcoming sailings, at the terminals WSF reports space for. |
 | `wsdot_get_ferry_alerts` | Active WSF service disruptions and bulletins with impacted route IDs. |
 
 ### Resources
 
 | Resource | Description |
 |:---|:---|
-| `skill://wsdot-guide/SKILL.md` | Ferry trip guidance for combining schedules, alerts, space, and vessel positions. |
+| `skill://wsdot-guide/SKILL.md` | Ferry trip guidance for combining schedules, fares, alerts, space, and vessel positions. |
 
 ## Capability reference
 
 ### `skill://wsdot-guide/SKILL.md` <sub>resource</sub>
 
-- Ferry trip guidance for combining schedules, service alerts, live vehicle space, and vessel positions. Also included in plugin installs as `wsdot-guide`.
+- Ferry trip guidance for combining schedules, fares, service alerts, live vehicle space, and vessel positions. Also included in plugin installs as `wsdot-guide`.
 
 ### `wsdot_get_mountain_passes` <sub>tool</sub>
 
@@ -65,21 +66,22 @@ Washington State roads and ferries from WSDOT. Check mountain passes, travel tim
 
 ### `wsdot_search_alerts` <sub>tool</sub>
 
-- Optional `stateRoute`, `region` (Northwest, Olympic, Southwest, South Central, North Central, Eastern), and `startMilepost` / `endMilepost` — an alert matches when its extent overlaps the range; omit all for every statewide alert. Ordered by `alertId`, paged (default 20, max 500)
+- Optional `stateRoute`, `region` (Northwest, Olympic, Southwest, South Central, North Central, Eastern), and `startMilepost` / `endMilepost` — an alert matches when its extent overlaps the range; omit all for every statewide alert. Ordered by `alertId`, paged (default 20; a larger `limit` returns at most 500 with a notice)
+- `headlineDescription` and `extendedDescription` render in `content[]` one line at a time, each trimmed and escaped, with a run of blank lines becoming one paragraph break; the headline's first line is the alert's heading. `structuredContent` keeps the raw text
 - An unknown region fails as `invalid_region` and a start above the end as `invalid_milepost_range`, each with a recovery hint
 
 ---
 
 ### `wsdot_get_travel_times` <sub>tool</sub>
 
-- Optional `route` — a route (`"I-5"`, `"SR 520"`) returns every corridor measured on it, any other text matches corridor names (`"Everett"`); paged (default 50, max 500)
+- Optional `route` — a route designation (`"I-5"`, `"5"`, `"SR 520"`) returns corridors that start or end on that route or write it in their name (`"via 520"`), never digits inside another number (`"5"` does not match I-405 or SR 522); other text matches corridor names (`"Everett"`, `"1A"`), and the first number in it, read as a route, also matches every corridor that starts or ends on that route, in both directions — `"I-405 southbound"` returns northbound I-405 corridors too, since the direction word is not applied. A designation that matches nothing gets a notice saying so. Paged (default 50; a larger `limit` returns at most 500 with a notice)
 - Each corridor reports current and average minutes — current above average means congestion, and the delta is the delay. A reversible express-lane corridor closed in the queried direction omits its figures rather than reporting zero
 
 ---
 
 ### `wsdot_get_toll_rates` <sub>tool</sub>
 
-- Covers SR 99 (WSDOT Tunnel), SR 167 HOT Lanes, I-405 Express Lanes, the SR 509 tolled segment, and the SR 520 Bridge. Optional `stateRoute` matches the posted designation (`"I-405"`, `"SR 520"`); a route with no tolled facility returns an empty page whose notice names the tolled routes. Paged (default 50, max 500)
+- Covers SR 99 (WSDOT Tunnel), SR 167 HOT Lanes, I-405 Express Lanes, the SR 509 tolled segment, and the SR 520 Bridge. Optional `stateRoute` matches the posted designation (`"I-405"`, `"SR 520"`); a route with no tolled facility returns an empty page whose notice names the tolled routes. Paged (default 50; a larger `limit` returns at most 500 with a notice)
 - Each row leads with its `startLocationName → endLocationName` segment. `stateRoute` is the feed's bare zero-padded number (`"099"`) and `travelDirection` the feed's code, which SR 99, SR 509, and SR 520 fix per facility — read direction from the segment's ends
 
 ---
@@ -93,30 +95,41 @@ Washington State roads and ferries from WSDOT. Check mountain passes, travel tim
 
 ### `wsdot_search_cameras` <sub>tool</sub>
 
-- Optional `stateRoute`, `region` code (`NW`, `SW`, `OL`, `ER`, `SC`, `NC`, `OS` for the Oregon TripCheck cameras, `WA` for airport cameras), `startMilepost` / `endMilepost`, and `titleContains` (every word, any order). Ordered by `cameraId`, paged (default 50, max 500)
-- Returns metadata and image URLs, not image bytes (camera images are copyright WSDOT). An unknown region fails as `invalid_region` and a reversed range as `invalid_milepost_range`
+- Optional `stateRoute`, `region` code (`NW`, `SW`, `OL`, `ER`, `SC`, `NC`, `OS` for the Oregon TripCheck cameras, `WA` for airport cameras), `startMilepost` / `endMilepost`, and `titleContains` (every word, any order). Ordered by `cameraId`, paged (default 50; a larger `limit` returns at most 500 with a notice)
+- A milepost bound matches the feed's `milePost` or the milepost written in the title (`titleMilePost`); a camera with no `milePost` is always included. On the `Airports` road name, `milePost` is a position in WSDOT's airport list (1 = Anacortes, 4 = Bellingham), not a milepost
+- Returns metadata and image URLs, not image bytes. Each image belongs to the owner the camera lists (`owner`, `ownerUrl`), and to WSDOT when none is listed. An unknown region fails as `invalid_region` and a reversed range as `invalid_milepost_range`
 
 ---
 
 ### `wsdot_get_ferry_terminals` <sub>tool</sub>
 
 - No input — all 20 WSF terminals, each with its numeric ID, abbreviation, and latitude/longitude
-- Resolves names ("Bainbridge Island", "Seattle") to the IDs `wsdot_get_ferry_schedule` and `wsdot_get_terminal_space` take
+- Resolves names ("Bainbridge Island", "Seattle") to the IDs `wsdot_get_ferry_schedule`, `wsdot_get_ferry_fares`, and `wsdot_get_terminal_space` take
 
 ---
 
 ### `wsdot_get_ferry_routes` <sub>tool</sub>
 
 - Optional `tripDate` (`YYYY-MM-DD`, default today); a date outside the range WSF has published fails as `invalid_date` stating that range
-- Each route carries its ID (the `impactedRouteIds` of `wsdot_get_ferry_alerts`), abbreviation, description, and `terminalPairs` — the departing → arriving pairs `wsdot_get_ferry_schedule` accepts that day
+- Each route carries its ID (the `impactedRouteIds` of `wsdot_get_ferry_alerts`), abbreviation, description, and `terminalPairs` — the departing → arriving pairs `wsdot_get_ferry_schedule` and `wsdot_get_ferry_fares` accept that day. The whole call runs under a 50-second deadline; one that spends it fails as `retry_deadline_exceeded` with a retry hint
 
 ---
 
 ### `wsdot_get_ferry_schedule` <sub>tool</sub>
 
 - Requires `departingTerminalId` and `arrivingTerminalId` (a pair from `terminalPairs` on `wsdot_get_ferry_routes`); optional `tripDate` (default today) and `remainingOnly` (future departures only, today only)
-- Each sailing carries `departureTime` / `arrivalTime` in ISO 8601 **UTC** (`tripDate` is the Pacific service day), `vesselId`, `loadingRule`, and indexes into the pair's `annotations`. There is no cancellation flag — WSF drops a cancelled sailing, so check `wsdot_get_ferry_alerts`
-- A pair with no schedule that day fails as `invalid_terminal_pair` and a date with none as `invalid_date`, never as an empty schedule
+- Each sailing carries `departureTime` / `arrivalTime` in ISO 8601 **UTC** (`tripDate` is the Pacific service day) beside `departureTimeLocal` / `arrivalTimeLocal`, the same instant with its Pacific offset (`2026-11-05T05:30:00.000-08:00`); `content[]` renders `<local> (<UTC>)`. Each also has `serviceDate`, `vesselId`, `loadingRule`, and indexes into the pair's `annotations`. There is no cancellation flag — WSF drops a cancelled sailing, so check `wsdot_get_ferry_alerts`
+- With `remainingOnly`, a query before 03:00 Pacific also lists the previous service day's sailings still to depart, first, each carrying that day's `serviceDate`. When that day's schedule can't be read, a notice says so and the list holds today's sailings only
+- A pair with no schedule that day fails as `invalid_terminal_pair` and a date with none as `invalid_date`, never as an empty schedule. The whole call runs under a 50-second deadline; one that spends it fails as `retry_deadline_exceeded` with a retry hint
+
+---
+
+### `wsdot_get_ferry_fares` <sub>tool</sub>
+
+- Requires `departingTerminalId` and `arrivingTerminalId` (a pair from `terminalPairs` on `wsdot_get_ferry_routes`); optional `tripDate` (default today) and `roundTrip` (WSF's round-trip total for a trip starting at the departing terminal; default one way)
+- Returns every fare line item — passenger, senior and youth, vehicle and driver by length, motorcycle, bicycle, multi-ride cards — with `amountInDollars` as WSF gives it, in WSF's order
+- WSF collects most fares at one terminal only, so a line reads `0` on a leg whose departing terminal doesn't collect it. `collectionDescription` is WSF's statement of which terminal collects which fares, and it leads `content[]`; read it before quoting a `0` as free travel, and query the reverse direction to see where the fare is charged. If that statement can't be read, the fares still return and a notice says so
+- A pair with no fares that day fails as `invalid_terminal_pair` and a date WSF has no fares for as `invalid_date`. The whole call runs under a 50-second deadline; one that spends it fails as `retry_deadline_exceeded` with a retry hint
 
 ---
 
@@ -124,12 +137,14 @@ Washington State roads and ferries from WSDOT. Check mountain passes, travel tim
 
 - No input — position, speed, heading, ETA, and dock status for every active WSF vessel
 - Positions may lag 30–60 seconds; many fields are absent for a vessel not in service, and one between assignments reports `opRouteAbbrev` as `none reported`
+- `leftDock`, `eta`, `scheduledDeparture`, and `timestamp` stay in UTC beside `leftDockLocal`, `etaLocal`, `scheduledDepartureLocal`, and `timestampLocal`, the same instants in Pacific time
 
 ---
 
 ### `wsdot_get_terminal_space` <sub>tool</sub>
 
-- Optional `departingTerminalId` (from `wsdot_get_ferry_terminals`), else every terminal; paged by terminal (default 5, max 20), with every sailing of a returned terminal included
+- Optional `departingTerminalId` (from `wsdot_get_ferry_terminals`), else every terminal WSF reports space for; paged by terminal (default 5; a larger `limit` returns at most 20 with a notice), with every sailing of a returned terminal included
+- WSF publishes space for select terminals only (12 of 20 on 2026-11-12), and at times for none. A terminal missing from the feed has unconfirmed space rather than a wrong ID: an empty feed and an uncovered terminal ID each return an empty page whose notice says which, the second listing the terminals the feed covers. Departure times carry a `departureLocal` Pacific sibling
 - `driveUpSpaceCount` is the key field — zero means the drive-up lane is full, and an oversubscribed sailing's negative upstream count floors to zero. `arrivingTerminalIds` chains into `wsdot_get_ferry_schedule`
 
 ---
@@ -137,7 +152,7 @@ Washington State roads and ferries from WSDOT. Check mountain passes, travel tim
 ### `wsdot_get_ferry_alerts` <sub>tool</sub>
 
 - No input — active WSF disruptions, delays, and bulletins, each with `alertTitle`, a one-line `alertDescription`, and the full `bulletinText` (detail such as a replacement sailing appears only in the body)
-- `impactedRouteIds` map to `wsdot_get_ferry_routes`; `affectsAllRoutes: true` marks a fleet-wide alert, whose empty route list then means every route
+- `publishDate` carries a `publishDateLocal` Pacific sibling; `impactedRouteIds` map to `wsdot_get_ferry_routes`; `affectsAllRoutes: true` marks a fleet-wide alert, whose empty route list then means every route
 
 ## Features
 
@@ -149,7 +164,7 @@ WSDOT-specific:
 - Cross-tool linking built into tool descriptions — ferry tools point to `wsdot_get_ferry_terminals` / `wsdot_get_ferry_routes` for ID resolution before a lookup
 - Normalized response shapes across both APIs — sparse upstream fields surface as optional rather than omitted or defaulted
 - Stable pagination — the alert and camera feeds return the same set in more than one row order upstream, so results are sorted by ID to keep a given offset reproducible
-- Paged list tools take `offset` / `limit`, and a page also ends early at a 24,000-byte response budget, with the notice naming the next offset
+- Paged list tools take `offset` / `limit`; a page ends only at `limit` or at the end of the set, and a notice names the next offset. A `limit` above a tool's maximum returns the maximum with a notice, or is rejected when `WSDOT_CLAMP_LIMITS=false`
 - Route filters take the forms people write — `"I-90"`, `"90"`, `"090"`, `"SR 520"` — and every text filter accepts at most 200 characters
 
 Agent-friendly output:
@@ -199,6 +214,7 @@ All configuration is validated at startup via Zod schemas in `src/config/server-
 | Variable | Description | Default |
 |:---|:---|:---|
 | `WSDOT_ACCESS_CODE` | **Required.** WSDOT Traveler API access code. Register at [wsdot.wa.gov/Traffic/api/](https://wsdot.wa.gov/Traffic/api/). | — |
+| `WSDOT_CLAMP_LIMITS` | Optional. Clamp a paged tool's `limit` above its maximum (500; 20 for `wsdot_get_terminal_space`) to that maximum, with a notice. `false` rejects it instead and advertises `maximum` in `tools/list`. Each clamp increments the `wsdot.limit.clamps` counter and writes one `Clamped limit` log line. | `true` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
 | `MCP_HTTP_PORT` | HTTP server port. | `3010` |
 | `MCP_HTTP_HOST` | HTTP server hostname. | `127.0.0.1` |
@@ -220,7 +236,7 @@ See [`.env.example`](./.env.example) for the full list of optional overrides.
 
 ### Local development
 
-Requires [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
+Requires [Bun v1.4.4](https://bun.sh/) or higher (or Node.js v24+).
 
 - **Clone and install:**
 
@@ -262,11 +278,11 @@ The image defaults to HTTP transport, stateless session mode, and logs to `/var/
 
 | Directory | Purpose |
 |:---|:---|
-| `src/index.ts` | `createApp()` entry point — registers all 12 tools and initializes services. |
+| `src/index.ts` | `createApp()` entry point — registers all 13 tools and initializes services. |
 | `src/config` | Server-specific environment variable parsing and validation with Zod. |
-| `src/mcp-server/tools` | Tool definitions (`*.tool.ts`) — 6 traffic tools, 6 ferry tools. |
+| `src/mcp-server/tools` | Tool definitions (`*.tool.ts`) — 6 traffic tools, 7 ferry tools. |
 | `src/services/traffic` | WSDOT Traffic API service (mountain passes, alerts, travel times, toll rates, border waits, cameras). |
-| `src/services/ferry` | WSF Ferry API service (terminals, routes, schedule, vessel locations, space, alerts). |
+| `src/services/ferry` | WSF Ferry API service (terminals, routes, schedule, fares, vessel locations, space, alerts). |
 | `skills/` | Published ferry trip guide, also served as an MCP skill resource. |
 | `tests/` | Unit and integration tests, mirroring the `src/` structure. |
 

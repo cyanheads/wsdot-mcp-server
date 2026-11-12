@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 title: wsdot-mcp-server
-abstract: "Model Context Protocol (MCP) server for WSDOT, providing Washington State traffic data, ferry schedules and space availability, mountain pass conditions, and travel times."
+abstract: "Model Context Protocol (MCP) server for WSDOT, providing Washington State traffic data, ferry schedules, fares, and space availability, mountain pass conditions, and travel times."
 type: software
 authors:
   - family-names: Hand
